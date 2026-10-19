@@ -64,6 +64,21 @@ TEST(alu_sub_borrow) {
     CHECK_EQ(r.value, 0x800000u);
     CHECK(r.flags.v);
     CHECK(r.flags.lt);
+    r = alu(Op::SUB, 0x7FFFFF, 0xFFFFFF, kNone);  // 0x7FFFFF - (-1): saturates positive
+    CHECK_EQ(r.value, 0x7FFFFFu);
+    CHECK(r.flags.v);
+    CHECK(!r.flags.lt);
+    CHECK(!r.flags.n);
+}
+
+TEST(alu_subu_cmp_flags) {
+    for (Op op : {Op::SUBU, Op::CMP}) {
+        AluResult r = alu(op, 1, 2, kNone);
+        CHECK(r.flags.c && r.flags.n && r.flags.lt && !r.flags.v && !r.flags.z);
+        r = alu(op, 0x800000, 1, kNone);  // wraps to 0x7FFFFF
+        CHECK(r.flags.v && r.flags.lt && !r.flags.n && !r.flags.c);  // LT = N xor V = 1 (true less-than)
+        CHECK_EQ(r.value, 0x7FFFFFu);
+    }
 }
 
 TEST(alu_cmp_does_not_write) {
@@ -106,6 +121,16 @@ TEST(alu_abs_ones_complement) {
     CHECK_EQ(r.value, 0x123456u);
     CHECK(!r.flags.c);
     CHECK(r.flags.v && r.flags.lt);
+    // Z is never recomputed: prev disagrees with the result in both directions
+    Flags zClear;  // z=0 while the result is 0
+    r = alu(Op::ABS, 0, 0xFFFFFF, zClear);
+    CHECK_EQ(r.value, 0u);
+    CHECK(!r.flags.z);
+    Flags zSet;  // z=1 while the result is nonzero
+    zSet.z = true;
+    r = alu(Op::ABS, 0, 0x000005, zSet);
+    CHECK_EQ(r.value, 5u);
+    CHECK(r.flags.z);
 }
 
 TEST(alu_mov_no_flags) {
@@ -115,6 +140,18 @@ TEST(alu_mov_no_flags) {
     CHECK_EQ(r.value, 0x800000u);
     CHECK(r.writes);
     CHECK(sameFlags(r.flags, prev));
+    // prev disagrees with what recomputation from the value would give
+    Flags zSetNeg;  // z=1, n=0, negative value
+    zSetNeg.z = true;
+    AluResult m = alu(Op::MOV, 0, 0x800000, zSetNeg);
+    CHECK(sameFlags(m.flags, zSetNeg));
+    Flags zClearNeg;  // z=0, n=1, value 0
+    zClearNeg.n = true;
+    m = alu(Op::MOV, 0, 0, zClearNeg);
+    CHECK_EQ(m.value, 0u);
+    CHECK(sameFlags(m.flags, zClearNeg));
+    m = alu(Op::MOV, 0, 0x123456, allCvLt());
+    CHECK(sameFlags(m.flags, allCvLt()));
     const AluResult e = alu(Op::END, 0, 0, prev);
     CHECK(!e.writes);
     CHECK(sameFlags(e.flags, prev));
@@ -182,6 +219,16 @@ TEST(alu_asr) {
     CHECK_EQ(r.value, 1u);
     CHECK(!r.flags.c);
     CHECK(!r.flags.n);
+    // Z is never recomputed
+    r = alu(Op::ASR, 0, 1, kNone);  // result 0, prev.z = 0
+    CHECK_EQ(r.value, 0u);
+    CHECK(r.flags.c);
+    CHECK(!r.flags.z);
+    Flags zSet;
+    zSet.z = true;
+    r = alu(Op::ASR, 0, 0x000010, zSet);  // result nonzero, prev.z = 1
+    CHECK_EQ(r.value, 8u);
+    CHECK(r.flags.z);
 }
 
 TEST(alu_ccr_pack_roundtrip) {
@@ -217,6 +264,15 @@ TEST(alu_skip_masks) {
         CHECK(skip(bits & 16, bits & 8, bits & 4, bits & 2, bits & 1, 0x04));
         CHECK(!skip(bits & 16, bits & 8, bits & 4, bits & 2, bits & 1, 0x00));
     }
+    // lone V mask (0x20) and lone C mask (0x40), no NOT: skip when that flag is set
+    CHECK(skip(0, 0, 1, 0, 0, 0x20));
+    CHECK(!skip(0, 1, 0, 1, 1, 0x20));
+    CHECK(skip(0, 1, 0, 0, 0, 0x40));
+    CHECK(!skip(1, 0, 1, 1, 1, 0x40));
+    // CCR bit 18 is ignored (only CMR bit 18 is NOT)
+    CHECK(!skipCondition(1u << 18, 0));
+    CHECK(skipCondition(1u << 18, 0x04u << 16));
+    CHECK(!skipCondition((1u << 18) | packCcr(unpackCcr(0)), 0x08u << 16));
     // NEG 0x84 skips when n=0; LS 0x4C skips when !(c|z)
     CHECK(skip(0, 0, 0, 0, 0, 0x84));
     CHECK(!skip(1, 0, 0, 0, 0, 0x84));

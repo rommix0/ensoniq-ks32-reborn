@@ -14,7 +14,7 @@ struct Flags {
 };
 
 struct AluResult {
-    uint32_t value;  // 24-bit result
+    uint32_t value;  // 24-bit result (meaningless when writes == false, e.g. END)
     Flags flags;     // CCR after the operation (equal to `prev` where the op leaves a flag alone)
     bool writes;     // false for CMP and END
 };

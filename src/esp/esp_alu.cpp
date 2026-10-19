@@ -14,6 +14,7 @@ bool neg(uint32_t v) { return (v & kSign) != 0; }
 
 // Unsaturated A +/- B (ADDU, SUBU, CMP, DIFF): wrapped result, V = signed overflow,
 // LT = N xor V, N/Z from the wrapped result.
+// DECISION E16: unsaturated ops take N, Z from the wrapped result, V = signed overflow, LT = N xor V
 AluResult wrapped(int64_t sa, int64_t sb, bool sub, bool carry) {
     const int64_t exact = sub ? sa - sb : sa + sb;
     AluResult r{};
