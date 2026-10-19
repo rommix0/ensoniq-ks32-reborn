@@ -241,3 +241,11 @@ quickly.
 | Skippable word directly after the CMP/ALU word that sets the flags | Skip uses the CCR committed in the same step (E17: commit ALU(k−1), then evaluate skip k) | Skip is evaluated at T1, before ALU(N−1) writes CCR at T2, so it sees the flags one word older | **E17** vs es5510.cpp `execute_run` |
 | One-operand ALU op (MOV, ABS, …) with an operand select of 9..F (ALU source = DIL) | DIL replaces only operand A, so one-operand ops still read B (ESP notes §4.1.3) | The single operand reads DIL | ESP notes part 1 §4.1.3 (no decision id) |
 | ALU flags and skip | E1–E21 | es5510.cpp `alu_operation` / skip test | The E-id that the differing instruction exercises |
+
+## Differences on `tests/data/reverb_tank.trace`
+
+The Task 13 reverb (four lattice allpasses and a feedback-0.7 tank, impulse from OTIS) decays
+to −60 dBFS in 1.3 s in both. Main L/R differ by at most 5 LSB, and only because the OTIS
+outputs feeding the ESP differ (O4/O5 rounding, MAME's non-decaying truncated filter residue,
+O7). Fed MAME's ESP input, our ESP core reproduces MAME's main output exactly. See
+`docs/verification-plan1.md`.

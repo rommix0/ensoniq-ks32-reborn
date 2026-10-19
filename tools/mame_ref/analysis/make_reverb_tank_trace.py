@@ -1,0 +1,162 @@
+# Writes tests/data/reverb_tank.trace and its impulse wave reverb_impulse.bin.
+#   python -I tools/mame_ref/analysis/make_reverb_tank_trace.py tests/data
+# The ESP program is the reverb of tests/test_esp_programs.cpp (esp_allpass_reverb_decays):
+# four lattice allpasses (ESP2 Part III section 7 input diffusers) and one 4453-sample tank
+# delay with feedback 0.7. The test reverb_tank_trace_matches_program checks that this trace
+# loads exactly the words and GPR values the C++ test runs, so edit both together.
+#
+# The trace format cannot put a sample on SER0 directly, so the impulse comes from OTIS: two
+# one-shot voices on CA 1 (-> ESP SER0) play word 0 = 0x7FFF of reverb_impulse.bin (all other
+# words 0) once, with full-open low-pass poles (K = 0xFFF0) and volume exponent 15, mantissa 0
+# (exact in MAME's pre-shifted volume table). Each voice gives about 0x3FEF on SER0L in frame 0,
+# the pair about 0x7FDE, then a few frames of filter tail (a few LSB) and zeros.
+import os
+import struct
+import sys
+
+FRAMES = 1785714  # 60.0 s at the KS-32 frame rate (29 761.9 Hz)
+
+ZERO, SER0L, SER3R, SER3L, MACH, DIL = 255, 235, 240, 241, 243, 244
+MEMSIZ, DLENGTH, DBASE, SIGREG = 244, 245, 248, 249
+MOV, END = 9, 15
+READ_DELAY, WRITE_DELAY = 0, 1
+
+# (base, length, coefficient, out reg, +g reg, -g reg); lengths/coefficients from ESP2 Fig. R.
+APS = [(0, 142, 0.75, 0x80, 0x88, 0x89),
+       (143, 107, 0.75, 0x81, 0x8A, 0x8B),
+       (251, 379, 0.625, 0x82, 0x8C, 0x8D),
+       (631, 277, 0.625, 0x83, 0x8E, 0x8F)]
+TANK_BASE, TANK_LEN, TANK, FEEDBACK = 909, 4453, 0x84, 0x90
+WORDS = 18
+
+
+def word(d, c, b, a, op, opsel, mac, ram):
+    return ((d << 40) | (c << 32) | (b << 24) | (a << 16) | (op << 12) | (opsel << 8) |
+            ((1 if mac else 0) << 6) | (ram << 3))
+
+
+def q23(v):
+    return int(round(v * 8388608.0)) & 0xFFFFFF
+
+
+def program():
+    words = [0] * WORDS
+    gprs = []
+
+    def off(pc, samples):
+        gprs.append((pc, (samples << 8) & 0xFFFFFF, "RAM offset of w%d: %d samples" % (pc, samples)))
+
+    words[0] = word(ZERO, ZERO, ZERO, ZERO, MOV, 0, True, READ_DELAY)
+    off(0, APS[0][0] + APS[0][1])
+    for k, (base, length, _, w, g, ng) in enumerate(APS):
+        a = 3 * k + 1
+        x = SER0L if k == 0 else APS[k - 1][3]
+        words[a] = word(ZERO, ZERO, x, MACH, MOV, 0, False, READ_DELAY)
+        words[a + 1] = word(ng, w, DIL, MACH, MOV, 4, True, WRITE_DELAY)
+        off(a + 1, base)
+        words[a + 2] = word(g, w, ZERO, ZERO, MOV, 0, True, READ_DELAY)
+        nxt = APS[k + 1][0] + APS[k + 1][1] if k < 3 else TANK_BASE + TANK_LEN
+        off(a + 2, nxt)
+    words[13] = word(ZERO, ZERO, APS[3][3], MACH, MOV, 0, False, READ_DELAY)
+    words[14] = word(FEEDBACK, TANK, ZERO, ZERO, MOV, 4, True, WRITE_DELAY)
+    off(14, TANK_BASE)
+    words[15] = word(ZERO, ZERO, TANK, SER3L, MOV, 0, True, READ_DELAY)
+    words[16] = word(ZERO, ZERO, APS[3][3], SER3R, MOV, 0, True, READ_DELAY)
+    words[17] = word(ZERO, ZERO, ZERO, ZERO, END, 0, True, READ_DELAY)
+    for (_, _, coef, _, g, ng) in APS:
+        gprs.append((g, q23(coef), "+%g" % coef))
+        gprs.append((ng, q23(-coef), "-%g" % coef))
+    gprs.append((FEEDBACK, q23(0.7), "tank feedback 0.7"))
+    gprs.append((SIGREG, 0x400000, "SIGREG bit 22: multiplier shift 1 (KS-32)"))
+    gprs.append((MEMSIZ, 0x0000FF, "MEMSIZ 0x0000FF: 64K-word DRAM, unit 0x100"))
+    gprs.append((DLENGTH, 0xFFFF00, "DLENGTH: the whole 64K-word DRAM is the delay ring"))
+    gprs.append((DBASE, 0x000000, "DBASE 0"))
+    return words, gprs
+
+
+DIS = [
+    "NOP; RAM read line0[142]",
+    "AP0: MOV SER0L > MACH; MUL 0 x 0 (clear)",
+    "AP0: MOV DIL > MACH; MUL DIL x -g +MAC > r80,DOL; RAM write line0[0]",
+    "AP0: MUL r80 x g +MAC > r80; RAM read line1[107]",
+    "AP1: MOV r80 > MACH; MUL 0 x 0",
+    "AP1: MOV DIL > MACH; MUL DIL x -g +MAC > r81,DOL; RAM write line1[0]",
+    "AP1: MUL r81 x g +MAC > r81; RAM read line2[379]",
+    "AP2: MOV r81 > MACH; MUL 0 x 0",
+    "AP2: MOV DIL > MACH; MUL DIL x -g +MAC > r82,DOL; RAM write line2[0]",
+    "AP2: MUL r82 x g +MAC > r82; RAM read line3[277]",
+    "AP3: MOV r82 > MACH; MUL 0 x 0",
+    "AP3: MOV DIL > MACH; MUL DIL x -g +MAC > r83,DOL; RAM write line3[0]",
+    "AP3: MUL r83 x g +MAC > r83; RAM read tank[4453]",
+    "tank: MOV r83 > MACH; MUL 0 x 0",
+    "tank: MUL DIL x 0.7 +MAC > r84,DOL; RAM write tank[0]",
+    "MOV r84 > SER3L (wet)",
+    "MOV r83 > SER3R (diffusers only)",
+    "END",
+]
+
+VOICE = """otis 15 {v:04X}
+otis 0 0D00
+otis 1 0400
+otis 2 0000
+otis 3 0000
+otis 4 0003
+otis 5 FE00
+otis 6 FFF0
+otis 7 FFF0
+otis 8 F000
+otis 9 0000
+otis 10 0000
+otis 11 0000
+"""
+
+
+def main():
+    out_dir = sys.argv[1]
+    with open(os.path.join(out_dir, "reverb_impulse.bin"), "wb") as f:
+        f.write(struct.pack("<16h", *([0x7FFF] + [0] * 15)))
+
+    words, gprs = program()
+    t = []
+    t.append("# Reverb tank trace (generated by tools/mame_ref/analysis/make_reverb_tank_trace.py;")
+    t.append("# edit the generator, not this file). Synthetic data only.")
+    t.append("# ESP: the reverb of tests/test_esp_programs.cpp (4 lattice allpasses + 4453-sample tank,")
+    t.append("# feedback 0.7). Input: an impulse on SER0L from two one-shot OTIS voices on CA 1.")
+    t.append("# Main L = wet (SER3L), main R = diffusers only (SER3R). %d frames = 60.0 s." % FRAMES)
+    t.append("# Decay times: docs/verification-plan1.md (tools/mame_ref/analysis/decay_time.py).")
+    t.append("wave 0 reverb_impulse.bin")
+    t.append("dram 65536")
+    t.append("")
+    t.append("# OTIS: 2 voices, SERMODE 0")
+    t.append("otis 13 0001")
+    t.append("otis 15 0040")
+    t.append("otis 8 0000")
+    t.append("")
+    t.append("# Voices 0 and 1: CA 1 (-> SER0), bank 0, one-shot 0..511, 1 sample/frame, 4 LP poles")
+    t.append("# K = 0xFFF0, LVOL exponent 15 mantissa 0, RVOL 0")
+    for v in (0, 1):
+        t.extend(VOICE.format(v=v).rstrip("\n").split("\n"))
+    t.append("")
+    t.append("esphalt 1")
+    t.append("# Host control: refresh disable (DBASE stays put while halted, as in MAME)")
+    t.append("esp 12 01")
+    for (addr, val, note) in gprs:
+        t.append("# gpr 0x%02X = 0x%06X (%s)" % (addr, val, note))
+        t.append("esp 00 %02X" % ((val >> 16) & 0xFF))
+        t.append("esp 01 %02X" % ((val >> 8) & 0xFF))
+        t.append("esp 02 %02X" % (val & 0xFF))
+        t.append("esp A0 %02X" % addr)
+    for pc, w in enumerate(words):
+        t.append("# w%d: %s" % (pc, DIS[pc]))
+        for i in range(6):
+            t.append("esp %02X %02X" % (3 + i, (w >> (40 - 8 * i)) & 0xFF))
+        t.append("esp C0 %02X" % pc)
+    t.append("espidle 4")
+    t.append("esphalt 0")
+    t.append("")
+    t.append("frames %d" % FRAMES)
+    with open(os.path.join(out_dir, "reverb_tank.trace"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(t) + "\n")
+
+
+main()
