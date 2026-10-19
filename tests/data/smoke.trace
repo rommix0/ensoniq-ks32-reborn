@@ -1,0 +1,67 @@
+# Smoke trace for ens_trace: 64 frames, two voices, ESP passes SER0 (OTIS ch1) to SER3 (main).
+# The wave is a synthetic sine mix (smoke_wave.bin, 512 words); no ROM data.
+wave 0 smoke_wave.bin
+dram 65536
+
+# --- OTIS: 2 active voices, serial mode 0 (A/D off, as the KS-32 firmware sets it) ---
+otis 13 0001
+otis 15 0040
+otis 8 0000
+
+# Voice 0: aux out (CA 0), looped 0..64 samples, one sample per frame, full volume.
+otis 15 0000
+otis 0 0C08
+otis 1 0400
+otis 2 0000
+otis 3 0000
+otis 4 0000
+otis 5 8000
+otis 6 FFF0
+otis 7 FFF0
+otis 8 F000
+otis 9 E000
+otis 10 0000
+otis 11 0000
+
+# Voice 1: CA 1 (-> ESP SER0), looped, 1.5 samples per frame.
+otis 15 0001
+otis 0 0D08
+otis 1 0600
+otis 2 0000
+otis 3 0000
+otis 4 0000
+otis 5 8000
+otis 6 FFF0
+otis 7 FFF0
+otis 8 F000
+otis 9 D000
+otis 10 0000
+otis 11 0000
+
+# --- ESP: halt, load a 3-word program (SER0L>SER3L, SER0R>SER3R, END), run ---
+esphalt 1
+esp 03 FF
+esp 04 FF
+esp 05 EB
+esp 06 F1
+esp 07 90
+esp 08 40
+esp C0 00
+esp 03 FF
+esp 04 FF
+esp 05 EA
+esp 06 F0
+esp 07 90
+esp 08 40
+esp C0 01
+esp 03 FF
+esp 04 FF
+esp 05 FF
+esp 06 FF
+esp 07 F0
+esp 08 40
+esp C0 02
+espidle 4
+esphalt 0
+
+frames 64

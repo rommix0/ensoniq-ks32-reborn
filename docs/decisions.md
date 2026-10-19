@@ -333,3 +333,19 @@ Entry template:
 - Evidence: ESP notes part 2 §5.1.1, §5.1.5, §5.1.7; findings.md (host serial control 0x63, PC poll).
 - Confidence: Low.
 - Status: Implemented in Esp::hostRead and hostWrite (Task 9). Tests: serial_control_register, host_register_map_details, host_firmware_boot_sequence.
+
+## Trace runner
+
+## TR1: OTIS to ESP routing in the trace runner
+- Options: (a) OTIS ch0 -> aux out, ch1/ch2/ch3 -> ESP SER0/SER1/SER2 in, ESP SER3 out -> main out; (b) ch0..ch3 -> SER0..SER3 (the ESP would also need SER3 as an input); (c) another permutation.
+- Choice: (a). Fixed for this plan; the same routing is used by the MAME harness (Task 12).
+- Evidence: KS-32 firmware (`docs/rom-investigation/findings.md` section C): host serial control = 0x63 (SER3 output, SER0-2 inputs); every ESP program reads SER0, SER1, SER2 and writes only SER3; voices start with CR[9:8] = CA 1, 2 or 3 and CH0 is used only by the boot clock-test voice; OTIS init writes SERMODE = 0. SER0 is the dry bus (plain ALU addend), SER1 and SER2 are the effect sends (MAC operands). This agrees with the MAME audit (VFX-derived routing; MAME's Aux output on CH0 is silent on the KS-32).
+- Confidence: High that CA1 -> SER0 (dry), CA2 -> SER1, CA3 -> SER2 as a mapping of roles; medium for the physical pin wiring (the firmware only shows how the programs treat each SER port, `findings.md` "Unknown").
+- Status: Implemented in TraceRunner (Task 11), `// DECISION TR1` in `src/trace/trace.cpp`. Tests: trace_esp_passthrough, trace_routing_ch2_ch3_to_ser1_ser2.
+
+## TR2: Trace runner host conventions
+- Options: (a) `esphalt 1` while the ESP runs also writes host `$1F`, so it halts at once; while halted every `esp` host write is followed by one `Esp::idleStep()`, and `espidle <n>` adds more idle steps; OTIS port 3 serial input is never driven; (b) `esphalt 1` only raises the pin (the ESP stops at its next END, which the trace cannot see); (c) no automatic idle steps (select-register transfers would never land while halted).
+- Choice: (a). The firmware also stops the ESP with a `$1F` write while ESPHALT is asserted (`docs/rom-investigation/data/esp_init_sequence.json`), and the idle step per write is what makes the documented host protocol (write select register, wait for the transfer) work in a script. Consequence: idle steps also run the refresh model, so DBASE moves while a trace loads a program unless host control bit 0 (Refresh Disable) is set.
+- Evidence: ESP notes part 2 section 5.1.2, 5.4.1; decisions E24, E25, E28; controller rulings R2/R15.
+- Confidence: Medium.
+- Status: Implemented in TraceRunner (Task 11), `// DECISION TR2` in `src/trace/trace.cpp`. Tests: trace_esp_passthrough, trace_espidle_finishes_ram_clear, trace_halted_esp_outputs_nothing_and_resumes.

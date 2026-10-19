@@ -29,9 +29,25 @@ add_library(ens_esp STATIC src/esp/esp_alu.cpp src/esp/esp_mac.cpp src/esp/esp_a
   src/esp/esp_isa.cpp src/esp/esp.cpp)
 target_link_libraries(ens_esp PUBLIC ens_common)
 
+# Trace format + runner. The parser and PCM compare are chip-free (reused by the MAME harness).
+add_library(ens_trace_parse STATIC src/trace/trace_parse.cpp)
+target_include_directories(ens_trace_parse PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_library(ens_trace STATIC src/trace/trace.cpp)
+target_link_libraries(ens_trace PUBLIC ens_trace_parse ens_otis ens_esp)
+
 add_subdirectory(tests)
 
 # Command-line tools (file I/O allowed here, not in src/).
 add_executable(esp_dis tools/esp_dis/main.cpp)
 target_link_libraries(esp_dis PRIVATE ens_esp ens_common)
 target_compile_definitions(esp_dis PRIVATE _CRT_SECURE_NO_WARNINGS)  # fopen on MSVC (C4996)
+
+# Executable targets are suffixed _cli because the ens_trace library owns that target name.
+add_executable(ens_trace_cli tools/ens_trace/main.cpp)
+set_target_properties(ens_trace_cli PROPERTIES OUTPUT_NAME ens_trace)
+target_link_libraries(ens_trace_cli PRIVATE ens_trace)
+target_compile_definitions(ens_trace_cli PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+add_executable(pcm_diff tools/pcm_diff/main.cpp)
+target_link_libraries(pcm_diff PRIVATE ens_trace_parse)
+target_compile_definitions(pcm_diff PRIVATE _CRT_SECURE_NO_WARNINGS)
