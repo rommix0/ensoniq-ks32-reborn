@@ -34,6 +34,7 @@ add_library(ens_trace_parse STATIC src/trace/trace_parse.cpp)
 target_include_directories(ens_trace_parse PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(ens_trace STATIC src/trace/trace.cpp)
 target_link_libraries(ens_trace PUBLIC ens_trace_parse ens_otis ens_esp)
+target_compile_definitions(ens_trace PRIVATE _CRT_SECURE_NO_WARNINGS)  # fopen on MSVC (C4996)
 
 add_subdirectory(tests)
 
