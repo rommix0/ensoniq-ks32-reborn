@@ -357,6 +357,7 @@ TEST(esp_runsample_terminates_without_end) {
         m.setInstr(i, w);
     }
     for (int k = 0; k < 3; ++k) CHECK_EQ(m.runSample(), 160);
+    for (int a = 0; a < 256; ++a) CHECK(m.gpr(a) <= 0xFFFFFFu);
 }
 
 TEST(esp_end_step_executes_mul_and_ram_fields) {
@@ -428,4 +429,121 @@ TEST(esp_reset_clears_pipeline) {
     e.runSample();
     CHECK_EQ(e.gpr(5), 0x200000u);  // nothing stale committed
     CHECK_EQ(e.instr(0), end());
+}
+
+TEST(esp_mul_result_visible_to_next_mul) {
+    // DECISION E17: MUL(k-1) commits before MUL(k) fetches (§4.3.3: the destination of the
+    // previous multiply can be a multiplier source).
+    FakeBus bus;
+    Esp e(bus);
+    e.setGpr(249, kShiftOne);
+    e.setInstr(0, mul(5, 6, false));  // gpr5 = 0.5 x 0.5 = 0x200000
+    e.setInstr(1, mul(5, 6, false));  // gpr5 = 0.25 x 0.5 = 0x100000
+    e.setInstr(2, end());
+    e.setGpr(5, 0x400000);
+    e.setGpr(6, 0x400000);
+    e.runSample();
+    CHECK_EQ(e.gpr(5), 0x100000u);  // stale operand would give 0x200000
+}
+
+TEST(esp_ccr_from_previous_alu_drives_skip) {
+    // DECISION E17: ALU(k-1)'s CCR commit precedes word k's skip evaluation. No CCR preset.
+    // [0] CMP equal -> Z=1; [1] skippable MOV with CMR = NEQ -> skipped.
+    {
+        FakeBus bus;
+        Esp e(bus);
+        e.setGpr(251, 0x080000);
+        e.setInstr(0, alu(Op::CMP, 2, 1));
+        e.setInstr(1, alu(Op::MOV, 3, 4, 0, true));
+        e.setInstr(2, end());
+        e.setGpr(1, 7);
+        e.setGpr(2, 7);
+        e.setGpr(3, 0x111111);
+        e.runSample();
+        CHECK_EQ(e.gpr(4), 0u);
+    }
+    // Converse: [0] CMP equal (Z=1), [1] CMP unequal (Z=0), [2] skippable MOV -> executes.
+    {
+        FakeBus bus;
+        Esp e(bus);
+        e.setGpr(251, 0x080000);
+        e.setInstr(0, alu(Op::CMP, 2, 1));
+        e.setInstr(1, alu(Op::CMP, 3, 1));
+        e.setInstr(2, alu(Op::MOV, 3, 4, 0, true));
+        e.setInstr(3, end());
+        e.setGpr(1, 7);
+        e.setGpr(2, 7);
+        e.setGpr(3, 0x111111);
+        e.runSample();
+        CHECK_EQ(e.gpr(4), 0x111111u);
+    }
+}
+
+TEST(esp_alu_reads_mac_before_same_word_accumulates) {
+    // DECISION E17: ALU(k) fetches MACH/MACL before MUL(k) accumulates.
+    const uint32_t x0 = 0x123456, y0 = 0x345678, x1 = 0x2468AC, y1 = 0x13579B;
+    const uint32_t x2 = 0x0F0F0F, y2 = 0x5A5A5A;
+    auto halves = [](uint32_t x, uint32_t y, uint32_t& hi, uint32_t& lo) {
+        ens::esp::Mac m;
+        m.accumulate(m.product(x, y, true), false);
+        hi = m.readHigh();
+        lo = m.readLow();
+    };
+    uint32_t h0, l0, h1, l1, h2, l2;
+    halves(x0, y0, h0, l0);
+    halves(x1, y1, h1, l1);
+    halves(x2, y2, h2, l2);
+    CHECK(l0 != l1 && h1 != h2);
+
+    FakeBus bus;
+    Esp e(bus);
+    e.setGpr(249, kShiftOne);
+    e.setGpr(20, x0); e.setGpr(21, y0);
+    e.setGpr(22, x1); e.setGpr(23, y1);
+    e.setGpr(24, x2); e.setGpr(25, y2);
+    // Each MUL writes MACH back to its own x register; no word reads another word's x.
+    e.setInstr(0, w48(21, 20, kZero, kZero, Op::MOV, 0, false, false, RamOp::ReadDelay));
+    e.setInstr(1, w48(23, 22, 242, 7, Op::MOV, 0, false, false, RamOp::ReadDelay));  // r7 = MACL
+    e.setInstr(2, w48(25, 24, 243, 8, Op::MOV, 0, false, false, RamOp::ReadDelay));  // r8 = MACH
+    e.setInstr(3, end());
+    e.runSample();
+    CHECK_EQ(e.gpr(7), l0);  // word 0's low half, not word 1's
+    CHECK_EQ(e.gpr(8), h1);  // word 1's high half, not word 2's
+}
+
+TEST(esp_alu_reads_preloaded_mach) {
+    // DECISION E17: ALU(k-1) preloads MACH in phase 3; ALU(k) reads it in phase 5, before
+    // MUL(k) accumulates. MUL(k) is a plain multiply, so the preload is then discarded.
+    FakeBus bus;
+    Esp e(bus);
+    e.setGpr(249, kShiftOne);
+    e.setGpr(10, 0x123456);
+    e.setGpr(5, 0x400000);
+    e.setGpr(6, 0x400000);
+    e.setInstr(0, alu(Op::MOV, 10, 243));                                         // MACH = gpr10
+    e.setInstr(1, w48(6, 5, 243, 11, Op::MOV, 0, false, false, RamOp::ReadDelay));  // r11 = MACH
+    e.setInstr(2, alu(Op::MOV, 243, 12));                                         // r12 = MACH
+    e.setInstr(3, end());
+    e.runSample();
+    CHECK_EQ(e.gpr(11), 0x123456u);  // the preload
+    CHECK_EQ(e.gpr(12), 0x200000u);  // word 1's plain multiply (0.5 x 0.5)
+}
+
+TEST(esp_mac_saturates_in_core) {
+    // DECISION E6: accumulating past full scale is held by the guard bits and saturated on
+    // readout; the C destination gets MAX and an ALU read of MACL gives 0xFFFFFF.
+    FakeBus bus;
+    Esp e(bus);
+    e.setGpr(249, kShiftOne);
+    e.setGpr(5, 0x7FFFFF);
+    e.setGpr(6, 0x7FFFFF);
+    e.setInstr(0, w48(5, 5, kZero, kZero, Op::MOV, 1, false, false, RamOp::ReadDelay));  // ~1.0
+    e.setInstr(1, w48(5, 5, kZero, kZero, Op::MOV, 1, false, true, RamOp::ReadDelay));   // ~2.0
+    e.setInstr(2, w48(5, 6, kZero, kZero, Op::MOV, 0, false, true, RamOp::ReadDelay));   // ~3.0 > C=6
+    e.setInstr(3, alu(Op::MOV, 242, 7));  // r7 = MACL (MUL NOP keeps the accumulator)
+    e.setInstr(4, end());
+    e.runSample();
+    CHECK(e.mac().raw() > (int64_t(1) << 47));
+    CHECK_EQ(e.gpr(6), 0x7FFFFFu);
+    CHECK_EQ(e.gpr(7), 0xFFFFFFu);
 }

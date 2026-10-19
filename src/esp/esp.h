@@ -11,6 +11,11 @@ namespace ens {
 
 // External RAM / I/O bus. Word addresses come from the address generator; data are the
 // 16 bits on the RAM data pins (GPR bits 23..8).
+// Address range the core may pass (implementations must mask to their memory size):
+//   io == false (delay/table): 0 .. 0xFFFFFF >> shift, where shift = trailing 1 bits of
+//     MEMSIZ; i.e. up to 24-bit word addresses when MEMSIZ = 0, 16-bit when MEMSIZ = 0xFF.
+//     Out-of-contract offsets can exceed DLENGTH/unit, so do not assume the delay ring.
+//   io == true: 0 .. 0xFFFFF (20-bit, offset >> 4).
 struct EspBus {
     virtual ~EspBus() = default;
     virtual uint16_t read(bool io, uint32_t wordAddr) = 0;
