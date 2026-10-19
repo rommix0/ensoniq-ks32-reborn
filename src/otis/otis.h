@@ -24,6 +24,14 @@ public:
     int activeVoices() const;   // ACT+1
     void setSerialIn(int16_t l, int16_t r);  // SER3 input when SERMODE.A/D=1 (latched into CH3L/R)
 
+    // Voice scan. stepVoice() processes the next voice slot (0..ACT): wave fetches, address
+    // update and IRQ. After slot ACT the frame is marked ready.
+    void stepVoice();
+    bool frameReady() const { return ready_; }
+    OtisFrame takeFrame();  // returns the latched channels and clears ready
+    OtisFrame runFrame();   // steps until a frame is ready, then takes it
+    uint32_t acc29(int voice) const;  // test accessor: 29-bit accumulator (20.9 fixed point)
+
 private:
     // Per-voice registers, stored already masked to their implemented bits.
     struct Voice {
@@ -51,6 +59,8 @@ private:
     uint16_t* voiceReg(Voice& v, uint8_t reg);  // pages 0-31 map, nullptr if unlisted
     uint16_t* filterReg(Voice& v, uint8_t reg); // pages 32-63 map, nullptr if unlisted
     static uint16_t voiceMask(uint8_t reg);
+    void updateAddress(int voice, Voice& v);  // O1 address ALU for one slot; raises CR.IRQ
+    void serviceIrq(int voice, Voice& v);     // O8 latch into IRQV when free
     static uint16_t chRead(int32_t acc) { return static_cast<uint16_t>(acc & 0xFFFF); }
 
     WaveMemory& mem_;
@@ -61,6 +71,11 @@ private:
     int32_t chAcc_[8];   // CH0L,CH0R..CH3L,CH3R: 21-bit signed accumulators
     bool irqPending_;    // an interrupt is pending (IRQ pin low)
     uint8_t irqVec_;     // IRQV [4:0]: voice that raised the interrupt
+    uint32_t irqClear_;  // bit per voice: IRQV was read, clear that voice's CR.IRQ on its next slot
+    uint8_t slot_;       // next voice slot to process
+    bool ready_;         // a frame is latched in frame_
+    OtisFrame frame_;
+    uint16_t s1_, s2_;   // wave words fetched by the current slot (consumed by the signal path)
 };
 
 }  // namespace ens
