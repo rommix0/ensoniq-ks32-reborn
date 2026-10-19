@@ -100,9 +100,10 @@ public:
     void espWrite(u32 addr, u32 value) { esp_.host_w(addr, static_cast<u8>(value)); }
 
     // DECISION TR2 (MAME mapping): ESPHALT only sets the pump's halted flag (esq5505
-    // duart_output). The `$1F` write that the trace adds when halting a running ESP is passed
-    // to host_w as the firmware's write would be; run_once() is atomic, so MAME never stops
-    // mid-program and the halt is effectively immediate.
+    // duart_output); run_once() is atomic, so MAME never stops mid-program and the halt is
+    // always immediate. The `$1F` write the trace adds is a no-op in MAME here (it only acts
+    // while the ESP's own HALT line is asserted, and the ESP is already HALTED between
+    // run_once() calls); it is passed to host_w only so MAME sees the same host write sequence.
     void espHalt(bool high) {
         if (high && !espHalted_) esp_.host_w(0x1F, 0xFF);
         espHalted_ = high;
@@ -125,13 +126,29 @@ public:
         // esqpump: `ser_w(n, s32(stream.get(2 + n, 0) * input_scale))`; s32() truncates toward
         // zero, reproduced on purpose (MAME behaviour, not the hardware's floor).
         for (int n = 0; n < 6; ++n) esp_.ser_w(n, static_cast<int16_t>(s32(in[2 + n] * input_scale)));
-        if (!espHalted_) esp_.run_once();
+        if (!espHalted_ && programHasEnd()) esp_.run_once();
         // ser_r(6/7) * (1/32768) to the speaker and back to int16 is exact; take the latch.
         out.push_back(esp_.ser_r(6));
         out.push_back(esp_.ser_r(7));
     }
 
 private:
+    // MAME's run_once() executes from PC 0 until an END word with no PC limit, so a program
+    // without END reads past instr[159] (audit section 2.1). MAME itself only avoids this
+    // because esqpump starts halted. The harness checks MAME's own program memory (the public
+    // _instr() test accessor) and treats such a frame as halted, warning once.
+    bool programHasEnd() {
+        for (int pc = 0; pc < 160; ++pc)
+            if (((esp_._instr(pc) >> 12) & 0x0F) == 0x0F) return true;
+        if (!warnedNoEnd_) {
+            std::fprintf(stderr,
+                         "mame_ref: ESP program has no END; MAME would read out of bounds "
+                         "(audit section 2.1) - ESP treated as halted\n");
+            warnedNoEnd_ = true;
+        }
+        return false;
+    }
+
     machine_config cfg_;
     std::unique_ptr<memory_region> region0_, region1_;
     es5505_device otis_;
@@ -139,6 +156,7 @@ private:
     // The trace starts with the ESP running and HALT low (docs/trace-format.md "Output");
     // esqpump's constructor default (halted) is overridden to match.
     bool espHalted_ = false;
+    bool warnedNoEnd_ = false;
 };
 
 }  // namespace

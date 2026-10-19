@@ -84,6 +84,12 @@ the following, which hold for KS-32/`common32`:
 - The route gain is 1.0.
 - The graph adds no resampling and no latency.
 
+**Host timing is sample-exact.** The harness applies every host write and ESPHALT edge exactly
+at the frame boundary where the trace puts it. Real MAME applies them at audio-block
+granularity, because `host_w` and the DUART output do not force a pump stream update (audit
+§2.1, ESP weakness 3). The output is therefore "sample-exact MAME", not what a MAME session
+would play.
+
 ## How the trace conventions map onto MAME
 
 | Trace / ruling | Our runner (`src/trace/trace.cpp`) | `mame_ref` |
@@ -93,10 +99,10 @@ the following, which hold for KS-32/`common32`:
 | `dram <words>` | ESP DRAM size, addresses masked | **Ignored.** MAME's DRAM is fixed at 1M words (`es5510.h` `DRAM_SIZE`, audit §2.5). |
 | `otis <reg> <v>` | `Otis::write` | `es5505_device::write(reg, v, 0xffff)`. MAME's own `m_stream->update()` inside `write` is a no-op here, because the write already falls between samples. |
 | `esp <addr> <v>` | `Esp::hostWrite`, then one `idleStep()` while halted (R15) | `es5510_device::host_w(addr, v)` only. MAME applies host writes at once: select-register transfers (`$80/$A0/$C0/$E0`) and DADR RAM accesses complete inside `host_w`. MAME has no idle-step counterpart. |
-| `esphalt 1` (TR2) | Pin high. If the ESP is running, also write `$1F`, so it halts immediately. | Sets the pump's halted flag, which is what esq5505's `duart_output` ESPHALT does. If the ESP was not halted, `host_w(0x1F, 0xFF)` is also passed, as the firmware's write would be. `run_once()` is atomic, so MAME can never stop mid-program and the halt is always immediate. MAME's `$1F` only matters while the ESP's own HALT line is asserted, which `run_once` leaves on. |
+| `esphalt 1` (TR2) | Pin high. If the ESP is running, also write `$1F`, so it halts immediately. | Sets the pump's halted flag, which is what esq5505's `duart_output` ESPHALT does. `run_once()` is atomic, so MAME can never stop mid-program and the halt is always immediate. If the ESP was not halted, `host_w(0x1F, 0xFF)` is also passed. That write is a no-op in MAME here: the ESP is already HALTED between `run_once()` calls (and RUNNING with its HALT line low before the first one, where `$1F` does nothing either). It is kept only so that MAME sees the same host write sequence. |
 | `esphalt 0` | Pin low; resumes at word 0 | Clears the pump flag. The next `run_once()` starts at PC 0. |
 | `espidle <n>` | `n` idle steps (host transfers, RAM clear, DBASE refresh) | **No-op.** MAME has no halted-state cycles. RAM clear (`$12` bit 1) is instant but only when the ESP's state is HALTED (audit §2.5), and DBASE does not move while halted. |
-| `frames <n>` (TR1) | `Otis::runFrame`, route, `Esp::runSample` | One OTIS stream update of one sample, then esqpump's `sound_stream_update`. `ser_w(n, s32(get(2+n) * 32768.0f))` for n = 0..5, i.e. OTIS ch1..ch3 to SER0..SER2 (L, R). Then `run_once()` unless halted, then main = `ser_r(6)`, `ser_r(7)` (SER3 L/R). Aux = OTIS ch0. |
+| `frames <n>` (TR1) | `Otis::runFrame`, route, `Esp::runSample` | One OTIS stream update of one sample, then esqpump's `sound_stream_update`. `ser_w(n, s32(get(2+n) * 32768.0f))` for n = 0..5, i.e. OTIS ch1..ch3 to SER0..SER2 (L, R). Then `run_once()` unless halted, then main = `ser_r(6)`, `ser_r(7)` (SER3 L/R). Aux = OTIS ch0. **Program without END:** before each `run_once()` the harness checks MAME's own program memory (the public `_instr()` accessor). If none of the 160 words has ALU opcode END, it skips `run_once()` for that frame, treating the ESP as halted, and prints one warning on stderr: `ESP program has no END; MAME would read out of bounds (audit section 2.1) - ESP treated as halted`. The exit status stays 0. Without this, MAME's `run_once()` runs past `instr[159]` and crashes. This happens with any trace that runs frames before loading a program, because the reset program is all zeros. MAME itself only escapes because esqpump starts halted. |
 | OTIS output word | O6/O12: bits 15..0 of the 21-bit sum, saturated (floor of the 20-bit value / 16) | `put_int_clamp` to 20 bits, then esqpump's `s32(float * 32768)`, i.e. **truncation toward zero** of the 20-bit value / 16. This is reproduced as MAME does it, not fixed (audit §1.8). MAME's aux output stays float all the way to the speaker; the harness converts it with the same truncating expression the pump uses for the ESP inputs. |
 | Main output word | SER3 latch | `ser_r(6/7)`. The pump's `* (1/32768)` to the speaker and back is exact, so the latch is used directly. |
 
@@ -121,17 +127,23 @@ Both files have 64 frames. 154 of the 256 samples differ, by 1 to 3 LSB. Every d
 ours below MAME (ours − MAME ∈ {−1, −2, −3}). Both mechanisms below round negative quantities
 toward zero in MAME and toward −∞ in ours.
 
-To attribute them, a small model of this trace's OTIS path was written with each rounding
-choice switchable. It reproduces both files exactly: 0 mismatches against `ours.pcm` with
-floor everywhere, and 0 against `mame.pcm` with MAME's truncations. Switching one knob at a time
-from our model gives the split below. "Samples" counts the frames where that output differs.
+To attribute them, `tools/mame_ref/analysis/smoke_model.py` models this trace's OTIS path with
+each rounding choice switchable. It is pure Python:
+
+```bash
+python -I tools/mame_ref/analysis/smoke_model.py tests/data/smoke_wave.bin ours.pcm mame.pcm
+```
+
+It reproduces both files exactly: 0 mismatches against `ours.pcm` with floor everywhere, and 0
+against `mame.pcm` with MAME's truncations. Switching one knob at a time from our model gives
+the split below. "Samples" counts the frames where that output differs.
 
 | Output | Samples differing (of 64) | Max \|diff\| | Cause | Label |
 |---|---|---|---|---|
-| aux L (OTIS ch0, voice 0) | 43 | 3 | Filter rounding (32 samples, up to 2 LSB) plus output-word rounding (24 samples, 1 LSB) | Filter: **O4** (floor `>> 12`) vs MAME's truncating `/ 4096` in `apply_lowpass` (audit §1.4 "Precision issues", OTIS weakness 3). Output: **O6/O12** (floor) vs truncation toward zero (audit §1.8, OTIS weakness 6; on aux it comes from the harness conversion that mirrors esqpump). |
-| aux R (OTIS ch0, voice 0) | 45 | 2 | Same two causes (filter 32 samples ≤1; output 28 samples ≤1) | **O4**; **O6/O12** vs audit §1.8 |
-| main L (ESP SER3 ← SER0 ← OTIS ch1, voice 1) | 39 | 3 | Same two causes on voice 1 (filter 31 samples ≤2; output 18 samples ≤1). The ESP copy is exact in both, so it adds nothing. | **O4** vs audit §1.4; **O6/O12** vs esqpump's `s32()` truncation of the ESP input (audit §1.8, OTIS weakness 6) |
-| main R (same path) | 27 | 2 | Same (filter 13 samples ≤1; output 20 samples ≤1) | **O4**; **O6/O12** vs audit §1.8 |
+| aux L (OTIS ch0, voice 0) | 43 | 3 | Filter rounding (32 samples, up to 2 LSB) plus output-word rounding (24 samples, 1 LSB) | Filter: **O4** (floor `>> 12`) vs MAME's truncating `/ 4096` in `apply_lowpass` (audit §1.4 "Precision issues", OTIS weakness 3). Output word: **O5/O12** (ours floors at the volume shift and emits that 16-bit word) vs truncation toward zero. On aux this truncation is a **harness conversion (mirrors esqpump `s32`)**, because MAME's aux stays float. |
+| aux R (OTIS ch0, voice 0) | 45 | 2 | Same two causes (filter 32 samples ≤1; output 28 samples ≤1) | **O4** vs audit §1.4; **O5/O12** vs **harness conversion (mirrors esqpump `s32`)** |
+| main L (ESP SER3 ← SER0 ← OTIS ch1, voice 1) | 39 | 3 | Same two causes on voice 1 (filter 31 samples ≤2; output 18 samples ≤1). The ESP copy is exact in both, so it adds nothing. | **O4** vs audit §1.4; **O5/O12** vs esqpump's `s32()` truncation of the ESP input (audit §1.8, OTIS weakness 6) |
+| main R (same path) | 27 | 2 | Same (filter 13 samples ≤1; output 20 samples ≤1) | **O4** vs audit §1.4; **O5/O12** vs audit §1.8 |
 
 No difference is unexplained.
 
@@ -148,9 +160,68 @@ These parts of the path agree exactly on this trace:
 - **TR1/TR2 conventions.** The ESP program load, halt and resume give identical main output
   wherever the OTIS input agrees.
 
+## Differences on `tests/data/esp_mix.trace`
+
+This trace runs the ES5510 paths that the smoke trace's two MOVs do not. Its 13-word program,
+hand-encoded and checked with `esp_dis`, does the following:
+
+- **MUL**: SER1L × −0.75, with SIGREG bit 22 set so the multiplier shift is 1.
+- **ADD**: adds SER0L to give `mix`, and pushes `mix` to the DOL.
+- **Delay line through DRAM**: MEMSIZ 0xFF, DLENGTH 0xFF00. `mix` is written at DBASE + 0 and
+  read back two samples later through DIL into SER3L.
+- **Saturating ADD**: `0x7F0000 + mix`.
+- **Conditional skip**: CMP `mix`, 0, then a NOP, then a skippable MOV with CMR = N. SER3R is the
+  saturated sum when `mix` ≥ 0 and `mix` otherwise.
+
+The input waves are synthetic non-decreasing ramps (`esp_mix_fast.bin`, `esp_mix_slow.bin`,
+written by `tools/mame_ref/analysis/make_esp_mix_waves.py`). With only non-negative operands,
+our floors and MAME's truncations agree, so the OTIS outputs, and with them the ESP inputs, are
+the same in both. Voices 2 and 3 copy the two ESP inputs onto CA 0, so aux L and aux R show this
+directly. Any main-output difference is therefore the ESP's own.
+
+Over the 96 frames, `mix` runs negative, turns positive at frame 73 and then makes the ADD
+saturate (SER3R 32636, 32761, then 32767).
+
+```text
+frames: a=96 b=96
+first differing frame: none
+ch0: max|diff|=0 rms=0.0000
+ch1: max|diff|=0 rms=0.0000
+ch2: max|diff|=0 rms=0.0000
+ch3: max|diff|=0 rms=0.0000
+identical
+```
+
+| Output | Samples differing | Label |
+|---|---|---|
+| aux L/R (ESP inputs) | 0 | — (OTIS identical by construction) |
+| main L (MUL, ADD, DOL, delay write/read, DIL) | 0 | — |
+| main R (saturating ADD, CMP, skip) | 0 | — |
+
+On these paths, MAME and our core agree bit for bit:
+
+- MUL truncation, with E6 and MAME both taking bits 47..24 rounded toward −∞.
+- ADD saturation.
+- DOL floor (E18 FIFO part, and MAME after PR #15537).
+- Delay addressing with MEMSIZ 0xFF and DLENGTH 0xFF00, including the first DBASE reload (E7/R10).
+- The DIL timing of two words (E18).
+- The CMP/skip formula (E21, E4).
+
+The program deliberately avoids the following, which do differ (see the next table):
+
+- A skippable word directly after the CMP.
+- A one-operand op with a DIL operand select. The DIL is read as register 244 instead.
+- Any MAC overflow.
+
+An exploratory variant of this program, run on the smoke sines instead of ramps, showed how the
+OTIS rounding differences above propagate. The input differences of a few LSB carry through the MUL and ADD (up to 6 LSB on main L)
+and are not amplified by them. But where `mix` is −2 in ours and 0 in MAME the conditional skip goes the other way,
+and that one frame differs by 32514 on SER3R. Data-dependent ESP code can turn an LSB-level OTIS
+difference into a full-scale one.
+
 ## Differences to expect on other traces
 
-The smoke trace does not exercise these. They are listed so future diffs can be labelled
+The two committed traces do not exercise these. They are listed so future diffs can be labelled
 quickly.
 
 | Area | Ours | MAME | Label |
@@ -165,5 +236,8 @@ quickly.
 | ESP MAC overflow | 50-bit wrap, sat48 readout | `machl` unwrapped 64-bit | **E6** vs audit §2.4 / ESP weakness 2 |
 | ESP DRAM size | Trace `dram`, addresses masked | Fixed 1M words | audit §2.5 / ESP weakness 4 |
 | Halted ESP | Idle steps run transfers, RAM clear and the DBASE refresh model | Instant transfers; RAM clear only when HALTED; DBASE frozen | **TR2/E25/E28** |
-| Program without END | Word 159 treated as END | Reads past `instr[159]` (undefined) | **E11** vs audit §2.1 |
+| Program without END | Word 159 treated as END | Real MAME reads past `instr[159]` (undefined, crashes). The harness instead skips `run_once()` for the frame, treats the ESP as halted (main keeps the last SER3 value) and warns once on stderr. | **E11** vs audit §2.1 |
+| Host writes while the ESP runs | At most one GPR/INSTR select transfer per END (E19) | Every `host_w` applies at once, between `run_once()` calls | **E19/TR2** |
+| Skippable word directly after the CMP/ALU word that sets the flags | Skip uses the CCR committed in the same step (E17: commit ALU(k−1), then evaluate skip k) | Skip is evaluated at T1, before ALU(N−1) writes CCR at T2, so it sees the flags one word older | **E17** vs es5510.cpp `execute_run` |
+| One-operand ALU op (MOV, ABS, …) with an operand select of 9..F (ALU source = DIL) | DIL replaces only operand A, so one-operand ops still read B (ESP notes §4.1.3) | The single operand reads DIL | ESP notes part 1 §4.1.3 (no decision id) |
 | ALU flags and skip | E1–E21 | es5510.cpp `alu_operation` / skip test | The E-id that the differing instruction exercises |
