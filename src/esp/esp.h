@@ -31,7 +31,7 @@ public:
     int runSample();  // executes from PC until END (E11 cap); returns steps run
     void setSerialIn(int port, int16_t l, int16_t r);  // ports 0..3, latched into SERnL/R
     void serialOut(int port, int16_t& l, int16_t& r) const;
-    bool halted() const;
+    bool halted() const { return halted_; }
 
     // Direct state (tests, trace runner). Addresses 0..255 with SPR semantics.
     uint32_t gpr(int addr) const;
@@ -40,7 +40,20 @@ public:
     void setInstr(int i, uint64_t w48);
     const esp::Mac& mac() const { return mac_; }
     const esp::Agen& agen() const { return agen_; }
-    // Task 9 adds the host interface.
+
+    // ---- host interface (ESP notes part 2 §5.1-§5.4) -------------------------------------
+    // 8-bit host register map: $00-$02 GPR, $03-$08 INSTR, $09-$0B DIL, $0C-$0E DOL,
+    // $0F-$11 DADR, $12 host control, $14 RAM access, $16 PC, $17 refresh, $18 serial control,
+    // $1F halt enable / frame counter, $80/$A0/$C0/$E0 select registers.
+    uint8_t hostRead(uint8_t addr);
+    void hostWrite(uint8_t addr, uint8_t v);
+    // HALT pin level. Sampled at END (runSample) and while halted: a low level resumes at pc 0.
+    void setHaltPin(bool high);
+    // One instruction period while halted (about 300 ns): one pending GPR/INSTR transfer,
+    // and independently one RAM-clear write or one DBASE refresh decrement. No-op if running.
+    void idleStep();
+    int dolFifoSize() const { return fifo_.size(); }
+    uint8_t serialControl() const { return serCtl_; }  // host serial control register as written
 
 private:
     struct PendingAlu {
@@ -70,6 +83,9 @@ private:
     void commitMul();
     void commitAlu();
     void ramCycle();
+    void hostTransfer();   // the pending GPR/INSTR host request, if any
+    void hostRamAccess();  // DADR HI write while halted: one RAM/IO cycle
+    void haltNow();        // immediate halt (halt-enable write with HALT high)
 
     EspBus& bus_;
     uint32_t gpr_[192];
@@ -84,6 +100,23 @@ private:
     PendingMul pMul_;
     PendingRam pRam_;
     int pc_ = 0;
+
+    // Host interface state.
+    struct HostRequest {
+        bool valid = false;
+        bool read = false, wrGpr = false, wrInstr = false;
+        uint8_t addr = 0;
+    };
+    bool halted_ = false, haltPin_ = false;
+    uint32_t hostGpr_ = 0;     // $00-$02
+    uint64_t hostInstr_ = 0;   // $03-$08
+    uint16_t hostDol_ = 0;     // $0C-$0D (16-bit, left-justified)
+    uint32_t dadr_ = 0;        // $0F-$11, bits 23..4
+    uint8_t ramCtl_ = 0;       // $14
+    uint8_t serCtl_ = 0;       // $18
+    uint8_t selReg_[4] = {0, 0, 0, 0};  // read-back of $80, $A0, $C0, $E0
+    bool refreshDisable_ = false, clearActive_ = false;
+    HostRequest req_;
 };
 
 }  // namespace ens
