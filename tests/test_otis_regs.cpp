@@ -111,6 +111,15 @@ TEST(otis_ch_regs_test_mode) {
     CHECK_EQ(o.read(0), 0);
     o.write(6, 0x4321);
     CHECK_EQ(o.read(6), 0x4321);
+    // TEST=0 (and A/D=0): a channel write must not change the prior value.
+    o.write(8, 0x0000);
+    o.write(6, 0x4321);  // prior value
+    o.write(6, 0x1111);
+    CHECK_EQ(o.read(6), 0x4321);
+    o.write(8, 0x0002);  // TEST=1: the same write takes effect
+    o.write(6, 0x1111);
+    CHECK_EQ(o.read(6), 0x1111);
+    o.write(6, 0x4321);
     // A/D=1: serial input is latched into CH3L/R.
     o.write(8, 0x0001);
     o.setSerialIn(0x1234, -2);
@@ -120,4 +129,19 @@ TEST(otis_ch_regs_test_mode) {
     o.write(8, 0x0000);
     o.setSerialIn(0x7777, 0x7777);
     CHECK_EQ(o.read(6), 0x1234);
+}
+
+TEST(otis_page_masking_and_decode) {
+    NullMem m;
+    Otis o(m);
+    o.write(15, 0xFF);
+    CHECK_EQ(o.read(15), 0x7F);
+    // Page 96 (bits 5 and 6 set) resolves to the channel page: reg 8 is SERMODE, not a voice register.
+    o.write(15, 96);
+    CHECK_EQ(o.read(8), 0x07F8 | 1);
+    o.write(8, 0x0002);
+    o.write(6, 0x2468);
+    CHECK_EQ(o.read(6), 0x2468);
+    o.write(15, 64);  // same global channel registers as page 96
+    CHECK_EQ(o.read(6), 0x2468);
 }
