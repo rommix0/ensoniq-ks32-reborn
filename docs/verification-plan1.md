@@ -34,8 +34,8 @@ MACH is the preload for the next word's accumulate. Both were checked with `esp_
 - **Machine setup**: SIGREG bit 22 = 1 (multiplier shift 1, as the KS-32 sets it), MEMSIZ
   0x0000FF, DLENGTH 0xFFFF00 (the whole 64K-word DRAM is the delay ring), DBASE 0.
 - **Outputs**: SER3L = `t` (wet). SER3R = `u` (the diffusers only, no feedback).
-- **Stimulus**: one full-scale sample (0x7FFF) on SER0L, then zeros, for 6 s at 29 761.7 Hz
-  (the KS-32 frame rate, OTIS 15.238 MHz / 512).
+- **Stimulus**: one full-scale sample (0x7FFF) on SER0L, then zeros, for 6 s at 29 761.9 Hz
+  (the KS-32 frame rate: 30.47618 MHz / 2 / 512 = 29 761.9 Hz).
 - **Measure**: split the output into 0.1 s windows (2976 frames) from frame 0. The decay time
   is the end of the last window whose RMS is at or above −60 dBFS (32.768 LSB of 16-bit full
   scale). The result has 0.1 s resolution.

@@ -28,8 +28,8 @@ constexpr uint8_t kZero = 255;  // constant 0: a source of 0 and a discarding de
 constexpr uint8_t kSer0L = 235, kSer3R = 240, kSer3L = 241, kMach = 243, kDil = 244;
 constexpr uint8_t kMemsiz = 244, kDlength = 245, kDbase = 248, kSigreg = 249;
 constexpr uint32_t kShiftOne = 0x400000;  // SIGREG bit 22 (KS-32 firmware setting)
-// KS-32 frame rate: OTIS 15.238 MHz / 512 = 29 761.7 Hz (the ESP2 document quotes Fs = 29761.894531 Hz).
-constexpr double kFrameRate = 29761.7;
+// KS-32 frame rate: 30.47618 MHz / 2 / 512 = 29 761.9 Hz (the ESP2 document quotes Fs = 29761.894531 Hz).
+constexpr double kFrameRate = 29761.9;
 
 // 64K-word DRAM (MEMSIZ 0x0000FF); addresses are masked to the size.
 struct Dram : EspBus {
