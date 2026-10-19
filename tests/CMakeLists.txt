@@ -1,0 +1,9 @@
+# Adding a test file is a one-line change: append it to ENS_TEST_SOURCES.
+set(ENS_TEST_SOURCES
+  main.cpp
+  test_bits.cpp
+)
+
+add_executable(ens_tests ${ENS_TEST_SOURCES})
+target_link_libraries(ens_tests PRIVATE ens_otis ens_esp ens_common)
+add_test(NAME ens_tests COMMAND ens_tests)
