@@ -22,7 +22,7 @@ add_library(ens_common INTERFACE)
 target_include_directories(ens_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # Chip cores. Later tasks add sources to these lists.
-add_library(ens_otis STATIC src/otis/placeholder.cpp)
+add_library(ens_otis STATIC src/otis/otis.cpp)
 target_link_libraries(ens_otis PUBLIC ens_common)
 
 add_library(ens_esp STATIC src/esp/placeholder.cpp)
