@@ -1,0 +1,238 @@
+# ESP-exercising trace for the MAME comparison (docs/mame-ref.md). Synthetic data only:
+# esp_mix_fast.bin / esp_mix_slow.bin are non-decreasing ramps written by
+# tools/mame_ref/analysis/make_esp_mix_waves.py, so the OTIS outputs (and the ESP inputs) are
+# the same in our cores and in MAME and any main-output difference comes from the ESP.
+#
+# Voice 0: CA 1 -> SER0 (dry), bank 1 slow ramp.  Voice 1: CA 2 -> SER1 (send), bank 0 fast
+# ramp. Voices 2 and 3 copy voices 0 and 1 onto CA 0, so aux L / aux R show the ESP inputs.
+#
+# ESP program (13 words, comments per word below):
+#   mix = -0.75 * SER1L (MUL, SIGREG shift 1) + SER0L (ADD, result also pushed to the DOL)
+#   delay line: write mix at DBASE+0 (word 4), read DBASE+2 samples (word 5) -> SER3L
+#   sat = 0x7F0000 + mix (saturating ADD); SER3R = mix, then SER3R = sat unless mix < 0
+#   (CMP mix, 0; NOP; skippable MOV with CMR = N).
+# mix runs negative, crosses zero near frame 72 and is positive (saturating sat) after that.
+wave 0 esp_mix_fast.bin
+wave 1 esp_mix_slow.bin
+dram 65536
+
+otis 13 0003
+otis 15 0040
+otis 8 0000
+
+# Voice 0: CA 1, bank 1, 1 sample/frame, 4 LP poles, L only
+otis 15 0000
+otis 0 0D0C
+otis 1 0400
+otis 2 0000
+otis 3 0000
+otis 4 0003
+otis 5 FE00
+otis 6 FFF0
+otis 7 FFF0
+otis 8 F000
+otis 9 0000
+otis 10 0000
+otis 11 0000
+
+# Voice 1: CA 2, bank 0, 1 sample/frame, 4 LP poles, L only
+otis 15 0001
+otis 0 0E08
+otis 1 0400
+otis 2 0000
+otis 3 0000
+otis 4 0003
+otis 5 FE00
+otis 6 FFF0
+otis 7 FFF0
+otis 8 F000
+otis 9 0000
+otis 10 0000
+otis 11 0000
+
+# Voice 2: copy of voice 0 on CA 0 (aux L)
+otis 15 0002
+otis 0 0C0C
+otis 1 0400
+otis 2 0000
+otis 3 0000
+otis 4 0003
+otis 5 FE00
+otis 6 FFF0
+otis 7 FFF0
+otis 8 F000
+otis 9 0000
+otis 10 0000
+otis 11 0000
+
+# Voice 3: copy of voice 1 on CA 0 (aux R)
+otis 15 0003
+otis 0 0C08
+otis 1 0400
+otis 2 0000
+otis 3 0000
+otis 4 0003
+otis 5 FE00
+otis 6 FFF0
+otis 7 FFF0
+otis 8 0000
+otis 9 F000
+otis 10 0000
+otis 11 0000
+
+esphalt 1
+# Host control: refresh disable (DBASE stays put while halted).
+esp 12 01
+# MEMSIZ = 0x0000FF (unit 0x100)
+esp 00 00
+esp 01 00
+esp 02 FF
+esp A0 F4
+# DLENGTH = 0x00FF00 (256-sample delay ring)
+esp 00 00
+esp 01 FF
+esp 02 00
+esp A0 F5
+# DBASE = 0
+esp 00 00
+esp 01 00
+esp 02 00
+esp A0 F8
+# SIGREG bit 22: multiplier shift 1
+esp 00 40
+esp 01 00
+esp 02 00
+esp A0 F9
+# CMR = N: skippable words skip when N = 1
+esp 00 80
+esp 01 00
+esp 02 00
+esp A0 FB
+# gpr 0x80: gain -0.75
+esp 00 A0
+esp 01 00
+esp 02 00
+esp A0 80
+# gpr 0x83: bias for the saturating ADD
+esp 00 7F
+esp 01 00
+esp 02 00
+esp A0 83
+# gpr 4: RAM offset of word 4 (delay write at +0)
+esp 00 00
+esp 01 00
+esp 02 00
+esp A0 04
+# gpr 5: RAM offset of word 5 (delay read at +2 samples)
+esp 00 00
+esp 01 02
+esp 02 00
+esp A0 05
+# w0: MOV SER1L > r81
+esp 03 FF
+esp 04 FF
+esp 05 ED
+esp 06 81
+esp 07 90
+esp 08 00
+esp C0 00
+# w1: MOV r83 > r84 (bias)
+esp 03 FF
+esp 04 FF
+esp 05 83
+esp 06 84
+esp 07 90
+esp 08 00
+esp C0 01
+# w2: MUL r81 * r80(gain -0.75) > r81
+esp 03 80
+esp 04 81
+esp 05 FF
+esp 06 FF
+esp 07 90
+esp 08 00
+esp C0 02
+# w3: ADD r81 + SER0L > r81 + DOL (mix)
+esp 03 FF
+esp 04 FF
+esp 05 EB
+esp 06 81
+esp 07 07
+esp 08 00
+esp C0 03
+# w4: ADD r84 + r81 > r84 (saturates); RAM write delay+gpr[4]
+esp 03 FF
+esp 04 FF
+esp 05 81
+esp 06 84
+esp 07 00
+esp 08 08
+esp C0 04
+# w5: NOP; RAM read delay+gpr[5]=2 samples
+esp 03 FF
+esp 04 FF
+esp 05 FF
+esp 06 FF
+esp 07 90
+esp 08 00
+esp C0 05
+# w6: NOP
+esp 03 FF
+esp 04 FF
+esp 05 FF
+esp 06 FF
+esp 07 90
+esp 08 00
+esp C0 06
+# w7: MOV DIL(reg 244) > SER3L
+esp 03 FF
+esp 04 FF
+esp 05 F4
+esp 06 F1
+esp 07 90
+esp 08 00
+esp C0 07
+# w8: MOV r81 > SER3R
+esp 03 FF
+esp 04 FF
+esp 05 81
+esp 06 F0
+esp 07 90
+esp 08 00
+esp C0 08
+# w9: CMP r81 - ZERO
+esp 03 FF
+esp 04 FF
+esp 05 FF
+esp 06 81
+esp 07 40
+esp 08 00
+esp C0 09
+# w10: NOP
+esp 03 FF
+esp 04 FF
+esp 05 FF
+esp 06 FF
+esp 07 90
+esp 08 00
+esp C0 0A
+# w11: skippable MOV r84 > SER3R (skip when N)
+esp 03 FF
+esp 04 FF
+esp 05 84
+esp 06 F0
+esp 07 90
+esp 08 80
+esp C0 0B
+# w12: END
+esp 03 FF
+esp 04 FF
+esp 05 FF
+esp 06 FF
+esp 07 F0
+esp 08 00
+esp C0 0C
+espidle 4
+esphalt 0
+
+frames 96

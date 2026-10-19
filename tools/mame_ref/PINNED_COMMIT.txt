@@ -1,0 +1,28 @@
+MAME sources vendored in vendor/ (unmodified, license headers intact, BSD-3-Clause).
+
+Repository: https://github.com/mamedev/mame
+Commit:     7e7a99fd7b5a725a5c60ebc632c166cc2c655335 (master as of 2026-10-19)
+Commit date: 2026-10-19T03:06:06Z
+Fetched:    2026-10-19
+
+Files (vendor/<name> <- URL):
+  es5506.cpp  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/devices/sound/es5506.cpp
+  es5506.h  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/devices/sound/es5506.h
+  es5510.cpp  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/devices/cpu/es5510/es5510.cpp
+  es5510.h  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/devices/cpu/es5510/es5510.h
+
+Read (not vendored) for the driving conventions and the framework semantics the shim mirrors:
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/devices/sound/esqpump.cpp
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/devices/sound/esqpump.h
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/mame/ensoniq/esq5505.cpp
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/emu/disound.h
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/lib/util/coretmpl.h
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/emu/emumem.h
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/osd/eminline.h
+  https://raw.githubusercontent.com/mamedev/mame/7e7a99fd7b5a725a5c60ebc632c166cc2c655335/src/devices/cpu/es5510/es5510d.h
+
+SHA-256 of the vendored files:
+  4700095ef62bfb8c1e0487a093aeb6ac2a89c128466cf807d4703226ded07fd4 *es5506.cpp
+  cc768f89ada506ec02bdf9ea5ea2a4a8bbc0967aad9363c998af9c24287e3bf6 *es5506.h
+  7ab9a8fe8afb15cc620bcd762f8c5d1c9c3ba75d7fc9c9fc85fb70a14a88dd11 *es5510.cpp
+  e63bf899a0c0b383408d3983e0b418f3f2fca45e5e079b142e0613f4313cec80 *es5510.h
