@@ -52,3 +52,8 @@ target_compile_definitions(ens_trace_cli PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(pcm_diff tools/pcm_diff/main.cpp)
 target_link_libraries(pcm_diff PRIVATE ens_trace_parse)
 target_compile_definitions(pcm_diff PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# MAME reference harness (Task 12): vendored MAME chip code, built only on request.
+if(ENS_BUILD_MAME_REF)
+  add_subdirectory(tools/mame_ref)
+endif()
