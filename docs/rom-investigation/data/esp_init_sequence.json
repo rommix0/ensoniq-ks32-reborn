@@ -1,0 +1,43 @@
+{
+ "source": "KS-32 OS v3.01, routines 0xC1C7E8 (ESP init at boot) and 0xC1C8C0/0xC1C8E4 (effect program load); hand-transcribed from the disassembly",
+ "addressing": "ESP host register n is at CPU address 0x260001 + 2*n (odd bytes). DUART at 0x280001 + 2*n; DUART reg 0x0E = set-output-port-bits, 0x0F = reset-output-port-bits; OP6 is ESPHALT.",
+ "host_write_protocol": [
+  "Before writing a select register ($80/$A0/$C0/$E0) while running, poll host reg $16 (PC) until PC < 0x28 (skipped while halted, flag $DE7F)",
+  "Write the select register, then poll host reg $12 bit 2 (Host Access OK/) until 0; timeout ~2x31 polls -> error 0x21 (33, 'bad ESP chip' in the service manual)",
+  "GPR writes of SPRs/params are verified by read-back via $80 and retried up to 10 times (routine 0xC1CC80)",
+  "When finished, read-select is parked at 0xC0 (non-GPR) as the datasheet recommends (0xC1CC74)"
+ ],
+ "boot_init": [
+  {"op": "duart_reset_op_bits", "value": "0x40", "meaning": "assert ESPHALT (OP6)"},
+  {"op": "esp_write", "reg": "0x1F", "value": "0x02", "meaning": "halt enable: stop immediately"},
+  {"op": "esp_write", "reg": "0x1F", "value": "0xFF"},
+  {"op": "esp_write", "reg": "0xE0", "value": "0x9F", "meaning": "GPR+INSTR write to 0x9F with whatever the latches hold"},
+  {"op": "gpr_write", "addr": "0xF4", "value": "0x0000FF", "meaning": "MEMSIZ = 0x0000FF -> 16 address bits -> 64K-word DRAM"},
+  {"op": "gpr_write_verified", "addr": "0xF5", "value": "0xFFFFFF", "meaning": "DLENGTH"},
+  {"op": "gpr_write", "addr": "0xF8", "value": "0x000F00", "meaning": "DBASE"},
+  {"op": "esp_write", "reg": "0x12", "value": "0x03", "meaning": "host control: RAM clear + refresh disable"},
+  {"op": "esp_write", "reg": "0x12", "value": "0x02", "meaning": "host control: RAM clear"},
+  {"op": "esp_write", "reg": "0x18", "value": "0x63", "meaning": "host serial control: SLAVE, SONY, SER3=out, SER2/1/0=in"},
+  {"op": "fill_gpr_instr", "addr_range": "0x00-0x9F", "gpr": "0xFFFFFF", "instr": "0xFFFFFFFFFFFF", "meaning": "every instruction = END (opcode F)"},
+  {"op": "gpr_write_verified", "addr_range": "0xA0-0xBF", "value": "0xFFFFFF"},
+  {"op": "gpr_write", "addr": "0xF9", "value": "0xFFFFFF", "meaning": "SIGREG bit22=1 -> product shift ONE"},
+  {"op": "gpr_write", "addr_range": "0xEA-0xF1", "value": "0x000000", "meaning": "clear serial registers"}
+ ],
+ "program_load": [
+  {"op": "ramp_gpr", "addr": "0x7F", "to": "0", "step": "0x12F", "meaning": "fade output level GPR 0x7F (used by every program) to 0"},
+  {"op": "duart_reset_op_bits", "value": "0x40", "meaning": "ESPHALT"},
+  {"op": "esp_write", "reg": "0x1F", "value": "0x02"},
+  {"op": "gpr_write_verified", "addr": "0xF5", "value": "0xFFFFFF", "meaning": "DLENGTH"},
+  {"op": "esp_write", "reg": "0x12", "value": "0x03"},
+  {"op": "esp_write", "reg": "0x12", "value": "0x02", "meaning": "RAM clear"},
+  {"op": "wait", "meaning": "trap #8 with 0x28 (OS delay)"},
+  {"op": "gpr_write_verified", "addr_range": "0x00-0x8F", "value": "0x000000"},
+  {"op": "records", "meaning": "type 1/2/3/4 records of the program (esp/esp_programs.json); includes MEMSIZ/DLENGTH/SIGREG/ABASE/BBASE writes"},
+  {"op": "dram_tables", "meaning": "only for a program that writes ABASE/BBASE (index 10): RAM access ctl $14=0x7F (write RAM), DOL=$0C/$0D word, DADR $0F/$10 = word address, $11 = 0; then read back with $14=0xFF and compare"},
+  {"op": "verify_records", "meaning": "read every record back; mismatch -> reload, up to 10 times, then error"},
+  {"op": "park_read_select", "value": "0xC0"},
+  {"op": "set_mix_gprs", "addrs": ["0x7C/0x7D", "0x7A/0x7B", "0x76/0x77"], "meaning": "levels from table 0xC0A72C indexed by sound/effect parameters, ramped"},
+  {"op": "duart_set_op_bits", "value": "0x40", "meaning": "release ESPHALT (0xC1CD3C)"},
+  {"op": "ramp_gpr", "addr": "0x7F", "meaning": "fade output level back up"}
+ ]
+}

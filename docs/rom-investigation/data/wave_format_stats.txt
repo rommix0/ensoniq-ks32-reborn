@@ -1,0 +1,22 @@
+--- bank 0 (sq1-u25 / sq1-u26) ---
+u25 as 8-bit samples (1 byte = 1 sample)       blocks=  127 r1= 0.932 dE=  0.134 zcr= 0.078 sfm= 0.014 lo_r1=   n/a
+u25 even bytes only                            blocks=   64 r1= 0.820 dE=  0.360 zcr= 0.144 sfm= 0.046 lo_r1=   n/a
+u25 odd bytes only                             blocks=   64 r1= 0.818 dE=  0.362 zcr= 0.145 sfm= 0.046 lo_r1=   n/a
+u25 as 16-bit BE pairs (even=hi)               blocks=   64 r1= 0.818 dE=  0.363 zcr= 0.145 sfm= 0.046 lo_r1= 0.625
+u25 as 16-bit LE pairs (odd=hi)                blocks=   64 r1= 0.817 dE=  0.365 zcr= 0.147 sfm= 0.047 lo_r1= 0.624
+u26 as 8-bit samples (1 byte = 1 sample)       blocks=  126 r1= 0.850 dE=  0.291 zcr= 0.110 sfm= 0.042 lo_r1=   n/a
+u26 even bytes only                            blocks=   63 r1= 0.700 dE=  0.582 zcr= 0.170 sfm= 0.074 lo_r1=   n/a
+u26 odd bytes only                             blocks=   63 r1= 0.697 dE=  0.592 zcr= 0.172 sfm= 0.075 lo_r1=   n/a
+u26 as 16-bit BE pairs (even=hi)               blocks=   64 r1= 0.687 dE=  0.609 zcr= 0.171 sfm= 0.083 lo_r1= 0.562
+u26 as 16-bit LE pairs (odd=hi)                blocks=   64 r1= 0.683 dE=  0.620 zcr= 0.172 sfm= 0.085 lo_r1= 0.562
+u25=hi, u26=lo, same address                   blocks=  128 r1= 0.932 dE=  0.135 zcr= 0.080 sfm= 0.015 lo_r1= 0.703
+u26=hi, u25=lo, same address                   blocks=  128 r1= 0.851 dE=  0.290 zcr= 0.110 sfm= 0.045 lo_r1= 0.785
+corr(u25[i], u26[i]) = 0.0023
+--- bank 1 (rom2.u39 / rom3.u38) ---
+rom2 16-bit LE (even byte = low)               blocks=  128 r1= 0.972 dE=  0.055 zcr= 0.062 sfm= 0.004 lo_r1=-0.010
+rom2 16-bit BE (even byte = high)              blocks=  128 r1=-0.001 dE=  2.003 zcr= 0.499 sfm= 0.556 lo_r1= 0.850
+rom2 as 8-bit samples                          blocks=  256 r1=-0.004 dE=  2.009 zcr= 0.500 sfm= 0.566 lo_r1=   n/a
+rom3 16-bit LE (even byte = low)               blocks=  128 r1= 0.915 dE=  0.168 zcr= 0.078 sfm= 0.013 lo_r1=-0.002
+rom3 16-bit BE (even byte = high)              blocks=  128 r1= 0.010 dE=  1.981 zcr= 0.496 sfm= 0.566 lo_r1= 0.794
+rom3 as 8-bit samples                          blocks=  256 r1=-0.010 dE=  2.019 zcr= 0.501 sfm= 0.526 lo_r1=   n/a
+rom2=hi rom3=lo same address (byte pairs)      blocks=  256 r1=-0.004 dE=  2.009 zcr= 0.500 sfm= 0.567 lo_r1=-0.025

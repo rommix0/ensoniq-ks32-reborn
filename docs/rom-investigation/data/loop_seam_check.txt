@@ -1,0 +1,7 @@
+bank0  8-bit, 1 byte per word (chosen)    zones=263  out-of-range=  0/325  seam/step median=  0.00  p90=  0.27   null median=  6.84
+bank0  8-bit, but u26 below u25           zones=263  out-of-range=  0/325  seam/step median=  6.02  p90= 38.02   null median=  4.73
+bank0  16-bit BE pairs in u25..u26        zones= 41  out-of-range=254/325  seam/step median=  2.95  p90= 10.39   null median=  2.10
+bank0  u25=hi u26=lo same address         zones= 41  out-of-range=254/325  seam/step median=  0.12  p90=  0.37   null median=  5.25
+bank1  16-bit LE (chosen)                 zones=104  out-of-range=  0/139  seam/step median=  0.00  p90=  1.01   null median=  5.86
+bank1  16-bit BE                          zones=104  out-of-range=  0/139  seam/step median=  0.00  p90=  2.00   null median=  0.94
+bank1  16-bit LE, but rom3 below rom2     zones=104  out-of-range=  0/139  seam/step median=  7.89  p90= 25.63   null median=  7.05

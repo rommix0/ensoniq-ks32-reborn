@@ -1,0 +1,100 @@
+; KS-32 OS v3.01 ESP program index 10, ptr 0xc21c31, header 45034d0000045900
+; first END at pc 88; 89 instr words, 87 GPR values loaded
+; record list: t1 n=53 @00, t2 n=36 @35, t3 n=2 @36, t4 n=32 @00
+;
+; pc  instr          | GPR[pc]  | decode
+00  FFFFFFFF9040 | 4CCCCD | MOV  A=ZERO       B=ZERO       sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+01  397DEF5F9128 | 280000 | MOV  A=R5F        B=SER2L      sel=1 | MAC  C=R7D        D=R39        | RD_DELAY_DUMP
+02  EF7BEB670168 | 57FFFF | ADD  A=R67        B=SER0L      sel=1 | MAC+ C=R7B        D=SER2L      | RD_DELAY_DUMP
+03  3A7DF3670128 | B33333 | ADD  A=R67        B=MACH       sel=1 | MAC  C=R7D        D=R3A        | RD_DELAY_DUMP
+04  EE7BEA680168 | 51EB84 | ADD  A=R68        B=SER0R      sel=1 | MAC+ C=R7B        D=SER2R      | RD_DELAY_DUMP
+05  7F67F3680000 | 001F80 | ADD  A=R68        B=MACH       sel=0 | MAC  C=R67        D=R7F        | RD_DELAY
+06  397CED4C9128 | 001F80 | MOV  A=R4C        B=SER1L      sel=1 | MAC  C=R7C        D=R39        | RD_DELAY_DUMP
+07  7A5FEC579040 | 7EB851 | MOV  A=R57        B=SER1R      sel=0 | MAC+ C=R5F        D=R7A        | RD_DELAY
+08  7F687A609000 | FEB851 | MOV  A=R60        B=R7A        sel=0 | MAC  C=R68        D=R7F        | RD_DELAY
+09  3A7C67F19128 | 199998 | MOV  A=SER3L      B=R67        sel=1 | MAC  C=R7C        D=R3A        | RD_DELAY_DUMP
+0A  EE6068F09040 | 003F00 | MOV  A=SER3R      B=R68        sel=0 | MAC+ C=R60        D=SER2R      | RD_DELAY
+0B  12413F419128 | 00FFFF | MOV  A=R41        B=R3F        sel=1 | MAC  C=R41        D=R12        | RD_DELAY_DUMP
+0C  133F4C3FE168 | 7BB2FF | ASR  A=R3F        B=R4C        sel=1 | MAC+ C=R3F        D=R13        | RD_DELAY_DUMP
+0D  15445762E040 | 06C172 | ASR  A=R62        B=R57        sel=0 | MAC+ C=R44        D=R15        | RD_DELAY
+0E  0D44623F0128 | 7FFFFE | ADD  A=R3F        B=R62        sel=1 | MAC  C=R44        D=R0D        | RD_DELAY_DUMP
+0F  1640F3F38000 | 000000 | ABS  A=MACH       B=MACH       sel=0 | MAC  C=R40        D=R16        | RD_DELAY
+10  0C8D17FB9040 | 032300 | MOV  A=CMR        B=R17        sel=0 | MAC+ C=R8D        D=R0C        | RD_DELAY
+11  FFFF40599040 | 00B000 | MOV  A=R59        B=R40        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+12  5C58408D4300 | 802304 | CMP  A=R8D        B=R40        sel=3 | MAC  C=R58        D=R5C        | RD_DELAY
+13  0A59FFFF9000 | 7FDCFC | MOV  A=ZERO       B=ZERO       sel=0 | MAC  C=R59        D=R0A        | RD_DELAY
+14  FFFF8D4090C0 | 016200 | MOV  A=R40        B=R8D        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY SKIP
+15  FFFF59195040 | 7FB9F8 | AND  A=R19        B=R59        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+16  1A5819180900 | 7FFCB9 | ADD  A=R18        B=R19        sel=9 | MAC  C=R58        D=R1A        | RD_DELAY
+17  FFFFF258A040 | 180000 | ASL2 A=R58        B=MACL       sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+18  FFFF595AC060 | 000000 | LS15 A=R5A        B=R59        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_TABB
+19  FFFF5A5AD060 | 000000 | DIFF A=R5A        B=R5A        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_TABB
+1A  5AFFFFFF9300 | 000010 | MOV  A=ZERO       B=ZERO       sel=3 | MAC  C=ZERO       D=R5A        | RD_DELAY
+1B  5A5B1B199340 | FFFF00 | MOV  A=R19        B=R1B        sel=3 | MAC+ C=R5B        D=R5A        | RD_DELAY
+1C  895B1CFB9000 | 140000 | MOV  A=CMR        B=R1C        sel=0 | MAC  C=R5B        D=R89        | RD_DELAY
+1D  1E0B1D0B9128 | 00FFFF | MOV  A=R0B        B=R1D        sel=1 | MAC  C=R0B        D=R1E        | RD_DELAY_DUMP
+1E  1F5C89404040 | 00A3D6 | CMP  A=R40        B=R89        sel=0 | MAC+ C=R5C        D=R1F        | RD_DELAY
+1F  FFFFFFFF9040 | 7F5C29 | MOV  A=ZERO       B=ZERO       sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+20  FFFF5B0B90C0 | 000800 | MOV  A=R0B        B=R5B        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY SKIP
+21  FFFF8E8D4040 | 00028F | CMP  A=R8D        B=R8E        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+22  FFFFFFFF9040 | 004000 | MOV  A=ZERO       B=ZERO       sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+23  FFFF208E9040 | 400000 | MOV  A=R8E        B=R20        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+24  FFFF210B90C0 | 000200 | MOV  A=R0B        B=R21        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY SKIP
+25  FFFF228E90C0 | 3C0000 | MOV  A=R8E        B=R22        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY SKIP
+26  FFFF6CF39040 | C40000 | MOV  A=MACH       B=R6C        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+27  8665FFFF9040 | 63E000 | MOV  A=ZERO       B=ZERO       sel=0 | MAC+ C=R65        D=R86        | RD_DELAY
+28  126665669128 | 00B000 | MOV  A=R66        B=R65        sel=1 | MAC  C=R66        D=R12        | RD_DELAY_DUMP
+29  1365FFFF9168 | 599999 | MOV  A=ZERO       B=ZERO       sel=1 | MAC+ C=R65        D=R13        | RD_DELAY_DUMP
+2A  155D06F39248 | 016500 | MOV  A=MACH       B=R06        sel=2 | MAC+ C=R5D        D=R15        | WR_DELAY
+2B  05351B309040 | 016200 | MOV  A=R30        B=R1B        sel=0 | MAC+ C=R35        D=R05        | RD_DELAY
+2C  FFFF35305040 | B851EB | AND  A=R30        B=R35        sel=0 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+2D  FFFF302F0940 | 4EB852 | ADD  A=R2F        B=R30        sel=9 | MAC+ C=ZERO       D=ZERO       | RD_DELAY
+2E  8F58FFFF9000 | 633333 | MOV  A=ZERO       B=ZERO       sel=0 | MAC  C=R58        D=R8F        | RD_DELAY
+2F  2324355AC110 | 000000 | LS15 A=R5A        B=R35        sel=1 | MAC  C=R24        D=R23        | RD_TABA
+30  850F5A5AD110 | 000000 | DIFF A=R5A        B=R5A        sel=1 | MAC  C=R0F        D=R85        | RD_TABA
+31  5AFFF30E0308 | 016100 | ADD  A=R0E        B=MACH       sel=3 | MAC  C=ZERO       D=R5A        | WR_DELAY
+32  5A380E699368 | AD9999 | MOV  A=R69        B=R0E        sel=3 | MAC+ C=R38        D=R5A        | RD_DELAY_DUMP
+33  99383F6C9708 | 000000 | MOV  A=R6C        B=R3F        sel=7 | MAC  C=R38        D=R99        | WR_DELAY
+34  850E5858A128 | 34CCCC | ASL2 A=R58        B=R58        sel=1 | MAC  C=R0E        D=R85        | RD_DELAY_DUMP
+35  1169F30F1000 | ------ | SUB  A=R0F        B=MACH       sel=0 | MAC  C=R69        D=R11        | RD_DELAY
+36  236B6A5AC128 | 000000 | LS15 A=R5A        B=R6A        sel=1 | MAC  C=R6B        D=R23        | RD_DELAY_DUMP
+37  236C5A5AD040 | 000000 | DIFF A=R5A        B=R5A        sel=0 | MAC+ C=R6C        D=R23        | RD_DELAY
+38  5AFF5835A300 | ------ | ASL2 A=R35        B=R58        sel=3 | MAC  C=ZERO       D=R5A        | RD_DELAY
+39  5A6BFFFF9340 | ------ | MOV  A=ZERO       B=ZERO       sel=3 | MAC+ C=R6B        D=R5A        | RD_DELAY
+3A  0738FFFF9128 | ------ | MOV  A=ZERO       B=ZERO       sel=1 | MAC  C=R38        D=R07        | RD_DELAY_DUMP
+3B  083BFFFF9040 | ------ | MOV  A=ZERO       B=ZERO       sel=0 | MAC+ C=R3B        D=R08        | RD_DELAY
+3C  073BFFFF9128 | ------ | MOV  A=ZERO       B=ZERO       sel=1 | MAC  C=R3B        D=R07        | RD_DELAY_DUMP
+3D  083CFFFF9040 | ------ | MOV  A=ZERO       B=ZERO       sel=0 | MAC+ C=R3C        D=R08        | RD_DELAY
+3E  923CFFFF9128 | ------ | MOV  A=ZERO       B=ZERO       sel=1 | MAC  C=R3C        D=R92        | RD_DELAY_DUMP
+3F  093D08081040 | ------ | SUB  A=R08        B=R08        sel=0 | MAC+ C=R3D        D=R09        | RD_DELAY
+40  923D91081128 | ------ | SUB  A=R08        B=R91        sel=1 | MAC  C=R3D        D=R92        | RD_DELAY_DUMP
+41  093E9107D040 | ------ | DIFF A=R07        B=R91        sel=0 | MAC+ C=R3E        D=R09        | RD_DELAY
+42  923EFFFF9128 | 0C0100 | MOV  A=ZERO       B=ZERO       sel=1 | MAC  C=R3E        D=R92        | RD_DELAY_DUMP
+43  09399209D040 | 0F0700 | DIFF A=R09        B=R92        sel=0 | MAC+ C=R39        D=R09        | RD_DELAY
+44  6E625F61E300 | ------ | ASR  A=R61        B=R5F        sel=3 | MAC  C=R62        D=R6E        | RD_DELAY
+45  00FFF4639448 | 0C0200 | MOV  A=R63        B=DIL/MEMSIZ sel=4 | MAC+ C=ZERO       D=R00        | WR_DELAY
+46  03626064E128 | 14DE00 | ASR  A=R64        B=R60        sel=1 | MAC  C=R62        D=R03        | RD_DELAY_DUMP
+47  046361640140 | 1A9C00 | ADD  A=R64        B=R61        sel=1 | MAC+ C=R63        D=R04        | RD_DELAY
+48  6E621B379308 | 0F0800 | MOV  A=R37        B=R1B        sel=3 | MAC  C=R62        D=R6E        | WR_DELAY
+49  25FFF4639448 | 14DF00 | MOV  A=R63        B=DIL/MEMSIZ sel=4 | MAC+ C=ZERO       D=R25        | WR_DELAY
+4A  2662393A9128 | 1DBC00 | MOV  A=R3A        B=R39        sel=1 | MAC  C=R62        D=R26        | RD_DELAY_DUMP
+4B  276364F39148 | 1A9D00 | MOV  A=MACH       B=R64        sel=1 | MAC+ C=R63        D=R27        | WR_DELAY
+4C  6E62696A9340 | ------ | MOV  A=R6A        B=R69        sel=3 | MAC+ C=R62        D=R6E        | RD_DELAY
+4D  0262286A0128 | 04B600 | ADD  A=R6A        B=R28        sel=1 | MAC  C=R62        D=R02        | RD_DELAY_DUMP
+4E  015E6A375040 | 016200 | AND  A=R37        B=R6A        sel=0 | MAC+ C=R5E        D=R01        | RD_DELAY
+4F  00FFF4629448 | 032400 | MOV  A=R62        B=DIL/MEMSIZ sel=4 | MAC+ C=ZERO       D=R00        | WR_DELAY
+50  035E37360A28 | 0C3400 | ADD  A=R36        B=R37        sel=A | MAC  C=R5E        D=R03        | RD_DELAY_DUMP
+51  0462FFFF9140 | 165300 | MOV  A=ZERO       B=ZERO       sel=1 | MAC+ C=R62        D=R04        | RD_DELAY
+52  29FFFFFF9300 | 048100 | MOV  A=ZERO       B=ZERO       sel=3 | MAC  C=ZERO       D=R29        | RD_DELAY
+53  2CFFFFFF9340 | 067900 | MOV  A=ZERO       B=ZERO       sel=3 | MAC+ C=ZERO       D=R2C        | RD_DELAY
+54  2D67FFFF9340 | 193800 | MOV  A=ZERO       B=ZERO       sel=3 | MAC+ C=R67        D=R2D        | RD_DELAY
+55  2EFFFFFF9300 | 1BF100 | MOV  A=ZERO       B=ZERO       sel=3 | MAC  C=ZERO       D=R2E        | RD_DELAY
+56  32FF23659348 | 04B700 | MOV  A=R65        B=R23        sel=3 | MAC+ C=ZERO       D=R32        | WR_DELAY
+57  346867F3E340 | ------ | ASR  A=MACH       B=R67        sel=3 | MAC+ C=R68        D=R34        | RD_DELAY
+58  6865FFFFF040 | ------ | END  A=ZERO       B=ZERO       sel=0 | MAC+ C=R65        D=R68        | RD_DELAY
+;
+; GPRs outside 00-9F and SPR writes:
+DIL/MEMSIZ = 0000FF
+DLENGTH    = 1F7DFF
+ABASE      = 1FBF00
+BBASE      = 1F7E00
