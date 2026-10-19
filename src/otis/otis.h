@@ -5,6 +5,12 @@
 
 namespace ens {
 
+// Pure signal-path helpers (exposed for testing). All shifts are arithmetic (floor).
+int16_t otis_interp(int16_t s1, int16_t s2, uint32_t frac9);        // O3: linear interpolation
+int16_t otis_lp(int16_t x, int16_t y1, uint16_t k12);               // O4: low-pass pole, saturated
+int16_t otis_hp(int16_t x, int16_t x1, int16_t y1, uint16_t k12);   // O4: high-pass pole, saturated
+int32_t otis_vol(int16_t x, uint8_t vol8);                          // O5: volume mantissa/exponent
+
 struct WaveMemory {
     virtual ~WaveMemory() = default;
     virtual uint16_t read(int bank, uint32_t wordAddr) = 0;  // bank 0/1, addr 20-bit
@@ -25,11 +31,14 @@ public:
     void setSerialIn(int16_t l, int16_t r);  // SER3 input when SERMODE.A/D=1 (latched into CH3L/R)
 
     // Voice scan. stepVoice() processes the next voice slot (0..ACT): wave fetches, address
-    // update and IRQ. After slot ACT the frame is marked ready.
+    // update, IRQ, interpolation, 4-pole filter, volume and channel accumulation. After slot
+    // ACT the channel sums are latched (saturated, O6) into the frame and the frame is ready.
+    // Starting slot 0 of a new frame clears the ready flag, so an untaken frame never leaks
+    // into the next one.
     void stepVoice();
     bool frameReady() const { return ready_; }
     OtisFrame takeFrame();  // returns the latched channels and clears ready
-    OtisFrame runFrame();   // steps until a frame is ready, then takes it
+    OtisFrame runFrame();   // runs the voice scan to the end of a frame, then takes it
     uint32_t acc29(int voice) const;  // test accessor: 29-bit accumulator (20.9 fixed point)
 
 private:
@@ -61,6 +70,8 @@ private:
     static uint16_t voiceMask(uint8_t reg);
     void updateAddress(int voice, Voice& v);  // O1 address ALU for one slot; raises CR.IRQ
     void serviceIrq(int voice, Voice& v);     // O8 latch into IRQV when free
+    void runSignalPath(int voice, Voice& v, uint32_t acc);  // O3-O6: one voice's contribution
+    void latchFrame();                         // O6/O12: saturate and latch the channel sums
     static uint16_t chRead(int32_t acc) { return static_cast<uint16_t>(acc & 0xFFFF); }
 
     WaveMemory& mem_;
@@ -68,7 +79,8 @@ private:
     uint8_t act_;        // ACT [4:0]
     uint8_t page_;       // PAGE [6:0]
     uint16_t sermodeBits_;  // SERMODE bits [15:11] and [2:0] only
-    int32_t chAcc_[8];   // CH0L,CH0R..CH3L,CH3R: 21-bit signed accumulators
+    int32_t chAcc_[8];   // CH0L,CH0R..CH3L,CH3R: the channel registers (last latched / test value)
+    int32_t chSum_[8];   // running 21-bit signed accumulators for the frame in progress
     bool irqPending_;    // an interrupt is pending (IRQ pin low)
     uint8_t irqVec_;     // IRQV [4:0]: voice that raised the interrupt
     uint32_t irqClear_;  // bit per voice: IRQV was read, clear that voice's CR.IRQ on its next slot

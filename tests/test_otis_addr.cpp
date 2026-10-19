@@ -354,3 +354,35 @@ TEST(otis_forced_irq) {
     CHECK(o.irqAsserted());
     CHECK_EQ(o.read(14) & 0x1F, 7);
 }
+
+TEST(otis_reverse_boundary_equality_oneshot) {
+    FakeWave m;
+    Otis o(m);
+    o.write(13, 0);
+    Setup s;
+    s.cr = DIR;
+    s.fc = 0x0400;
+    s.start = 10;
+    s.end = 20;
+    s.acc = 11;
+    setupVoice(o, 0, s);
+    o.runFrame();  // n = 10.0 == START: the boundary is hit
+    o.write(15, 0);
+    CHECK(o.read(0) & STOP0);
+    CHECK_EQ(o.acc29(0), 10u << 9);
+}
+
+TEST(otis_reverse_boundary_equality_loop) {
+    FakeWave m;
+    Otis o(m);
+    o.write(13, 0);
+    Setup s;
+    s.cr = DIR | LPE;
+    s.fc = 0x0400;
+    s.start = 10;
+    s.end = 20;
+    s.acc = 11;
+    setupVoice(o, 0, s);
+    o.runFrame();  // n == START with zero overshoot: acc = END - 0
+    CHECK_EQ(o.acc29(0), 20u << 9);
+}

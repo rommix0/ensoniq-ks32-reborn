@@ -4,6 +4,7 @@ set(ENS_TEST_SOURCES
   test_bits.cpp
   test_otis_regs.cpp
   test_otis_addr.cpp
+  test_otis_signal.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})

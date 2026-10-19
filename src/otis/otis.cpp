@@ -14,11 +14,37 @@ constexpr uint16_t kSerTest = 0x0002;
 
 // CR bits.
 constexpr uint16_t kStop0 = 0x0001, kStop1 = 0x0002, kBs = 0x0004, kLpe = 0x0008, kBle = 0x0010,
-                   kIrqe = 0x0020, kDir = 0x0040, kIrq = 0x0080;
+                   kIrqe = 0x0020, kDir = 0x0040, kIrq = 0x0080, kLp3 = 0x0400, kLp4 = 0x0800;
 
 constexpr uint32_t kAcc29Mask = 0x1FFFFFFF;
 constexpr uint32_t kPosMask = 0x1FFFFFE0;  // loop positions: low 5 fraction bits are 0
 }  // namespace
+
+int16_t otis_interp(int16_t s1, int16_t s2, uint32_t frac9) {
+    // DECISION O3: SF = S1 + (((S2 - S1) * frac9) >> 9), arithmetic shift (floor); never leaves int16.
+    const int32_t d = static_cast<int32_t>(s2) - s1;
+    return static_cast<int16_t>(s1 + ((d * static_cast<int32_t>(frac9 & 0x1FF)) >> 9));
+}
+
+int16_t otis_lp(int16_t x, int16_t y1, uint16_t k12) {
+    // DECISION O4: LP y = y1 + ((K12 * (x - y1)) >> 12), floor, saturated to int16.
+    const int32_t d = static_cast<int32_t>(x) - y1;
+    return static_cast<int16_t>(sat(y1 + ((static_cast<int32_t>(k12 & 0xFFF) * d) >> 12), 16));
+}
+
+int16_t otis_hp(int16_t x, int16_t x1, int16_t y1, uint16_t k12) {
+    // DECISION O4: HP y = x - x1 + (((4096 + K12) * y1) >> 13), i.e. K = 0.5 + K12/8192; saturated.
+    const int32_t fb = ((4096 + static_cast<int32_t>(k12 & 0xFFF)) * static_cast<int32_t>(y1)) >> 13;
+    return static_cast<int16_t>(sat(static_cast<int32_t>(x) - x1 + fb, 16));
+}
+
+int32_t otis_vol(int16_t x, uint8_t vol8) {
+    // DECISION O5: p = (x * (16 + mant)) >> 5, then exp == 0 ? 0 : (int16)p >> (15 - exp).
+    const int exp = vol8 >> 4;
+    if (exp == 0) return 0;
+    const int32_t p = (static_cast<int32_t>(x) * (16 + (vol8 & 0xF))) >> 5;  // fits int16
+    return p >> (15 - exp);
+}
 
 Otis::Otis(WaveMemory& mem) : mem_(mem) { reset(); }
 
@@ -30,6 +56,7 @@ void Otis::reset() {
     page_ = 0;
     sermodeBits_ = kSerAD;
     std::memset(chAcc_, 0, sizeof(chAcc_));
+    std::memset(chSum_, 0, sizeof(chSum_));
     irqPending_ = false;
     irqVec_ = 0;
     irqClear_ = 0;
@@ -176,13 +203,20 @@ OtisFrame Otis::takeFrame() {
 }
 
 OtisFrame Otis::runFrame() {
-    while (!ready_) stepVoice();
+    // Always runs the scan to the end of a frame: if a finished frame was left untaken, slot 0
+    // of the next one discards it.
+    do {
+        stepVoice();
+    } while (!ready_);
     return takeFrame();
 }
 
 void Otis::stepVoice() {
     const int idx = slot_;
     Voice& v = voice_[idx];
+
+    // Slot 0 starts a new frame: a frame that was never taken must not leak into it.
+    if (idx == 0) ready_ = false;
 
     // O8: the serviced voice's CR.IRQ is cleared on its next slot after the IRQV read.
     if (irqClear_ & (1u << idx)) {
@@ -199,19 +233,75 @@ void Otis::stepVoice() {
     s1_ = mem_.read(bank, a1);
     s2_ = mem_.read(bank, a2);
 
-    // DECISION O7: STOP0/STOP1 freeze only the address ALU; fetch (and, in Task 4, the
-    // signal path) still runs for a stopped voice.
+    // DECISION O7: STOP0/STOP1 freeze only the address ALU; the fetch and the whole signal
+    // path (filter state included) still run for a stopped voice.
     if (!(v.cr & (kStop0 | kStop1))) updateAddress(idx, v);
 
     serviceIrq(idx, v);
 
+    runSignalPath(idx, v, acc);
+
     if (idx >= act_) {
         // Frame complete after slot ACT. (If ACT is lowered mid-frame below the current slot,
         // this slot is still processed and the frame ends here.)
+        // DECISION O13: ACT < 7 is allowed and simply yields frames of ACT+1 voices; there is
+        // no serial-timing model, so the "starved serial port" case is not emulated.
+        latchFrame();
         ready_ = true;
         slot_ = 0;
     } else {
         ++slot_;
+    }
+}
+
+void Otis::runSignalPath(int, Voice& v, uint32_t acc) {
+    // Per-slot order: interpolate -> pole 1 -> pole 2 -> pole 3 -> pole 4 -> store state ->
+    // volume L/R -> add into CH[CA].
+    const int16_t sf = otis_interp(static_cast<int16_t>(s1_), static_cast<int16_t>(s2_), acc & 0x1FF);
+    const uint16_t k1 = v.k1 >> 4;
+    const uint16_t k2 = v.k2 >> 4;
+    const bool lp3 = v.cr & kLp3;
+    const bool lp4 = v.cr & kLp4;
+
+    // Poles 1 and 2 are always low-pass with K1.
+    const int16_t y1 = otis_lp(sf, static_cast<int16_t>(v.o1), k1);
+    const int16_t y2 = otis_lp(y1, static_cast<int16_t>(v.o2_1), k1);
+    // DECISION O4: the same K register is read as LP (K12/4096) or HP (0.5 + K12/8192) by the
+    // pole's mode (CR LP3/LP4 table); an HP pole's X(n-1) is the previous pole's previous output.
+    int16_t y3;
+    if (lp3) y3 = otis_lp(y2, static_cast<int16_t>(v.o3_1), k1);
+    else if (lp4) y3 = otis_lp(y2, static_cast<int16_t>(v.o3_1), k2);
+    else y3 = otis_hp(y2, static_cast<int16_t>(v.o2_1), static_cast<int16_t>(v.o3_1), k2);
+    const int16_t y4 = lp4 ? otis_lp(y3, static_cast<int16_t>(v.o4), k2)
+                           : otis_hp(y3, static_cast<int16_t>(v.o3_1), static_cast<int16_t>(v.o4), k2);
+
+    // Filter storage (O7: also updated for stopped voices).
+    v.o1 = static_cast<uint16_t>(y1);
+    v.o2_2 = v.o2_1;
+    v.o2_1 = static_cast<uint16_t>(y2);
+    v.o3_2 = v.o3_1;
+    v.o3_1 = static_cast<uint16_t>(y3);
+    v.o4 = static_cast<uint16_t>(y4);
+
+    if (sermodeBits_ & kSerTest) return;  // TEST=1 turns the signal accumulation off (§4.9)
+    const int ca = (v.cr >> 8) & 3;
+    // DECISION O5: volume from the 8-bit LVOL/RVOL (exp in [7:4], mantissa in [3:0] after >> 8).
+    chSum_[ca * 2] += otis_vol(y4, static_cast<uint8_t>(v.lvol >> 8));
+    chSum_[ca * 2 + 1] += otis_vol(y4, static_cast<uint8_t>(v.rvol >> 8));
+}
+
+void Otis::latchFrame() {
+    // DECISION O6: 21-bit accumulators; when bits 20..15 are not all equal the output saturates
+    // by bit 20, otherwise bits 15..0 pass. That is exactly a clamp of the signed sum to int16.
+    // DECISION O12: the per-channel serial word is 16-bit signed after that saturation.
+    const bool test = sermodeBits_ & kSerTest;
+    const bool adIn = sermodeBits_ & kSerAD;
+    for (int i = 0; i < 8; ++i) {
+        // TEST=1: the host-written CH registers are latched and nothing accumulated. With A/D=1
+        // port 3 is an input and CH3 keeps the serial input value.
+        if (!test && !(adIn && i >= 6)) chAcc_[i] = sat(chSum_[i], 16);
+        chSum_[i] = 0;
+        frame_.ch[i >> 1][i & 1] = static_cast<int16_t>(sat(chAcc_[i], 16));
     }
 }
 
