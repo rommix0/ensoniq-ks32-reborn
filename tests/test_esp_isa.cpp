@@ -52,11 +52,16 @@ TEST(isa_fields) {
 TEST(dis_line) {
     // MOV gpr5 > gpr7 with a multiplier NOP (ZERO x ZERO > ZERO).
     expectLine(Instr{255, 255, 5, 7, Op::MOV, 0, false, false, RamOp::ReadDelay}, 12,
-               "012  MOV   gpr5, gpr7 > gpr7 | MUL ZERO x ZERO > ZERO | RAM read-delay");
+               "012  MOV   gpr5 > gpr7 | MUL ZERO x ZERO > ZERO | RAM read-delay");
     // Operand select D: ALU source DIL, MUL source DIL, MUL dest C and DOL; MAC and Skip set.
     expectLine(Instr{10, 11, 3, 4, Op::ADD, 0xD, true, true, RamOp::WriteDelay}, 5,
                "005  ADD   gpr3, DIL > gpr4 | MUL gpr10 x DIL > gpr11,DOL +MAC"
                " | RAM write-delay SKIP");
+    // Every one-operand op omits the unused A source.
+    expectLine(Instr{255, 255, 5, 7, Op::ASR, 0xC, false, false, RamOp::ReadDelay}, 0,
+               "000  ASR   gpr5 > gpr7 | MUL ZERO x DIL > ZERO | RAM read-delay");
+    expectLine(Instr{255, 255, 244, 7, Op::MOV, 0, false, false, RamOp::ReadDelay}, 0,
+               "000  MOV   DIL > gpr7 | MUL ZERO x ZERO > ZERO | RAM read-delay");
     // Operand select 6: ALU dest DOL only, MUL source DIL.
     expectLine(Instr{20, 21, 1, 2, Op::XOR, 6, false, false, RamOp::ReadIo}, 100,
                "100  XOR   gpr1, gpr2 > DOL | MUL gpr20 x DIL > gpr21 | RAM read-io");
@@ -68,27 +73,46 @@ TEST(dis_line) {
                "001  CMP   DIL, DIL | MUL DIL x DIL > MEMSIZ | RAM read-A");
 }
 
+// Operand select rows 0..F against the notes section 4.1.3 table, written as letters
+// (ALU src, ALU dest, MUL src, MUL dest): src A = register, I = DIL; dest A/C = register,
+// F = DOL only, B = register and DOL.
+TEST(dis_opsel_table) {
+    static const char* const kRows[16] = {
+        "AACC", "AACF", "AACB", "AAIC", "AAIB", "AFCC", "AFIC", "ABCC",
+        "ABIC", "IACC", "IACF", "IACB", "IAIC", "IAIB", "IBCC", "IBIC"};
+    for (unsigned row = 0; row < 16; ++row) {
+        const char* r = kRows[row];
+        const std::string aluSrc = r[0] == 'I' ? "DIL" : "gpr1";
+        const std::string aluDst = r[1] == 'A' ? "gpr1" : r[1] == 'F' ? "DOL" : "gpr1,DOL";
+        const std::string mulSrc = r[2] == 'I' ? "DIL" : "gpr3";
+        const std::string mulDst = r[3] == 'C' ? "gpr3" : r[3] == 'F' ? "DOL" : "gpr3,DOL";
+        const std::string want = "000  ADD   gpr2, " + aluSrc + " > " + aluDst +
+                                 " | MUL gpr4 x " + mulSrc + " > " + mulDst +
+                                 " | RAM read-delay";
+        const std::string got = disassemble(
+            Instr{4, 3, 2, 1, Op::ADD, static_cast<uint8_t>(row), false, false,
+                  RamOp::ReadDelay},
+            0);
+        if (got != want) std::printf("  row %u\n  got : %s\n  want: %s\n", row, got.c_str(), want.c_str());
+        CHECK(got == want);
+    }
+}
+
 TEST(regname_all_spr) {
+    static const char* const kSpr[22] = {
+        "SER0R", "SER0L", "SER1R", "SER1L", "SER2R", "SER2L", "SER3R", "SER3L",
+        "MACL",  "MACH",  "DIL/MEMSIZ", "DLENGTH", "ABASE", "BBASE", "DBASE", "SIGREG",
+        "CCR",   "CMR",   "-1",   "MIN",   "MAX",   "ZERO"};
+    for (int a = 0; a < 256; ++a) {
+        const std::string got = regName(static_cast<uint8_t>(a));
+        const std::string want = a < 192   ? "gpr" + std::to_string(a)
+                                 : a < 234 ? "?" + std::to_string(a)
+                                           : kSpr[a - 234];
+        if (got != want) std::printf("  addr %d: got %s want %s\n", a, got.c_str(), want.c_str());
+        CHECK(got == want);
+    }
     CHECK(regName(243) == "MACH");
     CHECK(regName(244) == "DIL/MEMSIZ");
     CHECK(regName(250) == "CCR");
     CHECK(regName(200) == "?200");
-    CHECK(regName(0) == "gpr0");
-    CHECK(regName(191) == "gpr191");
-    CHECK(regName(192) == "?192");
-    CHECK(regName(233) == "?233");
-    CHECK(regName(234) == "SER0R");
-    CHECK(regName(235) == "SER0L");
-    CHECK(regName(241) == "SER3L");
-    CHECK(regName(242) == "MACL");
-    CHECK(regName(245) == "DLENGTH");
-    CHECK(regName(246) == "ABASE");
-    CHECK(regName(247) == "BBASE");
-    CHECK(regName(248) == "DBASE");
-    CHECK(regName(249) == "SIGREG");
-    CHECK(regName(251) == "CMR");
-    CHECK(regName(252) == "-1");
-    CHECK(regName(253) == "MIN");
-    CHECK(regName(254) == "MAX");
-    CHECK(regName(255) == "ZERO");
 }

@@ -8,11 +8,7 @@ namespace {
 
 constexpr int kDil = 244;
 
-// Operand select table (notes 4.1.3): which side uses DIL / writes the DOL FIFO.
-struct SelBits {
-    bool aluSrcDil, aluToA, aluToFifo, mulSrcDil, mulToC, mulToFifo;
-};
-constexpr SelBits kSel[16] = {
+constexpr OpSelect kSel[16] = {
     {false, true, false, false, true, false},   // 0
     {false, true, false, false, false, true},   // 1
     {false, true, false, false, true, true},    // 2
@@ -36,6 +32,11 @@ const char* const kOpNames[16] = {"ADD", "SUB", "ADDU", "SUBU", "CMP", "AND", "O
 const char* const kRamNames[8] = {"read-delay", "write-delay", "read-A",  "write-A",
                                   "read-B",     "read-dump",   "read-io", "write-io"};
 
+bool oneOperand(Op op) {
+    return op == Op::ABS || op == Op::MOV || op == Op::ASL2 || op == Op::ASL8 ||
+           op == Op::LS15 || op == Op::DIFF || op == Op::ASR;
+}
+
 std::string pad(std::string s, size_t width) {
     if (s.size() < width) s.append(width - s.size(), ' ');
     return s;
@@ -54,6 +55,8 @@ std::string dest(bool toReg, bool toFifo, uint8_t addr) {
 }
 
 }  // namespace
+
+const OpSelect& opSelect(unsigned row) { return kSel[row & 0xF]; }
 
 Instr Instr::decode(uint64_t w) {
     Instr i;
@@ -87,13 +90,15 @@ std::string regName(uint8_t addr) {
 }
 
 std::string disassemble(const Instr& in, int pc) {
-    const SelBits& s = kSel[in.opsel & 0xF];
+    const OpSelect& s = opSelect(in.opsel);
     std::string pcs = std::to_string(pc);
     if (pcs.size() < 3) pcs.insert(0, 3 - pcs.size(), '0');
     std::string line = pcs + "  " + pad(kOpNames[static_cast<unsigned>(in.op) & 0xF], 5);
 
     if (in.op != Op::END) {
-        line += " " + srcName(in.b) + ", " + (s.aluSrcDil ? std::string("DIL") : srcName(in.a));
+        line += " " + srcName(in.b);
+        if (!oneOperand(in.op))
+            line += ", " + (s.aluSrcDil ? std::string("DIL") : srcName(in.a));
         if (in.op != Op::CMP) line += " > " + dest(s.aluToA, s.aluToFifo, in.a);
     }
 

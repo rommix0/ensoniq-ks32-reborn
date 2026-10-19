@@ -12,7 +12,17 @@
 namespace {
 
 void usage() {
-    std::fprintf(stderr, "usage: esp_dis <file> [--offset BYTES] [--count WORDS] [--be|--le]\n");
+    std::fprintf(stderr,
+                 "usage: esp_dis <file> [--offset BYTES] [--count WORDS] [--be|--le]\n"
+                 "  Reads 6-byte words (big-endian unless --le) starting at byte BYTES and\n"
+                 "  prints at most WORDS lines. A partial trailing word is ignored with a\n"
+                 "  warning on stderr (exit status stays 0).\n");
+}
+
+int fail2(const char* msg, const char* arg) {
+    std::fprintf(stderr, "esp_dis: %s%s%s\n", msg, arg ? " " : "", arg ? arg : "");
+    usage();
+    return 2;
 }
 
 bool parseNum(const char* s, long long& out) {
@@ -28,34 +38,28 @@ int main(int argc, char** argv) {
     long long offset = 0, count = -1;
     bool little = false;
     for (int i = 1; i < argc; ++i) {
-        if (!std::strcmp(argv[i], "--be")) {
-            little = false;
-        } else if (!std::strcmp(argv[i], "--le")) {
-            little = true;
-        } else if (!std::strcmp(argv[i], "--offset") || !std::strcmp(argv[i], "--count")) {
-            const bool isOffset = argv[i][2] == 'o';
-            long long v = 0;
-            if (i + 1 >= argc || !parseNum(argv[i + 1], v)) {
-                std::fprintf(stderr, "esp_dis: %s needs a non-negative number\n", argv[i]);
-                return 2;
+        const char* a = argv[i];
+        if (a[0] == '-') {
+            if (!std::strcmp(a, "--be")) {
+                little = false;
+            } else if (!std::strcmp(a, "--le")) {
+                little = true;
+            } else if (!std::strcmp(a, "--offset") || !std::strcmp(a, "--count")) {
+                long long v = 0;
+                if (i + 1 >= argc || !parseNum(argv[i + 1], v))
+                    return fail2("needs a non-negative number after", a);
+                (!std::strcmp(a, "--offset") ? offset : count) = v;
+                ++i;
+            } else {
+                return fail2("unknown option", a);
             }
-            (isOffset ? offset : count) = v;
-            ++i;
-        } else if (argv[i][0] == '-' && argv[i][1] == '-') {
-            std::fprintf(stderr, "esp_dis: unknown option %s\n", argv[i]);
-            usage();
-            return 2;
         } else if (!path) {
-            path = argv[i];
+            path = a;
         } else {
-            usage();
-            return 2;
+            return fail2("unexpected extra argument", a);
         }
     }
-    if (!path) {
-        usage();
-        return 2;
-    }
+    if (!path) return fail2("no input file given", nullptr);
 
     std::FILE* f = std::fopen(path, "rb");
     if (!f) {
@@ -66,7 +70,12 @@ int main(int argc, char** argv) {
     unsigned char buf[4096];
     size_t n;
     while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) data.insert(data.end(), buf, buf + n);
+    const bool readError = std::ferror(f) != 0;
     std::fclose(f);
+    if (readError) {
+        std::fprintf(stderr, "esp_dis: error reading %s\n", path);
+        return 1;
+    }
 
     if (static_cast<unsigned long long>(offset) > data.size()) {
         std::fprintf(stderr, "esp_dis: offset %lld is past the end of the file (%zu bytes)\n",

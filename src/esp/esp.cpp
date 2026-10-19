@@ -11,34 +11,6 @@ namespace {
 
 constexpr uint32_t kMask24 = 0xFFFFFF;
 
-// Operand select field (bits 11..8), ESP notes §4.1.3 table rows 0..F, verbatim.
-struct OpSel {
-    bool aluSrcDil;  // ALU X-bus (A-side) input is DIL instead of reg A
-    bool aluToA, aluToFifo;
-    bool mulSrcDil;  // MUL X-bus (C-side) input is DIL instead of reg C
-    bool mulToC, mulToFifo;
-};
-
-constexpr OpSel kOpSel[16] = {
-    //  aluSrc  A      FIFO   mulSrc C      FIFO
-    {false, true, false, false, true, false},   // 0: A    > A      | C   > C
-    {false, true, false, false, false, true},   // 1: A    > A      | C   > FIFO
-    {false, true, false, false, true, true},    // 2: A    > A      | C   > C/FIFO
-    {false, true, false, true, true, false},    // 3: A    > A      | DIL > C
-    {false, true, false, true, true, true},     // 4: A    > A      | DIL > C/FIFO
-    {false, false, true, false, true, false},   // 5: A    > FIFO   | C   > C
-    {false, false, true, true, true, false},    // 6: A    > FIFO   | DIL > C
-    {false, true, true, false, true, false},    // 7: A    > A/FIFO | C   > C
-    {false, true, true, true, true, false},     // 8: A    > A/FIFO | DIL > C
-    {true, true, false, false, true, false},    // 9: DIL  > A      | C   > C
-    {true, true, false, false, false, true},    // A: DIL  > A      | C   > FIFO
-    {true, true, false, false, true, true},     // B: DIL  > A      | C   > C/FIFO
-    {true, true, false, true, true, false},     // C: DIL  > A      | DIL > C
-    {true, true, false, true, true, true},      // D: DIL  > A      | DIL > C/FIFO
-    {true, true, true, false, true, false},     // E: DIL  > A/FIFO | C   > C
-    {true, true, true, true, true, false},      // F: DIL  > A/FIFO | DIL > C
-};
-
 constexpr int kSer0R = 234, kSer3L = 241, kMacl = 242, kMach = 243, kDil = 244;
 constexpr int kDbase = 248, kSigreg = 249, kCcr = 250, kCmr = 251;
 constexpr uint32_t kShiftOneBit = 0x400000;  // SIGREG bit 22
@@ -172,7 +144,7 @@ bool Esp::step() {
     const esp::Instr in = esp::Instr::decode(w);
     const uint8_t d = in.d, c = in.c, b = in.b, a = in.a;
     const Op op = in.op;
-    const OpSel& os = kOpSel[in.opsel];
+    const esp::OpSelect& os = esp::opSelect(in.opsel);
     const bool skippable = in.skip;
     const bool macBit = in.mac;
     const RamOp ram = in.ram;

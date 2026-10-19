@@ -34,3 +34,4 @@ add_subdirectory(tests)
 # Command-line tools (file I/O allowed here, not in src/).
 add_executable(esp_dis tools/esp_dis/main.cpp)
 target_link_libraries(esp_dis PRIVATE ens_esp ens_common)
+target_compile_definitions(esp_dis PRIVATE _CRT_SECURE_NO_WARNINGS)  # fopen on MSVC (C4996)
