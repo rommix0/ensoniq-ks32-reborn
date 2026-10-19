@@ -307,7 +307,8 @@ void Otis::latchFrame() {
 
 void Otis::updateAddress(int voice, Voice& v) {
     // DECISION O1: step = FC>>1 in 1/512 sample; single-add; boundary at n >= END (forward) or
-    // n <= START (reverse); remainder is kept across loops; BLE reflects and toggles DIR.
+    // n <= START (reverse) compared on the unwrapped sum (before the 29-bit wrap, which happens
+    // only on store); remainder is kept across loops; BLE reflects and toggles DIR.
     const int64_t start = (((static_cast<uint32_t>(v.strtH) << 16) | v.strtL) & kPosMask);
     const int64_t end = (((static_cast<uint32_t>(v.endH) << 16) | v.endL) & kPosMask);
     const int64_t step = v.fc >> 1;
@@ -319,7 +320,7 @@ void Otis::updateAddress(int voice, Voice& v) {
     int64_t next;
     bool hit;
     if (!dir) {
-        next = (acc + step) & kAcc29Mask;  // the accumulator wraps within 29 bits
+        next = acc + step;  // unwrapped: the boundary is tested before the 29-bit wrap on store
         hit = next >= end;
     } else {
         next = acc - step;  // may go negative; compared signed, wrapped on store

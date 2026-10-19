@@ -49,6 +49,7 @@ public:
     void hostWrite(uint8_t addr, uint8_t v);
     // HALT pin level. Sampled at END (runSample) and while halted: a low level resumes at pc 0.
     void setHaltPin(bool high);
+    // DECISION E30: nothing advances while halted unless the caller calls this (see decisions.md).
     // One instruction period while halted (about 300 ns): one pending GPR/INSTR transfer,
     // and independently one RAM-clear write or one DBASE refresh decrement. No-op if running.
     // Halted cadence contract: while halted nothing advances (host requests, RAM clear,

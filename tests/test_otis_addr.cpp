@@ -175,17 +175,68 @@ TEST(otis_reverse_oneshot_stops_at_start) {
     CHECK_EQ(o.acc29(0), 10u << 9);
 }
 
-TEST(otis_accumulator_wraps_in_29_bits) {
+TEST(otis_forward_boundary_compares_before_29_bit_wrap) {
+    // DECISION O1: the boundary test sees the unwrapped sum, so a step that would carry past
+    // bit 28 is a boundary hit (one-shot stops at END), not a wrap to ~0 that skips the boundary.
     FakeWave m;
     Otis o(m);
     o.write(13, 0);
     Setup s;
     s.start = 0;
-    s.end = 0x80000;  // 2^19 samples: well below the wrapped result's complement
-    s.acc = 0xFFFFF;  // highest 20-bit integer address
+    s.end = 0x80000;
+    s.acc = 0xFFFFF;  // highest 20-bit integer address; +1 sample is 2^29 unwrapped
     setupVoice(o, 0, s);
-    o.runFrame();  // 2^29 wraps to 0, which is below END: no boundary
-    CHECK_EQ(o.acc29(0), 0u);
+    o.runFrame();
+    o.write(15, 0);
+    CHECK(o.read(0) & STOP0);
+    CHECK_EQ(o.acc29(0), 0x80000u << 9);
+}
+
+TEST(otis_oneshot_at_top_of_bank_stops) {
+    // Real KS-32 samples end at word addresses 0xFFFF4..0xFFFFD (END29 = word << 9). A fast
+    // one-shot must stop at END for every phase, never wrapping past bit 28 to ~0.
+    const uint32_t endWord = 0xFFFF6;
+    for (uint32_t phase = 0; phase < 16; ++phase) {
+        FakeWave m;
+        Otis o(m);
+        o.write(13, 0);
+        Setup s;
+        s.fc = 0x4000;  // 16 samples per frame
+        s.start = 0x80000;
+        s.end = endWord;
+        s.acc = endWord - 48 + phase;
+        setupVoice(o, 0, s);
+        bool stopped = false;
+        uint32_t prev = o.acc29(0);
+        for (int f = 0; f < 8 && !stopped; ++f) {
+            o.runFrame();
+            o.write(15, 0);
+            const uint32_t a = o.acc29(0);
+            CHECK(a >= prev);  // monotonic: no wrap to ~0
+            prev = a;
+            stopped = o.read(0) & STOP0;
+        }
+        CHECK(stopped);
+        CHECK_EQ(o.acc29(0), endWord << 9);
+    }
+}
+
+TEST(otis_bidirectional_at_top_of_bank_reflects) {
+    FakeWave m;
+    Otis o(m);
+    o.write(13, 0);
+    Setup s;
+    s.cr = LPE | BLE;
+    s.fc = 0x4000;  // 16 samples per frame
+    s.start = 0x80000;
+    s.end = 0xFFFF6;
+    s.acc = 0xFFFF6 - 4;  // overshoots END by 12 samples
+    setupVoice(o, 0, s);
+    o.runFrame();
+    o.write(15, 0);
+    CHECK_EQ(o.acc29(0), (0xFFFF6u - 12u) << 9);
+    CHECK(o.read(0) & DIR);
+    CHECK(!(o.read(0) & STOP0));
 }
 
 TEST(otis_stop1_freezes_address) {

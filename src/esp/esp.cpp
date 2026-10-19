@@ -126,6 +126,8 @@ void Esp::serialOut(int port, int16_t& l, int16_t& r) const {
 
 // ---- execution -------------------------------------------------------------------------
 
+// DECISION E30: one runSample() per OTIS frame runs the program to END with no instruction
+// budget; this equals hardware only when the program fits the ESP's slots per frame.
 int Esp::runSample() {
     if (halted_) return 0;  // halted: nothing executes until HALT goes low
     int steps = 0;

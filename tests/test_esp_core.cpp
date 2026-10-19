@@ -531,7 +531,7 @@ TEST(esp_mac_saturates_in_core) {
     Esp e(bus);
     e.setGpr(249, kShiftOne);
     e.setGpr(5, 0x7FFFFF);
-    e.setGpr(6, 0x7FFFFF);
+    e.setGpr(6, 0);
     e.setInstr(0, Instr{5, 5, kZero, kZero, Op::MOV, 1, false, false, RamOp::ReadDelay}.encode());  // ~1.0
     e.setInstr(1, Instr{5, 5, kZero, kZero, Op::MOV, 1, false, true, RamOp::ReadDelay}.encode());   // ~2.0
     e.setInstr(2, Instr{5, 6, kZero, kZero, Op::MOV, 0, false, true, RamOp::ReadDelay}.encode());   // ~3.0 > C=6

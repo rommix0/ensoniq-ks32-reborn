@@ -34,7 +34,7 @@ MACH is the preload for the next word's accumulate. Both were checked with `esp_
 - **Machine setup**: SIGREG bit 22 = 1 (multiplier shift 1, as the KS-32 sets it), MEMSIZ
   0x0000FF, DLENGTH 0xFFFF00 (the whole 64K-word DRAM is the delay ring), DBASE 0.
 - **Outputs**: SER3L = `t` (wet). SER3R = `u` (the diffusers only, no feedback).
-- **Stimulus**: one full-scale sample (0x7FFF) on SER0L, then zeros, for 6 s at 29 761.9 Hz
+- **Stimulus**: one full-scale sample (0x7FFF) on SER0L, then zeros, for 6 s at 29 761.7 Hz
   (the KS-32 frame rate, OTIS 15.238 MHz / 512).
 - **Measure**: split the output into 0.1 s windows (2976 frames) from frame 0. The decay time
   is the end of the last window whose RMS is at or above −60 dBFS (32.768 LSB of 16-bit full
@@ -161,34 +161,36 @@ with `-DENS_BUILD_MAME_REF=ON`. The two were compared with `pcm_diff`.
 | `esp_mix.trace` | **identical** | 0 | 0 | MUL, ADD saturation, DOL, delay write/read, DIL timing, CMP/skip agree bit for bit. |
 | `reverb_tank.trace` | DIFFERENT from frame 1 | 0 / 0 (aux silent) | max 5 LSB, RMS 0.285 (79 945 frames) / max 5 LSB, RMS 0.059 (2 176 frames) | All from the ESP input: O4/O5 rounding (input 32734 vs 32735 in frame 0, 28 vs 32 in frame 1, then MAME's 4-LSB filter residue described above) and O7 (MAME's stopped voices). With MAME's input, our ESP reproduces MAME's main output exactly (replay above). Decay times are equal. |
 
-## Low-confidence decisions for Plan 2/3 to revisit
+## Low-confidence decisions for Plan 3 and later to revisit
 
 These are the entries in `docs/decisions.md` rated Low or Low-medium, or Low in part. Plan 2
-(the KS-32 test program running the real firmware) and Plan 3 can confirm or refute most of
-them by observing what the firmware relies on, or by testing on hardware.
+(the ROM investigation, already done in `docs/rom-investigation`), Plan 3 (the MIDI test player)
+and the firmware-emulation project after it can confirm or refute most of them by observing what
+the firmware relies on, or by testing on hardware.
 
 | Id | Topic | Current choice | What would settle it |
 |---|---|---|---|
 | O8 | IRQ/IRQV | IRQV read `0x60 \| (pending?0:0x80) \| vec`, bits 6:5 read 1; the vector reload cycle is inferred | Firmware IRQ handler behaviour; a hardware read of IRQV |
 | O10 | OTIS reset state | All voice registers 0 except CR = 0x0003, ACT 31, SERMODE A/D = 1 | Only A/D is documented; check what the firmware assumes before it initialises |
 | E6 | MAC model (Low-medium) | 50-bit wrap, sat48 readout; the "MACL dest duplicates upper half" sentence is not implemented | Firmware programs that overflow the MAC; a hardware test |
-| E7 refinements (1), (2) (Low-medium) | Delay compare and wrap on address bits only; DBASE reload masked | Unstated edge; KS-32 uses DLENGTH 0xFFFFFF with MEMSIZ 0xFF, so watch the ring period in Plan 2 |
-| E17 (CCR-destination detail: Low; MAC preload slot: Medium) | An explicit CCR destination overrides the flag update | Any firmware program that writes CCR directly |
-| E20 | MEMSIZ write sets `DBASE &= ~MEMSIZ` | Only "affects DBASE directly" is documented |
-| E9 | Addresses 192..233 read 0 and ignore writes | Undocumented; check whether any firmware program touches them |
-| E10 | Host DOL low byte reads 0x00 (the text) rather than 0xFF (the table) | Firmware read-back of DOL |
-| E11 | Program without END: word 159 acts as END | Undocumented; firmware programs all have END, so this matters only for corrupt loads |
-| E22 | Narrow SPR read-back (SIGREG bit 22, CCR 23..19, CMR 23..18) | Firmware read-back and verify of SIGREG (it writes all ones) |
-| E23 | ESP reset clears GPRs and program memory | Real power-on contents are unknown; the firmware loads everything anyway |
-| E24 (pipeline discard: Low) | A halt-enable write mid-program discards the in-flight pipeline | Effect switching in Plan 2: listen for clicks or stale words at program changes |
-| E28 (Low-medium) | A host transfer and the clear/refresh step share one idle step | Timing of program loads and RAM clears while halted (Task 9 note: a RAM clear can overrun tables the host writes early) |
-| E29 | Serial control register and test-only registers are stored, not acted on | The firmware only writes 0x63; serial formats matter only if Plan 2 models the serial layer |
+| E7 refinements (1), (2) (Low-medium) | Delay RAM compare and wrap | Delay compare and wrap on address bits only; DBASE reload masked | Unstated edge; KS-32 uses DLENGTH 0xFFFFFF with MEMSIZ 0xFF, so watch the ring period in Plan 2 |
+| E17 (CCR-destination detail: Low; MAC preload slot: Medium) | CCR destination and MAC preload | An explicit CCR destination overrides the flag update | Any firmware program that writes CCR directly |
+| E20 | MEMSIZ write effect on DBASE | MEMSIZ write sets `DBASE &= ~MEMSIZ` | Only "affects DBASE directly" is documented |
+| E9 | Unassigned addresses 192..233 | Addresses 192..233 read 0 and ignore writes | Undocumented; check whether any firmware program touches them |
+| E10 | Host DOL low byte | Host DOL low byte reads 0x00 (the text) rather than 0xFF (the table) | Firmware read-back of DOL |
+| E11 | Program without END | Program without END: word 159 acts as END | Undocumented; firmware programs all have END, so this matters only for corrupt loads |
+| E22 | SPR read-back width | Narrow SPR read-back (SIGREG bit 22, CCR 23..19, CMR 23..18) | Firmware read-back and verify of SIGREG (it writes all ones) |
+| E23 | ESP reset contents | ESP reset clears GPRs and program memory | Real power-on contents are unknown; the firmware loads everything anyway |
+| E24 (pipeline discard: Low) | Halt-enable write mid-program | A halt-enable write mid-program discards the in-flight pipeline | Effect switching in Plan 2: listen for clicks or stale words at program changes |
+| E28 (Low-medium) | Idle-step contents | A host transfer and the clear/refresh step share one idle step | Timing of program loads and RAM clears while halted (Task 9 note: a RAM clear can overrun tables the host writes early) |
+| E29 | Serial control and test registers | Serial control register and test-only registers are stored, not acted on | The firmware only writes 0x63; serial formats matter only if Plan 2 models the serial layer |
 
 Related open points from the Plan 1 reviews (`progress.md`) that Plan 2 should also check:
 
 - The trace runner has zero serial-frame latency. Hardware adds at least one frame.
 - `idleStep()` must be driven at the hardware rate while the ESP is halted.
 - The UTF-8 BOM is not skipped in trace files.
+- Before Plan 3: add a slots-per-sample advance API (E30); top of firmware plan: check routine 0xC1CC80 read-back of $F4/$F9 vs E22 (ruling R18).
 
 ## Reproduce
 

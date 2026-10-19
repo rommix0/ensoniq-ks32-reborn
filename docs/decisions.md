@@ -18,10 +18,10 @@ Entry template:
 
 ## O1: Loop arithmetic
 - Options: (a) single-add per slot (`n = acc + FC>>1`) with the remainder kept across the boundary; (b) the literal text, which adds FC twice (steps 3 and 5); (c) compare with `>` instead of `>=`; (d) clamp the remainder to the loop length.
-- Choice: `step = FC>>1` (1/512 sample units). Forward: `n = (acc + step)` wrapped to 29 bits; boundary when `n >= END29`. Reverse (DIR=1): `n = acc - step` (signed); boundary when `n <= START29`. At a boundary: LPE=0 sets STOP0 and `acc = boundary`; LPE=1/BLE=0 gives `acc = START29 + (n-END29)` (forward) or `END29 - (START29-n)` (reverse); LPE=1/BLE=1 reflects (`END29 - (n-END29)` and set DIR, or `START29 + (START29-n)` and clear DIR) and toggles DIR. START29/END29 = `((H<<16)|L) & 0x1FFFFFE0`. The accumulator wraps within 29 bits on store. The remainder is not clamped, so a step longer than the loop can land outside it (as one subtraction would in hardware). The IRQ request (O8) is raised at the boundary in every mode when IRQE=1.
-- Evidence: OTIS notes §6.1 (steps 3-5 add FC twice; read as single-add; the text does not give >= vs >, the bidirectional remainder, or the one-shot final value), §4.7 CR/LPE/BLE/DIR/STOP0.
+- Choice: `step = FC>>1` (1/512 sample units). Forward: `n = acc + step` compared UNWRAPPED (wide type), boundary when `n >= END29`; the 29-bit mask is applied only when the result is stored. Reverse (DIR=1): `n = acc - step` (signed); boundary when `n <= START29`. At a boundary: LPE=0 sets STOP0 and `acc = boundary`; LPE=1/BLE=0 gives `acc = START29 + (n-END29)` (forward) or `END29 - (START29-n)` (reverse); LPE=1/BLE=1 reflects (`END29 - (n-END29)` and set DIR, or `START29 + (START29-n)` and clear DIR) and toggles DIR. START29/END29 = `((H<<16)|L) & 0x1FFFFFE0`. The remainder is not clamped, so a step longer than the loop can land outside it (as one subtraction would in hardware). The IRQ request (O8) is raised at the boundary in every mode when IRQE=1. Rejected: wrapping to 29 bits first and then comparing, which makes a fast one-shot near the top of the bank skip END, wrap to ~0 and play the whole bank as garbage.
+- Evidence: OTIS notes §6.1 (steps 3-5 add FC twice; read as single-add; the text does not give >= vs >, the bidirectional remainder, or the one-shot final value), §4.7 CR/LPE/BLE/DIR/STOP0. KS-32 sample map (`docs/rom-investigation/data/sample_map.csv`): sample end addresses lie at word 0xFFFF4..0xFFFFD (internal waves 120 and 57 one-shot, rom3 wave 0 zone 1 bidirectional, top_key 127), within a few samples of 2^20, so a step past END can carry past bit 28; the boundary must be seen before the wrap.
 - Confidence: Medium.
-- Status: Implemented in Otis::updateAddress (Task 3). Tests: otis_forward_step, otis_fraction_step, otis_oneshot_stops_at_end, otis_forward_loop_keeps_remainder, otis_bidi_*, otis_reverse_*, otis_accumulator_wraps_in_29_bits.
+- Status: Implemented in Otis::updateAddress (Task 3; boundary-before-wrap fix in the final review). Tests: otis_forward_step, otis_fraction_step, otis_oneshot_stops_at_end, otis_forward_loop_keeps_remainder, otis_bidi_*, otis_reverse_*, otis_forward_boundary_compares_before_29_bit_wrap, otis_oneshot_at_top_of_bank_stops, otis_bidirectional_at_top_of_bank_reflects.
 
 ## O2: S2 fetch address
 - Options: (a) `int + 1` in both directions; (b) `int - 1` when DIR=1; (c) cross into the other bank at the 20-bit wrap.
@@ -333,6 +333,13 @@ Entry template:
 - Evidence: ESP notes part 2 §5.1.1, §5.1.5, §5.1.7; findings.md (host serial control 0x63, PC poll).
 - Confidence: Low.
 - Status: Implemented in Esp::hostRead and hostWrite (Task 9). Tests: serial_control_register, host_register_map_details, host_firmware_boot_sequence.
+
+## E30: Sample-rate model and halted time
+- Options: (a) one `Esp::runSample()` per OTIS frame runs the program to END with no instruction budget; halted time advances only through explicit `idleStep()` calls; (b) a slots-per-sample budget (about one instruction per 125 ns at 8 MHz) with an advance API that interleaves running and halted time.
+- Choice: (a). This equals hardware only when the program length is at most the ESP's slots per frame (KS-32: 89 words = 89 slots at 8 MHz, `docs/rom-investigation/findings.md` section B). While halted nothing advances (host requests, RAM clear, refresh) unless the caller calls `idleStep()`, about once per 300 ns (one instruction period), see `src/esp/esp.h`. A slots-per-sample budget and advance API is deferred to the start of Plan 3 (ruling R17).
+- Evidence: findings.md section B (89-word program, 89 slots per frame at 8 MHz); decisions E11, E28; ESP notes part 2 section 5.
+- Confidence: Medium.
+- Status: Implemented in Esp::runSample and Esp::idleStep, `// DECISION E30` markers in `src/esp/esp.h` and `src/esp/esp.cpp`. Tests: those named under E11 and E28.
 
 ## Trace runner
 

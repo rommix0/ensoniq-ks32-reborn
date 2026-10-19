@@ -1,7 +1,7 @@
 # -60 dBFS decay time of one channel of an ens_trace / mame_ref PCM file.
 #   python -I tools/mame_ref/analysis/decay_time.py <file.pcm> [channel] [rate]
 # channel: 0 auxL, 1 auxR, 2 mainL (default), 3 mainR. rate: frames per second (default
-# 29761.9, the KS-32 frame rate). Same measure as tests/test_esp_programs.cpp: the end of the
+# 29761.7, the KS-32 frame rate). Same measure as tests/test_esp_programs.cpp: the end of the
 # last 0.1 s window (round(0.1 * rate) frames, counted from frame 0) whose RMS is at or above
 # -60 dBFS (32768 * 1e-3). Also prints the peak, the RMS of the last window and the time of the
 # last nonzero sample.
@@ -11,7 +11,7 @@ import sys
 
 path = sys.argv[1]
 ch = int(sys.argv[2]) if len(sys.argv) > 2 else 2
-rate = float(sys.argv[3]) if len(sys.argv) > 3 else 29761.9
+rate = float(sys.argv[3]) if len(sys.argv) > 3 else 29761.7
 
 pcm = array.array("h")
 with open(path, "rb") as f:

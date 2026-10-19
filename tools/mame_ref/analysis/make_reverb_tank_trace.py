@@ -14,7 +14,7 @@ import os
 import struct
 import sys
 
-FRAMES = 1785714  # 60.0 s at the KS-32 frame rate (29 761.9 Hz)
+FRAMES = 1785714  # about 60 s at the KS-32 frame rate (29 761.7 Hz)
 
 ZERO, SER0L, SER3R, SER3L, MACH, DIL = 255, 235, 240, 241, 243, 244
 MEMSIZ, DLENGTH, DBASE, SIGREG = 244, 245, 248, 249
