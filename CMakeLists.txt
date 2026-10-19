@@ -25,7 +25,8 @@ target_include_directories(ens_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(ens_otis STATIC src/otis/otis.cpp)
 target_link_libraries(ens_otis PUBLIC ens_common)
 
-add_library(ens_esp STATIC src/esp/esp_alu.cpp src/esp/esp_mac.cpp src/esp/esp_agen.cpp)
+add_library(ens_esp STATIC src/esp/esp_alu.cpp src/esp/esp_mac.cpp src/esp/esp_agen.cpp
+  src/esp/esp.cpp)
 target_link_libraries(ens_esp PUBLIC ens_common)
 
 add_subdirectory(tests)

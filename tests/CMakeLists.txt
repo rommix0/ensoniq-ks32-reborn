@@ -8,6 +8,7 @@ set(ENS_TEST_SOURCES
   test_esp_alu.cpp
   test_esp_mac.cpp
   test_esp_agen.cpp
+  test_esp_core.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})
