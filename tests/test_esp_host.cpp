@@ -162,7 +162,7 @@ TEST(host_transfer_reaches_spr_and_ignores_holes) {
     hw3(e, 0x00, 0x00F000);
     e.hostWrite(0xA0, 0xF8);  // DBASE
     e.runSample();
-    // Read the SPR back through $80 (the END of that sample already decremented DBASE).
+    // The transfer lands after the END-step DBASE decrement, so DBASE holds the written value.
     CHECK_EQ(e.agen().dbase, 0x00F000u);
     hw3(e, 0x00, 0x123456);
     e.hostWrite(0xA0, 200);  // hole 192..233: write ignored
@@ -177,6 +177,37 @@ TEST(host_transfer_reaches_spr_and_ignores_holes) {
     e.hostWrite(0x80, 0xA0);
     e.runSample();
     CHECK_EQ(e.hostRead(0x03), 0x00);
+}
+
+// MOV gpr[b] > gpr[a] (opcode 9, operand select 0); its result commits in the following step.
+uint64_t movWord(unsigned b, unsigned a) {
+    return (uint64_t(9) << 12) | (uint64_t(b) << 24) | (uint64_t(a) << 16);
+}
+
+TEST(host_running_gpr_write_lands_at_end) {
+    HostBus bus;
+    Esp e(bus);
+    e.setGpr(0x10, 0xAAAAAA);
+    e.setInstr(0, movWord(0x10, 0x11));  // gpr11 = gpr10, read inside the sample
+    e.setInstr(1, kEndWord);
+    hw3(e, 0x00, 0x555555);
+    e.hostWrite(0xA0, 0x10);
+    e.runSample();
+    CHECK_EQ(e.gpr(0x11), 0xAAAAAAu);  // word 0 saw the old value
+    CHECK_EQ(e.gpr(0x10), 0x555555u);  // the transfer landed at END
+    e.runSample();
+    CHECK_EQ(e.gpr(0x11), 0x555555u);  // the next sample sees the new one
+}
+
+TEST(host_running_read_captures_value_computed_this_sample) {
+    HostBus bus;
+    Esp e(bus);
+    e.setGpr(0x10, 0x123456);
+    e.setInstr(0, movWord(0x10, 0x12));  // gpr12 = gpr10, committed before the END transfer
+    e.setInstr(1, kEndWord);
+    e.hostWrite(0x80, 0x12);
+    e.runSample();
+    CHECK_EQ(hr3(e, 0x00), 0x123456u);
 }
 
 TEST(halt_at_end) {
@@ -365,6 +396,7 @@ TEST(refresh_disable_freezes_dbase) {
     e.hostWrite(0x12, 1);
     CHECK_EQ(e.hostRead(0x12) & 1, 1);
     const uint32_t d0 = e.agen().dbase;
+    CHECK_EQ(d0, 0x000F00u);  // the END that halted still decremented DBASE (0x1000 - unit)
     for (int i = 0; i < 10; i++) e.idleStep();
     CHECK_EQ(e.agen().dbase, d0);
     e.hostWrite(0x12, 0);
@@ -471,10 +503,19 @@ TEST(host_firmware_boot_sequence) {
         xfer(e, 0xA0, addr);
     };
     gprw(0xF4, 0x0000FF);  // MEMSIZ
-    gprw(0xF5, 0xFFFFFF);  // DLENGTH
+    // DLENGTH is written with read-back verification and retries (routine 0xC1CC80).
+    int attempts = 0;
+    for (bool ok = false; !ok && attempts < 10;) {
+        ++attempts;
+        gprw(0xF5, 0xFFFFFF);
+        xfer(e, 0x80, 0xF5);
+        ok = hr3(e, 0x00) == 0xFFFFFFu;
+    }
+    CHECK_EQ(attempts, 1);  // the firmware must not need a retry (error 0x21 after 10)
     CHECK_EQ(e.agen().memsiz, 0xFFu);
     xfer(e, 0x80, 0xF5);
-    CHECK_EQ(hr3(e, 0x00), 0xFFFFF0u);  // 20-bit register read-back (E7)
+    CHECK_EQ(hr3(e, 0x00), 0xFFFFFFu);  // R13: read back exactly as written
+    CHECK_EQ(e.agen().dlength20(), 0xFFFFF0u);
     gprw(0xF8, 0x000F00);  // DBASE
     e.hostWrite(0x12, 0x03);
     e.hostWrite(0x12, 0x02);

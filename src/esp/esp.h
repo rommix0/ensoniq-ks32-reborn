@@ -45,12 +45,17 @@ public:
     // 8-bit host register map: $00-$02 GPR, $03-$08 INSTR, $09-$0B DIL, $0C-$0E DOL,
     // $0F-$11 DADR, $12 host control, $14 RAM access, $16 PC, $17 refresh, $18 serial control,
     // $1F halt enable / frame counter, $80/$A0/$C0/$E0 select registers.
-    uint8_t hostRead(uint8_t addr);
+    uint8_t hostRead(uint8_t addr) const;
     void hostWrite(uint8_t addr, uint8_t v);
     // HALT pin level. Sampled at END (runSample) and while halted: a low level resumes at pc 0.
     void setHaltPin(bool high);
     // One instruction period while halted (about 300 ns): one pending GPR/INSTR transfer,
     // and independently one RAM-clear write or one DBASE refresh decrement. No-op if running.
+    // Halted cadence contract: while halted nothing advances (host requests, RAM clear,
+    // refresh) unless the caller calls idleStep(), about once per 300 ns of emulated time
+    // (~3.33 per microsecond). A RAM clear needs DLENGTH/unit + 1 steps to finish (unit =
+    // MEMSIZ + 1; 256 for DLENGTH 0x00FF00 with MEMSIZ 0xFF, 65536 for the firmware's
+    // DLENGTH 0xFFFFFF), and a host GPR/INSTR request needs one step.
     void idleStep();
     int dolFifoSize() const { return fifo_.size(); }
     uint8_t serialControl() const { return serCtl_; }  // host serial control register as written
@@ -83,6 +88,7 @@ private:
     void commitMul();
     void commitAlu();
     void ramCycle();
+    void latchDil(uint16_t data);  // DIL = data << 8 (RAM data is left-justified)
     void hostTransfer();   // the pending GPR/INSTR host request, if any
     void hostRamAccess();  // DADR HI write while halted: one RAM/IO cycle
     void haltNow();        // immediate halt (halt-enable write with HALT high)

@@ -251,8 +251,10 @@ void Esp::ramCycle() {
         return;
     }
     if (pRam_.op == RamOp::ReadDelayDump) fifo_.dump();
-    dil_ = (static_cast<uint32_t>(bus_.read(io, pRam_.addr)) << 8) & kMask24;
+    latchDil(bus_.read(io, pRam_.addr));
 }
+
+void Esp::latchDil(uint16_t data) { dil_ = static_cast<uint32_t>(data) << 8; }
 
 // ---- host interface ----------------------------------------------------------------------
 
@@ -308,8 +310,8 @@ void Esp::hostRamAccess() {
     if (!halted_) return;
     const bool io = (ramCtl_ & 0x40) == 0;
     const uint32_t addr = io ? ((dadr_ >> 4) & 0xFFFFF)
-                             : (((dadr_ & ~agen_.memsiz) & kMask24) >> agen_.shift());
-    if (ramCtl_ & 0x80) dil_ = (static_cast<uint32_t>(bus_.read(io, addr)) << 8) & kMask24;
+                             : agen_.ramWord(dadr_);
+    if (ramCtl_ & 0x80) latchDil(bus_.read(io, addr));
     else bus_.write(io, addr, hostDol_);
 }
 
@@ -322,23 +324,23 @@ void Esp::idleStep() {
     if (clearActive_) {
         // DECISION E25: DBASE starts at DLENGTH and counts down by one unit per period, writing
         // zero at each address; the bit clears once address 0 has been written.
-        const uint32_t addr = ((agen_.dbase & ~agen_.memsiz) & kMask24) >> agen_.shift();
-        bus_.write(false, addr, 0);
-        if (agen_.dbase < agen_.unit()) clearActive_ = false;
-        else agen_.dbase -= agen_.unit();
+        const uint32_t d = agen_.dbase20();
+        bus_.write(false, agen_.ramWord(d), 0);
+        if (d < agen_.unit()) clearActive_ = false;
+        else agen_.dbase = d - agen_.unit();
     } else if (!refreshDisable_) {
         agen_.endOfSample();  // refresh: same decrement/test/reload as the END update
     }
 }
 
-uint8_t Esp::hostRead(uint8_t addr) {
+uint8_t Esp::hostRead(uint8_t addr) const {
     switch (addr) {
         case 0x00: return static_cast<uint8_t>(hostGpr_ >> 16);
         case 0x01: return static_cast<uint8_t>(hostGpr_ >> 8);
         case 0x02: return static_cast<uint8_t>(hostGpr_);
         case 0x03: case 0x04: case 0x05: case 0x06: case 0x07:
             return static_cast<uint8_t>(hostInstr_ >> (40 - 8 * (addr - 3)));
-        case 0x08: return static_cast<uint8_t>(hostInstr_) & 0xF8;  // bits 2..0 unused
+        case 0x08: return static_cast<uint8_t>(static_cast<uint8_t>(hostInstr_) & 0xF8);  // bits 2..0 unused
         case 0x09: return static_cast<uint8_t>(dil_ >> 16);
         case 0x0A: return static_cast<uint8_t>(dil_ >> 8);
         case 0x0B: return 0;  // DIL is 16 bits wide
@@ -347,7 +349,7 @@ uint8_t Esp::hostRead(uint8_t addr) {
         case 0x0E: return 0;  // DECISION E10: the DOL low byte reads 0x00 (text), not 0xFF (table)
         case 0x0F: return static_cast<uint8_t>(dadr_ >> 16);
         case 0x10: return static_cast<uint8_t>(dadr_ >> 8);
-        case 0x11: return static_cast<uint8_t>(dadr_) & 0xF0;
+        case 0x11: return static_cast<uint8_t>(static_cast<uint8_t>(dadr_) & 0xF0);
         case kHostCtl:
             return static_cast<uint8_t>((req_.valid ? kCtlBusy : 0) |
                                         (clearActive_ ? kCtlClear : 0) |
@@ -389,7 +391,7 @@ void Esp::hostWrite(uint8_t addr, uint8_t v) {
             // leaves the clear off, which is the power-up "reset the RAM Clear bit" step.
             refreshDisable_ = (v & kCtlRefreshOff) != 0;
             const bool want = (v & kCtlClear) != 0 && !refreshDisable_ && halted_;
-            if (want && !clearActive_) agen_.dbase = agen_.dlength & ~agen_.memsiz & kMask24;
+            if (want && !clearActive_) agen_.dbase = agen_.dbaseReload();
             clearActive_ = want;
             return;
         }

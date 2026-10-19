@@ -4,8 +4,13 @@ namespace ens::esp {
 
 namespace {
 constexpr uint32_t kMask24 = 0xFFFFFF;
-constexpr uint32_t kAlign = 0xFFFFF0;  // 20-bit registers keep GPR bits 23..4
 }  // namespace
+
+uint32_t Agen::ramWord(uint32_t addr24) const {
+    return ((addr24 & kMask24) & ~memsiz & kMask24) >> shift();
+}
+
+uint32_t Agen::dbaseReload() const { return dlength20() & ~memsiz & kMask24; }
 
 uint32_t Agen::unit() const { return (memsiz & kMask24) + 1; }
 
@@ -23,7 +28,6 @@ bool Agen::isWrite(RamOp op) const {
 
 uint32_t Agen::physical(RamOp op, uint32_t offset24) const {
     const uint32_t keep = ~memsiz & kMask24;  // address bits above the unused (fraction) bits
-    const int sh = shift();
     uint32_t s;
     switch (op) {
         case RamOp::ReadDelay:
@@ -31,17 +35,17 @@ uint32_t Agen::physical(RamOp op, uint32_t offset24) const {
         case RamOp::ReadDelayDump: {
             // DECISION E7: circular delay; compare and wrap on address bits only, the wrap
             // subtracts DLENGTH + unit so the ring period equals DBASE's period.
-            s = ((dbase + offset24) & kMask24) & keep;
-            const uint32_t len = dlength & keep;
+            s = ((dbase20() + offset24) & kMask24) & keep;
+            const uint32_t len = dlength20() & keep;
             if (s > len) s = (s - (len + unit())) & kMask24 & keep;
-            return s >> sh;
+            return ramWord(s);
         }
         case RamOp::ReadTableA:
         case RamOp::WriteTableA:
             // DECISION E7: table address is BASE + offset, masked by MEMSIZ but not DLENGTH.
-            return (((abase + offset24) & kMask24) & keep) >> sh;
+            return ramWord(abase20() + offset24);
         case RamOp::ReadTableB:
-            return (((bbase + offset24) & kMask24) & keep) >> sh;
+            return ramWord(bbase20() + offset24);
         case RamOp::ReadIo:
         case RamOp::WriteIo:
             // DECISION E7: I/O space is absolute, 24-bit offset -> word address >> 4.
@@ -52,8 +56,9 @@ uint32_t Agen::physical(RamOp op, uint32_t offset24) const {
 
 void Agen::endOfSample() {
     // DECISION E7: DBASE -= unit each sample; going below 0 reloads DLENGTH (masked like DBASE).
-    if (dbase < unit()) dbase = dlength & ~memsiz & kMask24;
-    else dbase -= unit();
+    // Bits 3..0 of the stored register are ignored (R13) and lost on the decrement.
+    const uint32_t d = dbase20();
+    dbase = (d < unit()) ? dbaseReload() : d - unit();
 }
 
 void Agen::writeReg(int spr, uint32_t v24) {
@@ -64,11 +69,12 @@ void Agen::writeReg(int spr, uint32_t v24) {
             // DECISION E20: writing MEMSIZ also masks DBASE (DBASE &= ~MEMSIZ).
             dbase &= ~memsiz & kMask24;
             break;
-        // DECISION E7: 20-bit registers keep bits 23..4; low 4 bits read back 0.
-        case 245: dlength = v24 & kAlign; break;
-        case 246: abase = v24 & kAlign; break;
-        case 247: bbase = v24 & kAlign; break;
-        case 248: dbase = v24 & kAlign; break;
+        // DECISION E7 (ruling R13): the 24-bit written value is stored and read back as
+        // written; all arithmetic ignores bits 3..0 (the 20-bit registers, see *20()).
+        case 245: dlength = v24; break;
+        case 246: abase = v24; break;
+        case 247: bbase = v24; break;
+        case 248: dbase = v24; break;
         default: break;
     }
 }

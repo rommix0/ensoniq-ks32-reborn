@@ -18,8 +18,18 @@ enum class RamOp : uint8_t {
 };
 
 struct Agen {
-    // 24-bit GPR-aligned values (bits 23..4 for the 20-bit registers, see writeReg).
+    // Register values as written (24 bits, read back exactly, ruling R13). The 20-bit registers
+    // (DLENGTH, ABASE, BBASE, DBASE) take part in address arithmetic with bits 3..0 cleared.
     uint32_t memsiz = 0, dlength = 0, abase = 0, bbase = 0, dbase = 0;
+    uint32_t dlength20() const { return dlength & 0xFFFFF0; }
+    uint32_t abase20() const { return abase & 0xFFFFF0; }
+    uint32_t bbase20() const { return bbase & 0xFFFFF0; }
+    uint32_t dbase20() const { return dbase & 0xFFFFF0; }
+
+    // RAM word address of a 24-bit address: bits not masked by MEMSIZ, shifted down.
+    uint32_t ramWord(uint32_t addr24) const;
+    // DBASE value after a reload (DLENGTH with the MEMSIZ fraction bits cleared).
+    uint32_t dbaseReload() const;
 
     uint32_t unit() const;  // DBASE decrement and address LSB weight: MEMSIZ + 1
     int shift() const;      // position of the address LSB: trailing 1 bits of MEMSIZ

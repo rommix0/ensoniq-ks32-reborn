@@ -41,8 +41,9 @@ TEST(agen_delay_top_of_buffer_with_fraction_does_not_wrap) {
 TEST(agen_delay_dlength_all_ones_stays_in_range) {
     Agen a;
     a.memsiz = 0xFF;
-    a.writeReg(245, 0xFFFFFF);  // firmware value: stored as 0xFFFFF0
-    CHECK_EQ(a.dlength, 0xFFFFF0u);
+    a.writeReg(245, 0xFFFFFF);  // firmware value: read back as written (R13), arithmetic ignores bits 3..0
+    CHECK_EQ(a.dlength, 0xFFFFFFu);
+    CHECK_EQ(a.dlength20(), 0xFFFFF0u);
     const uint32_t offs[] = {0x000000u, 0x0000F8u, 0x000100u, 0x123456u, 0x7FFFFFu, 0xFFFFFFu};
     const uint32_t bases[] = {0xFFFFF0u, 0xFFFF00u, 0x000000u, 0x00AB00u};
     for (uint32_t off : offs) {
@@ -151,13 +152,13 @@ TEST(agen_write_flags) {
 TEST(agen_reg_alignment) {
     Agen a;
     a.writeReg(245, 0xFFFFFF);
-    CHECK_EQ(a.readReg(245), 0xFFFFF0u);
+    CHECK_EQ(a.readReg(245), 0xFFFFFFu);
     a.writeReg(246, 0x12345F);
-    CHECK_EQ(a.readReg(246), 0x123450u);
+    CHECK_EQ(a.readReg(246), 0x12345Fu);
     a.writeReg(247, 0xABCDEF);
-    CHECK_EQ(a.readReg(247), 0xABCDE0u);
+    CHECK_EQ(a.readReg(247), 0xABCDEFu);
     a.writeReg(248, 0x00FFFF);
-    CHECK_EQ(a.readReg(248), 0x00FFF0u);
+    CHECK_EQ(a.readReg(248), 0x00FFFFu);
     CHECK_EQ(a.readReg(249), 0u);  // not an AGEN register
     // E20: writing MEMSIZ masks DBASE
     a.writeReg(244, 0xFF);
@@ -165,7 +166,18 @@ TEST(agen_reg_alignment) {
     CHECK_EQ(a.readReg(244), 0xFFu);
     CHECK_EQ(a.dbase, 0x00FF00u);
     // the other registers are left alone
-    CHECK_EQ(a.readReg(245), 0xFFFFF0u);
+    CHECK_EQ(a.readReg(245), 0xFFFFFFu);
+    // R13: bits 3..0 are stored but ignored by the address arithmetic.
+    Agen b;
+    b.memsiz = 0xFF;
+    b.writeReg(245, 0x00FF0F);
+    b.writeReg(246, 0x00010F);
+    b.writeReg(248, 0x00020F);
+    CHECK_EQ(b.dbaseReload(), 0xFF00u);
+    CHECK_EQ(b.physical(RamOp::ReadTableA, 0x000200), 0x03u);  // abase 0x100 + 0x200
+    CHECK_EQ(b.physical(RamOp::ReadDelay, 0), 0x02u);
+    b.endOfSample();
+    CHECK_EQ(b.dbase, 0x000100u);
 }
 
 TEST(fifo_semantics) {
