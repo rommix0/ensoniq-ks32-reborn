@@ -1,5 +1,7 @@
 #include "esp/esp.h"
 
+#include "esp/esp_isa.h"
+
 namespace ens {
 
 using esp::Op;
@@ -167,15 +169,13 @@ int Esp::runSample() {
 // (next step), and ALU(k-1)'s MACH/MACL preload lands just before MUL(k) accumulates.
 bool Esp::step() {
     const uint64_t w = instr_[pc_];
-    const uint8_t d = static_cast<uint8_t>(w >> 40);
-    const uint8_t c = static_cast<uint8_t>(w >> 32);
-    const uint8_t b = static_cast<uint8_t>(w >> 24);
-    const uint8_t a = static_cast<uint8_t>(w >> 16);
-    const Op op = static_cast<Op>((w >> 12) & 0xF);
-    const OpSel& os = kOpSel[(w >> 8) & 0xF];
-    const bool skippable = ((w >> 7) & 1) != 0;
-    const bool macBit = ((w >> 6) & 1) != 0;
-    const RamOp ram = static_cast<RamOp>((w >> 3) & 7);
+    const esp::Instr in = esp::Instr::decode(w);
+    const uint8_t d = in.d, c = in.c, b = in.b, a = in.a;
+    const Op op = in.op;
+    const OpSel& os = kOpSel[in.opsel];
+    const bool skippable = in.skip;
+    const bool macBit = in.mac;
+    const RamOp ram = in.ram;
 
     // (1) MUL(k-1) result to C and/or the DOL FIFO.
     commitMul();

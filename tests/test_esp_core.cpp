@@ -3,35 +3,30 @@
 
 #include "check.h"
 #include "esp/esp.h"
+#include "esp/esp_isa.h"
 
 using ens::Esp;
 using ens::EspBus;
+using ens::esp::Instr;
 using ens::esp::Op;
 using ens::esp::RamOp;
 
 namespace {
 
-// Instruction word per ESP notes §4.1 (Task 10 replaces this with esp::Instr::encode).
-uint64_t w48(unsigned d, unsigned c, unsigned b, unsigned a, Op op, unsigned opsel, bool skip,
-             bool mac, RamOp ram) {
-    return (uint64_t(d & 0xFF) << 40) | (uint64_t(c & 0xFF) << 32) | (uint64_t(b & 0xFF) << 24) |
-           (uint64_t(a & 0xFF) << 16) | (uint64_t(static_cast<unsigned>(op) & 0xF) << 12) |
-           (uint64_t(opsel & 0xF) << 8) | (uint64_t(skip ? 1 : 0) << 7) |
-           (uint64_t(mac ? 1 : 0) << 6) | (uint64_t(static_cast<unsigned>(ram) & 7) << 3);
-}
-
-constexpr unsigned kZero = 255;  // constant 0: a source of 0 and a discarding destination
+constexpr uint8_t kZero = 255;  // constant 0: a source of 0 and a discarding destination
 
 // ALU word with a multiplier NOP (0 x+ 0 > ZERO). MOV has no CCR effect.
-uint64_t alu(Op op, unsigned b, unsigned a, unsigned opsel = 0, bool skip = false,
+uint64_t alu(Op op, uint8_t b, uint8_t a, uint8_t opsel = 0, bool skip = false,
              RamOp ram = RamOp::ReadDelay) {
-    return w48(kZero, kZero, b, a, op, opsel, skip, true, ram);
+    return Instr{kZero, kZero, b, a, op, opsel, skip, true, ram}.encode();
 }
 uint64_t nop(RamOp ram = RamOp::ReadDelay) { return alu(Op::MOV, kZero, kZero, 0, false, ram); }
-uint64_t end() { return w48(kZero, kZero, kZero, kZero, Op::END, 0, false, true, RamOp::ReadDelay); }
+uint64_t end() {
+    return Instr{kZero, kZero, kZero, kZero, Op::END, 0, false, true, RamOp::ReadDelay}.encode();
+}
 // Multiplier word (C x D > C) with an ALU NOP.
-uint64_t mul(unsigned c, unsigned d, bool mac, unsigned opsel = 0) {
-    return w48(d, c, kZero, kZero, Op::MOV, opsel, false, mac, RamOp::ReadDelay);
+uint64_t mul(uint8_t c, uint8_t d, bool mac, uint8_t opsel = 0) {
+    return Instr{d, c, kZero, kZero, Op::MOV, opsel, false, mac, RamOp::ReadDelay}.encode();
 }
 
 struct Access {
@@ -136,7 +131,7 @@ TEST(esp_mac_preload_slot) {
     // Preload in the same word as the accumulate is too late: the MAC sees the old value.
     FakeBus bus3;
     Esp s(bus3);
-    s.setInstr(0, w48(kZero, 11, 10, 243, Op::MOV, 0, false, true, RamOp::ReadDelay));
+    s.setInstr(0, Instr{kZero, 11, 10, 243, Op::MOV, 0, false, true, RamOp::ReadDelay}.encode());
     s.setInstr(1, end());
     s.setGpr(10, 0x123456);
     s.runSample();
@@ -153,7 +148,7 @@ TEST(esp_skip_suppresses_writes_not_ram) {
     e.setGpr(250, 0x080000);  // CCR Z=1
     e.setGpr(251, 0x080000);  // CMR = NEQ (0x08 << 16): skip when Z=1
     // ADD gpr1 + gpr2 > gpr2,DOL (opsel 7); MUL gpr3 x gpr4 > gpr3; RAM write delay @ gpr0.
-    e.setInstr(0, w48(4, 3, 1, 2, Op::ADD, 7, true, true, RamOp::WriteDelay));
+    e.setInstr(0, Instr{4, 3, 1, 2, Op::ADD, 7, true, true, RamOp::WriteDelay}.encode());
     e.setInstr(1, end());
     e.setGpr(1, 0x111100);
     e.setGpr(2, 0x222200);
@@ -176,7 +171,7 @@ TEST(esp_skip_suppresses_writes_not_ram) {
     Esp x(bus2);
     x.setGpr(249, kShiftOne);
     x.setGpr(250, 0x080000);
-    x.setInstr(0, w48(4, 3, 1, 2, Op::ADD, 7, true, true, RamOp::WriteDelay));
+    x.setInstr(0, Instr{4, 3, 1, 2, Op::ADD, 7, true, true, RamOp::WriteDelay}.encode());
     x.setInstr(1, end());
     x.setGpr(1, 0x111100);
     x.setGpr(2, 0x222200);
@@ -269,7 +264,7 @@ TEST(esp_mul_to_fifo_write) {
     e.setGpr(0, 0x000500);
     e.setGpr(5, 0x200000);
     e.setGpr(6, 0x400000);
-    e.setInstr(0, w48(6, 5, kZero, kZero, Op::MOV, 2, false, false, RamOp::WriteDelay));
+    e.setInstr(0, Instr{6, 5, kZero, kZero, Op::MOV, 2, false, false, RamOp::WriteDelay}.encode());
     e.setInstr(1, end());
     e.runSample();
     CHECK_EQ(bus.writes.size(), 1u);
@@ -370,7 +365,7 @@ TEST(esp_end_step_executes_mul_and_ram_fields) {
     e.setGpr(0, 0x000700);
     e.setGpr(5, 0x200000);
     e.setGpr(6, 0x400000);
-    e.setInstr(0, w48(6, 5, kZero, kZero, Op::END, 2, false, false, RamOp::WriteDelay));
+    e.setInstr(0, Instr{6, 5, kZero, kZero, Op::END, 2, false, false, RamOp::WriteDelay}.encode());
     CHECK_EQ(e.runSample(), 1);
     CHECK_EQ(e.gpr(5), 0x200000u);  // not committed yet
     CHECK_EQ(e.agen().dbase, 0x00FF00u);  // DBASE 0 - unit reloads DLENGTH
@@ -420,7 +415,7 @@ TEST(esp_reset_clears_pipeline) {
     e.setGpr(249, kShiftOne);
     e.setGpr(5, 0x200000);
     e.setGpr(6, 0x400000);
-    e.setInstr(0, w48(6, 5, kZero, kZero, Op::END, 0, false, false, RamOp::ReadDelay));
+    e.setInstr(0, Instr{6, 5, kZero, kZero, Op::END, 0, false, false, RamOp::ReadDelay}.encode());
     e.runSample();  // MUL result pending
     e.reset();
     CHECK_EQ(e.gpr(5), 0u);  // DECISION E23: reset clears GPRs
@@ -502,9 +497,9 @@ TEST(esp_alu_reads_mac_before_same_word_accumulates) {
     e.setGpr(22, x1); e.setGpr(23, y1);
     e.setGpr(24, x2); e.setGpr(25, y2);
     // Each MUL writes MACH back to its own x register; no word reads another word's x.
-    e.setInstr(0, w48(21, 20, kZero, kZero, Op::MOV, 0, false, false, RamOp::ReadDelay));
-    e.setInstr(1, w48(23, 22, 242, 7, Op::MOV, 0, false, false, RamOp::ReadDelay));  // r7 = MACL
-    e.setInstr(2, w48(25, 24, 243, 8, Op::MOV, 0, false, false, RamOp::ReadDelay));  // r8 = MACH
+    e.setInstr(0, Instr{21, 20, kZero, kZero, Op::MOV, 0, false, false, RamOp::ReadDelay}.encode());
+    e.setInstr(1, Instr{23, 22, 242, 7, Op::MOV, 0, false, false, RamOp::ReadDelay}.encode());  // r7 = MACL
+    e.setInstr(2, Instr{25, 24, 243, 8, Op::MOV, 0, false, false, RamOp::ReadDelay}.encode());  // r8 = MACH
     e.setInstr(3, end());
     e.runSample();
     CHECK_EQ(e.gpr(7), l0);  // word 0's low half, not word 1's
@@ -521,7 +516,7 @@ TEST(esp_alu_reads_preloaded_mach) {
     e.setGpr(5, 0x400000);
     e.setGpr(6, 0x400000);
     e.setInstr(0, alu(Op::MOV, 10, 243));                                         // MACH = gpr10
-    e.setInstr(1, w48(6, 5, 243, 11, Op::MOV, 0, false, false, RamOp::ReadDelay));  // r11 = MACH
+    e.setInstr(1, Instr{6, 5, 243, 11, Op::MOV, 0, false, false, RamOp::ReadDelay}.encode());  // r11 = MACH
     e.setInstr(2, alu(Op::MOV, 243, 12));                                         // r12 = MACH
     e.setInstr(3, end());
     e.runSample();
@@ -537,9 +532,9 @@ TEST(esp_mac_saturates_in_core) {
     e.setGpr(249, kShiftOne);
     e.setGpr(5, 0x7FFFFF);
     e.setGpr(6, 0x7FFFFF);
-    e.setInstr(0, w48(5, 5, kZero, kZero, Op::MOV, 1, false, false, RamOp::ReadDelay));  // ~1.0
-    e.setInstr(1, w48(5, 5, kZero, kZero, Op::MOV, 1, false, true, RamOp::ReadDelay));   // ~2.0
-    e.setInstr(2, w48(5, 6, kZero, kZero, Op::MOV, 0, false, true, RamOp::ReadDelay));   // ~3.0 > C=6
+    e.setInstr(0, Instr{5, 5, kZero, kZero, Op::MOV, 1, false, false, RamOp::ReadDelay}.encode());  // ~1.0
+    e.setInstr(1, Instr{5, 5, kZero, kZero, Op::MOV, 1, false, true, RamOp::ReadDelay}.encode());   // ~2.0
+    e.setInstr(2, Instr{5, 6, kZero, kZero, Op::MOV, 0, false, true, RamOp::ReadDelay}.encode());   // ~3.0 > C=6
     e.setInstr(3, alu(Op::MOV, 242, 7));  // r7 = MACL (MUL NOP keeps the accumulator)
     e.setInstr(4, end());
     e.runSample();

@@ -5,16 +5,23 @@
 
 #include "check.h"
 #include "esp/esp.h"
+#include "esp/esp_isa.h"
 
 using ens::Esp;
 using ens::EspBus;
+using ens::esp::Instr;
+using ens::esp::Op;
+using ens::esp::RamOp;
 
 namespace {
 
-constexpr uint64_t kEndWord = uint64_t(0xF) << 12;  // opcode END, every field 0
-constexpr uint64_t kNopWord = uint64_t(9) << 12;    // MOV gpr0 > gpr0 (opcode 9), RAM op 0 (read)
-constexpr uint64_t kWriteDelayNop = kNopWord | (uint64_t(1) << 3);  // + RAM op write-delay
-constexpr uint64_t kMovToFifo = (uint64_t(9) << 12) | (uint64_t(5) << 8);  // A > FIFO
+const uint64_t kEndWord = Instr{0, 0, 0, 0, Op::END, 0, false, false, RamOp::ReadDelay}.encode();
+// MOV gpr0 > gpr0, RAM op read.
+const uint64_t kNopWord = Instr{0, 0, 0, 0, Op::MOV, 0, false, false, RamOp::ReadDelay}.encode();
+const uint64_t kWriteDelayNop =
+    Instr{0, 0, 0, 0, Op::MOV, 0, false, false, RamOp::WriteDelay}.encode();
+const uint64_t kMovToFifo =  // A > FIFO
+    Instr{0, 0, 0, 0, Op::MOV, 5, false, false, RamOp::ReadDelay}.encode();
 
 struct Access {
     bool io;

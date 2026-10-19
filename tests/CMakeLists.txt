@@ -10,6 +10,7 @@ set(ENS_TEST_SOURCES
   test_esp_agen.cpp
   test_esp_core.cpp
   test_esp_host.cpp
+  test_esp_isa.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})

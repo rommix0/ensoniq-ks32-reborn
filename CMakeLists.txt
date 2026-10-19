@@ -26,7 +26,11 @@ add_library(ens_otis STATIC src/otis/otis.cpp)
 target_link_libraries(ens_otis PUBLIC ens_common)
 
 add_library(ens_esp STATIC src/esp/esp_alu.cpp src/esp/esp_mac.cpp src/esp/esp_agen.cpp
-  src/esp/esp.cpp)
+  src/esp/esp_isa.cpp src/esp/esp.cpp)
 target_link_libraries(ens_esp PUBLIC ens_common)
 
 add_subdirectory(tests)
+
+# Command-line tools (file I/O allowed here, not in src/).
+add_executable(esp_dis tools/esp_dis/main.cpp)
+target_link_libraries(esp_dis PRIVATE ens_esp ens_common)
