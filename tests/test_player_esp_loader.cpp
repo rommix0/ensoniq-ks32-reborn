@@ -303,8 +303,17 @@ TEST(loader_every_program_runs_and_decays) {
         // decision P16), so the tail is checked as AC RMS <= 4 and |DC| <= 32 (-60 dBFS).
         CHECK(acL <= 4.0);
         CHECK(acR <= 4.0);
-        CHECK(std::abs(dcL) <= 32.0);
-        CHECK(std::abs(dcR) <= 32.0);
-        CHECK(peakLate <= 64);
+        if (p.index != 10) {
+            CHECK(std::abs(dcL) <= 32.0);
+            CHECK(std::abs(dcR) <= 32.0);
+            CHECK(peakLate <= 64);
+        } else {
+            // Program 10's idle output is a static offset written into the program (P16): its
+            // sine waveshaper is indexed from 0x1F80 (entry 31.5) while the table's zero is
+            // entry 32, so silence reads -0x20F. About -158 / -73 LSB at the outputs.
+            CHECK(dcL >= -175.0 && dcL <= -140.0);
+            CHECK(dcR >= -90.0 && dcR <= -55.0);
+            CHECK(peakLate <= 200);
+        }
     }
 }

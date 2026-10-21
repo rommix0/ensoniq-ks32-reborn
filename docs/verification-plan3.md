@@ -9,14 +9,14 @@ for. The user's own acceptance run (the pass bar) is still pending; see the last
 
 | Toolchain | Configure | Result |
 |---|---|---|
-| MinGW-w64 g++ 14, i686, Ninja, Release | `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENS_ROM_DIR=...` | `build/ens_tests`: **209 passed, 0 failed**; `ctest --test-dir build`: 1/1 passed |
-| MSVC 19.44 (Visual Studio 2022), x64, Release | `cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64 -DENS_ROM_DIR=...` | `ctest --test-dir build-msvc -C Release --output-on-failure`: 1/1 passed; `build-msvc/Release/ens_tests.exe` reports **209 passed, 0 failed** |
+| MinGW-w64 g++ 14, i686, Ninja, Release | `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENS_ROM_DIR=...` | `build/ens_tests`: **212 passed, 0 failed**; `ctest --test-dir build`: 1/1 passed |
+| MSVC 19.44 (Visual Studio 2022), x64, Release | `cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64 -DENS_ROM_DIR=...` | `ctest --test-dir build-msvc -C Release --output-on-failure`: 1/1 passed; `build-msvc/Release/ens_tests.exe` reports **212 passed, 0 failed** |
 
 Both builds were configured with `-DENS_ROM_DIR="C:/Users/abart/Desktop/Ensoniq KS-32/ks-32"`, so
 the ROM-dependent tests run and are not skipped (for example `synth_rom_note_sounds_and_decays`
 prints `ROM note: peak 7913, final AC RMS 0.000, DC 9.000`). ctest registers the whole
-`ens_tests` binary as one test, so it counts 1; the 209 are the individual `TEST` cases (Plan 1
-ended at 149; the final-review fix round added 3). Both builds compile without warnings.
+`ens_tests` binary as one test, so it counts 1; the 212 are the individual `TEST` cases (Plan 1
+ended at 149; the final-review fix round added 3, and the delay-wrap fix, decision E31, added 3 more). Both builds compile without warnings.
 
 ## Cross-toolchain identity
 
@@ -63,7 +63,7 @@ the default 4 s tail). Measures (both channels, L / R):
 | 7 | 26101 / 24671 | 0 | 5.5 / 5.8 | 2.1 / 2.2 | -14.4 / -16.5 | 0.548 / 0.527 |
 | 8 | 23811 / 24074 | 0 | 0.2 / 0.2 | 0.2 / 0.2 | -1.0 / 0.0 | 0.000 / 0.000 |
 | 9 | 22542 / 21275 | 0 | 7.2 / 7.8 | 1.9 / 2.0 | -19.0 / -22.0 | 0.546 / 0.584 |
-| 10 | 8839 / 7797 | 0 | **12.0 (never)** / -2.3 | **-3.5 / -3.5** | **-58.5 / -26.3** | 0.500 / 0.451 |
+| 10 | 9328 / 7965 | 0 | **12.0 (never) / 12.0 (never)** | 0.7 / 0.7 | **-158.0 / -72.1** | 0.501 / 0.385 |
 
 The table was re-taken after the render warm-up (decision P18), which starts every effect fully
 faded in at frame 0, with a rewritten measuring script (same definitions, times rounded up to the
@@ -74,16 +74,18 @@ last note-off.
 Flags (clips, or a raw tail over 10 s):
 
 - **Clips: none.** The largest peak is 32466 (effect 6 left), below 32767.
-- **Effect 10** is flagged: it cuts off held notes. Its sound dies about 2.3 s into the render (AC
-  -60 dB time -3.5 s, before the last note-off), the right channel's raw level ends there too, and
-  the left channel sits on a constant -58.5 LSB DC (-55 dBFS) to the end, so its raw time never
-  ends. The cause is known and not fixed (decision P16, "Open, program 10"): program 10 starts with
-  the ESP's delay pointer (DBASE) far above its short delay ring, and until the pointer enters the
-  ring, about 1.5 to 1.8 s after the load, the program's delay writes overwrite its two DRAM lookup
-  tables (the compressor's gain curve), after which the wet path stays nearly silent until the next
-  effect load. The DC value is the program's idle state after that overwrite and depends on what was
-  playing (the first run, before the warm-up, settled on -145.6 / -66.6). The low peak (about 8800
-  against 20 000 to 32 000) is part of the same problem.
+- **Effect 10** is flagged for its raw time only. The row was re-taken after the delay-wrap fix
+  (decision E31, 2026-10-21); the other rows are unchanged by it (their programs never reach the
+  changed case, and effect 1's WAV is byte-identical before and after). Before the fix, effect 10
+  cut off held notes (AC -60 dB time -3.5 s, before the last note-off; row 8839 / 7797, raw never /
+  -2.3, DC -58.5 / -26.3), because program 10 starts with the ESP's delay pointer (DBASE) far above
+  its short delay ring and its delay writes overwrote its DRAM lookup tables (P16). Now its sound
+  decays like the other reverbs (AC 0.7 s). Its raw time never ends because the program idles on a
+  constant -158 / -72 LSB DC (-46 dBFS) from the moment it is loaded. That DC was traced to the
+  program's own sine waveshaper, which is indexed half a table entry below the table's zero (P16), so
+  it is a property of the firmware's program and not of the core. The KS-32's outputs are AC-coupled.
+  The peak (about 9300 against 20 000 to 32 000 for the others) is the program's level with the
+  default parameters (P11); it was about the same before the fix.
 - Effects 7 and 9 have the longest real tails: 5.5 to 7.8 s raw (about 2 s on the AC measure). Their DC
   was still moving at 12 s (effect 9: -19.6 / -22.9 at 12 s, -19.0 / -22.0 in the last window),
   so the raw time depends on the DC and not only on the reverb.
@@ -127,7 +129,7 @@ below full scale.
 | P6 | Velocity and CC 7 law | Stand-in, not measured. Confidence Low. | Dynamics |
 | P7 | Note end | A short fade then mute. Confidence Medium. | Clicks at note end |
 | P8 | Stealing and retrigger | A guess at polyphony practice, not the firmware rule. Confidence Low. | Behaviour when more than 32 notes sound |
-| P16 | ESP output DC residue; program 10 | Accepted for now (option a) for programs 0 to 9 (Medium). Program 10 is open: held notes are cut off about 1.5 s after the load because its delay writes overwrite its lookup tables while DBASE is above its delay ring (cause found, High; fix not chosen: loader or chip core). Its DC is a separate, untraced idle state (Low). | Effect 10 goes silent about 1.3 to 1.8 s after its load, for held and later notes on buses 1 and 2 (expected, known); otherwise nothing audible from the DC |
+| P16 | ESP output DC residue; program 10 | Accepted (option a) for programs 0 to 9 (Medium). Program 10: the cut-off of held notes is fixed by E31, a full-modulo delay wrap in the ESP core (Low-medium; the hardware may instead do one subtraction and rely on the firmware's halted time). Its idle DC (-158 / -72 LSB) is traced to the program's own waveshaper constants and accepted (High). | Effect 10 should now sustain held notes and later notes like the other reverbs; a cut-off about 1.5 s after the load would point back at E31 |
 
 P1 to P4, P9, P10, P12, P14, P15 and P18 (render warm-up) are settled to Medium or better and need
 no listening judgement.
@@ -143,10 +145,8 @@ what an effect change exercises, so clicks at CC 102 may also be related to it.
   jump at the zone edges beyond what the sample root differences give.
 - **Effects.** CC 102 from 0 to 10: the sound should fade out, switch and fade back in over about
   22 ms. Reverb tails should sound smooth and decay to silence. Effects 4 and 8 are short, the
-  rest are long. **Effect 10 goes silent** about 1.3 to 1.8 s after it is loaded (a known, open
-  problem, decision P16): a held note fades to near silence, and every note played after that is
-  silent on buses 1 and 2 (bus 0, the dry bus, still sounds) until an effect is loaded again. Its
-  peak is also low (about 8800 against 20 000 to 32 000 for the others).
+  rest are long. Effect 10 should sustain held notes and play later notes like the others. A cut-off about 1.5 s after the load would point back at decision E31. Its peak
+  is lower (about 9300 against 20 000 to 32 000 for the others).
 - **No clicks or pumping** at note start, note end, effect switch and pedal.
 - **Silence at rest.** With nothing held, the output should be silent (a faint DC is inaudible).
 - **Level.** The overall level should be comfortable with the default CC 7 (100) and full-velocity

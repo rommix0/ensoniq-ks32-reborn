@@ -416,14 +416,8 @@ TEST(synth_rom_held_note_sustains_on_every_program) {
         const double at25 = acRms(pcm, kRate * 5 / 2 - win / 2, win);
         std::printf("  program %d: AC RMS %.1f at 0.75 s, %.1f at 2.5 s\n", prog, at075, at25);
         CHECK(at075 > 500);
-        if (prog != 10) {
-            CHECK(at25 >= 0.1 * at075);
-        } else {
-            // Known failure, pinned (docs/decisions.md P16 "Open, program 10"): the ESP starts
-            // program 10 with DBASE far above its 0x1F7D-word delay ring, so for about 2 s the
-            // delay writes land outside the ring and overwrite the DRAM lookup tables at
-            // 0x1F7E..0x1FFF; the wet path then stays nearly silent. A fix flips this check.
-            CHECK(at25 < 0.1 * at075);
-        }
+        // Program 10 starts with DBASE far above its 0x1F7D-word delay ring; the modulo delay
+        // wrap (docs/decisions.md E31) keeps its writes off the DRAM tables at 0x1F7E..0x1FFF.
+        CHECK(at25 >= 0.1 * at075);
     }
 }

@@ -161,6 +161,11 @@ with `-DENS_BUILD_MAME_REF=ON`. The two were compared with `pcm_diff`.
 | `esp_mix.trace` | **identical** | 0 | 0 | MUL, ADD saturation, DOL, delay write/read, DIL timing, CMP/skip agree bit for bit. |
 | `reverb_tank.trace` | DIFFERENT from frame 1 | 0 / 0 (aux silent) | max 5 LSB, RMS 0.285 (79 945 frames) / max 5 LSB, RMS 0.059 (2 176 frames) | All from the ESP input: O4/O5 rounding (input 32734 vs 32735 in frame 0, 28 vs 32 in frame 1, then MAME's 4-LSB filter residue described above) and O7 (MAME's stopped voices). With MAME's input, our ESP reproduces MAME's main output exactly (replay above). Decay times are equal. |
 
+**Re-check after decision E31 (2026-10-21).** The delay wrap changed from one subtraction to a full
+modulo. `ens_trace` output for `smoke.trace`, `esp_mix.trace` and `reverb_tank.trace` is
+byte-identical before and after the change (MinGW and MSVC), and `pcm_diff` against `mame_ref`
+gives the figures above unchanged.
+
 ## Low-confidence decisions for Plan 3 and later to revisit
 
 These are the entries in `docs/decisions.md` rated Low or Low-medium, or Low in part. Plan 2
@@ -174,6 +179,7 @@ the firmware relies on, or by testing on hardware.
 | O10 | OTIS reset state | All voice registers 0 except CR = 0x0003, ACT 31, SERMODE A/D = 1 | Only A/D is documented; check what the firmware assumes before it initialises |
 | E6 | MAC model (Low-medium) | 50-bit wrap, sat48 readout; the "MACL dest duplicates upper half" sentence is not implemented | Firmware programs that overflow the MAC; a hardware test |
 | E7 refinements (1), (2) (Low-medium) | Delay RAM compare and wrap | Delay compare and wrap on address bits only; DBASE reload masked | Unstated edge; KS-32 uses DLENGTH 0xFFFFFF with MEMSIZ 0xFF, so watch the ring period in Plan 2 |
+| E31 (Low-medium, added 2026-10-21) | Delay wrap beyond one ring length | Full modulo by DLENGTH + unit, so a DBASE above DLENGTH still stays in the ring | The datasheet's prose says one subtraction; a hardware recording of program 10 right after an effect load would settle it |
 | E17 (CCR-destination detail: Low; MAC preload slot: Medium) | CCR destination and MAC preload | An explicit CCR destination overrides the flag update | Any firmware program that writes CCR directly |
 | E20 | MEMSIZ write effect on DBASE | MEMSIZ write sets `DBASE &= ~MEMSIZ` | Only "affects DBASE directly" is documented |
 | E9 | Unassigned addresses 192..233 | Addresses 192..233 read 0 and ignore writes | Undocumented; check whether any firmware program touches them |
