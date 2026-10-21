@@ -220,3 +220,57 @@ TEST(wav_header) {
     CHECK_EQ(u16(48), 0x1234u);
     CHECK_EQ(u16(50), 0x8000u);
 }
+
+TEST(smf_skips_unknown_chunk) {
+    Bytes f = header(0, 1, 480);
+    add(f, Bytes{'X', 'F', 'I', 'H', 0, 0, 0, 3, 1, 2, 3});  // unknown chunk before the track
+    Bytes t = {0x00, 0x90, 0x3C, 0x64};
+    add(t, kEndOfTrack);
+    add(f, track(t));
+    add(f, Bytes{'X', 'F', 'I', 'H', 0, 0, 0, 2, 9, 9});  // and after it
+    add(f, Bytes{0xAA, 0xBB});                            // trailing garbage
+    std::vector<MidiEvent> ev;
+    std::string err;
+    CHECK(parseSmf(f, ev, err));
+    CHECK_EQ(ev.size(), 1u);
+    // An unknown chunk that runs past the end of the file is still a truncation.
+    Bytes cut = header(0, 1, 480);
+    add(cut, Bytes{'X', 'F', 'I', 'H', 0, 0, 0, 9, 1});
+    CHECK(!parseSmf(cut, ev, err));
+    // The declared number of MTrk chunks is still required.
+    Bytes none = header(0, 1, 480);
+    add(none, Bytes{'X', 'F', 'I', 'H', 0, 0, 0, 1, 1});
+    CHECK(!parseSmf(none, ev, err));
+}
+
+TEST(smf_rejects_5_byte_vlq) {
+    std::vector<MidiEvent> ev;
+    std::string err;
+    Bytes f = header(0, 1, 480);
+    add(f, track({0x81, 0x80, 0x80, 0x80, 0x00, 0x90, 0x3C, 0x64}));  // delta time of 5 bytes
+    CHECK(!parseSmf(f, ev, err));
+    CHECK(err.find("longer than 4") != std::string::npos);
+    Bytes g = header(0, 1, 480);
+    add(g, track({0x00, 0xFF, 0x01, 0x81, 0x80, 0x80, 0x80, 0x00}));  // meta length of 5 bytes
+    CHECK(!parseSmf(g, ev, err));
+    CHECK(err.find("longer than 4") != std::string::npos);
+    Bytes ok = header(0, 1, 480);  // a 4-byte delta time is fine
+    add(ok, track({0x81, 0x80, 0x80, 0x00, 0x90, 0x3C, 0x64}));
+    CHECK(parseSmf(ok, ev, err));
+}
+
+TEST(smf_rejects_status_in_data_position) {
+    std::vector<MidiEvent> ev;
+    std::string err;
+    Bytes a = header(0, 1, 480);
+    add(a, track({0x00, 0x90, 0x3C, 0x90, 0x00, 0x90, 0x3C, 0x64}));  // note-on with a status byte as d2
+    CHECK(!parseSmf(a, ev, err));
+    CHECK(err.find("status byte in data position") != std::string::npos);
+    Bytes b = header(0, 1, 480);  // running status whose d2 has bit 7 set
+    add(b, track({0x00, 0x90, 0x3C, 0x64, 0x00, 0x3E, 0x80}));
+    CHECK(!parseSmf(b, ev, err));
+    CHECK(err.find("status byte in data position") != std::string::npos);
+    Bytes c = header(0, 1, 480);  // status byte right after the status byte
+    add(c, track({0x00, 0x90, 0x00, 0x90, 0x3C, 0x64}));
+    CHECK(!parseSmf(c, ev, err));
+}

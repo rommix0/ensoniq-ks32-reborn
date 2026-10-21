@@ -108,6 +108,9 @@ TEST(synth_controllers_and_messages) {
     s.midi(0xB0, 102, 11);  // out of range: ignored and logged
     CHECK(hasLine(s.takeLog(), "ignored"));
     s.midi(0xB0, 103, 3);   // bus out of range: ignored
+    CHECK(hasLine(s.takeLog(), "bus 3"));
+    s.midi(0xB0, 0, 5);     // bank select out of range
+    CHECK(hasLine(s.takeLog(), "bank 5 ignored"));
     s.midi(0xB0, 103, 2);
     s.midi(0xB0, 64, 127);  // pedal down
     s.midi(0x90, 60, 100);
@@ -131,6 +134,47 @@ TEST(synth_controllers_and_messages) {
     s.midi(0xB2, 120, 0);      // all sound off
     renderFrames(s, kRate / 100);
     CHECK_EQ(s.activeVoices(), 0);
+}
+
+TEST(synth_log_is_capped) {
+    Synth s(std::vector<uint16_t>(256, 0x4000), {}, syntheticMap(), EffectLibrary(), makeFcTable(), SynthConfig());
+    s.takeLog();
+    for (int i = 0; i < 1000; ++i) s.midi(0xB0, 102, 11);
+    const std::vector<std::string> log = s.takeLog();
+    CHECK(log.size() <= 257);
+    CHECK(log.size() >= 2);
+    if (log.empty()) return;
+    CHECK_EQ(log[0], "(744 log lines dropped)");
+    CHECK(s.takeLog().empty());  // drained, and the drop count is reset
+}
+
+TEST(synth_log_is_chronological) {
+    EffectLibrary fx;
+    std::string err;
+    CHECK(parseEffects(readFile(ENS_DATA_DIR "/esp/esp_programs.json"), readFile(ENS_DATA_DIR "/esp/effect_defaults.json"),
+                       fx, err));
+    Synth s(std::vector<uint16_t>(256, 0x4000), {}, syntheticMap(), std::move(fx), makeFcTable(), SynthConfig());
+    renderFrames(s, kRate * 3 / 2);  // boot and the effect load finish
+    s.midi(0xC0, 126, 0);            // after the sequencer lines
+    const std::vector<std::string> log = s.takeLog();
+    CHECK(log.size() >= 3);
+    if (log.size() < 3) return;
+    CHECK(log.back().find("126") != std::string::npos);
+    CHECK(log[0].find("wave 0:0") != std::string::npos);  // constructor lines first
+}
+
+TEST(synth_bank_defaults_to_config_set) {
+    SampleMap m;
+    m.waves.push_back(loopedWave(1, 4));
+    SynthConfig cfg;
+    cfg.waveSet = 1;
+    cfg.wave = 4;
+    Synth s(std::vector<uint16_t>(256, 0x4000), {}, std::move(m), EffectLibrary(), makeFcTable(), cfg);
+    CHECK(hasLine(s.takeLog(), "wave 1:4"));
+    s.midi(0xC0, 4, 0);  // no CC0: stays in the configured set
+    CHECK(hasLine(s.takeLog(), "wave 1:4"));
+    s.midi(0x90, 60, 100);
+    CHECK_EQ(s.activeVoices(), 1);
 }
 
 TEST(synth_render_deterministic) {

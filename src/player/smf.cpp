@@ -35,16 +35,19 @@ struct Reader {
         pos += 4;
         return true;
     }
-    bool vlq(uint32_t& v) {  // at most 4 bytes
+    enum Vlq { VlqOk, VlqTruncated, VlqTooLong };
+    Vlq vlq(uint32_t& v) {  // at most 4 bytes
         v = 0;
         for (int i = 0; i < 4; ++i) {
             uint8_t c = 0;
-            if (!u8(c)) return false;
+            if (!u8(c)) return VlqTruncated;
             v = v << 7 | (c & 0x7F);
-            if (!(c & 0x80)) return true;
+            if (!(c & 0x80)) return VlqOk;
         }
-        return false;
+        return VlqTooLong;
     }
+    // A data byte must have bit 7 clear.
+    bool data(uint8_t& v) { return u8(v) && !(v & 0x80); }
     bool skip(uint32_t n) {
         if (left() < n) return false;
         pos += n;
@@ -84,48 +87,75 @@ bool parseSmf(const std::vector<uint8_t>& file, std::vector<MidiEvent>& out, std
     if (fmt > 1) return fail(err, "unsupported SMF format (only 0 and 1)");
     if (div & 0x8000) return fail(err, "SMPTE time division is not supported");
     if (div == 0) return fail(err, "zero ticks per quarter note");
+    // DECISION P15: a file that declares no tracks is rejected.
     if (ntrks == 0) return fail(err, "no tracks");
 
     std::vector<std::vector<RawEvent>> tracks(ntrks);
     std::vector<Tempo> tempos;  // all tracks
     for (uint32_t t = 0; t < ntrks; ++t) {
-        if (!r.u32(tag)) return fail(err, "truncated: missing MTrk");
-        if (tag != 0x4D54726Bu) return fail(err, "missing MTrk");
-        if (!r.u32(len)) return fail(err, "truncated MTrk header");
-        if (r.left() < len) return fail(err, "truncated MTrk data");
+        // DECISION P15: chunks of an unknown type are skipped (SMF spec); ntrks MTrk chunks must be
+        // present, and bytes after the last one are ignored.
+        for (;;) {
+            if (!r.u32(tag)) return fail(err, "missing MTrk (file ends before the last track)");
+            if (!r.u32(len)) return fail(err, "truncated chunk header");
+            if (r.left() < len) return fail(err, "truncated chunk data");
+            if (tag == 0x4D54726Bu) break;
+            r.pos += len;
+        }
         Reader tr{file, r.pos, r.pos + len};
         r.pos += len;
         uint64_t tick = 0;
         uint8_t running = 0;
         while (tr.left() > 0) {
             uint32_t delta = 0;
-            if (!tr.vlq(delta)) return fail(err, "truncated event delta time");
+            const Reader::Vlq dv = tr.vlq(delta);
+            if (dv == Reader::VlqTruncated) return fail(err, "truncated event delta time");
+            if (dv == Reader::VlqTooLong) return fail(err, "delta time longer than 4 bytes");
             tick += delta;
+            // DECISION P15: a track longer than 2^32 ticks is rejected (keeps tick * tempo in uint64).
             if (tick > kMaxTicks) return fail(err, "track too long");
             uint8_t st = 0, d1 = 0, d2 = 0;
             if (!tr.u8(st)) return fail(err, "truncated event");
             if (st & 0x80) {
                 if (st < 0xF0) running = st;
             } else {  // running status: this byte is the first data byte
+                // DECISION P15: running status is cancelled by meta and sysex events (SMF spec).
+                // Some real files keep using it after a meta event; such a file is rejected here.
                 if (!running) return fail(err, "data byte without running status");
                 d1 = st;
                 st = running;
-                if (!oneDataByte(st) && !tr.u8(d2)) return fail(err, "truncated event");
+                if (!oneDataByte(st)) {
+                    uint8_t b2 = 0;
+                    if (!tr.u8(b2)) return fail(err, "truncated event");
+                    if (b2 & 0x80) return fail(err, "status byte in data position");
+                    d2 = b2;
+                }
                 tracks[t].push_back({tick, st, d1, d2});
                 continue;
             }
             if (st < 0xF0) {
-                if (!tr.u8(d1) || (!oneDataByte(st) && !tr.u8(d2))) return fail(err, "truncated event");
+                // DECISION P15: a status byte where a data byte belongs is an error, not a desync.
+                if (!tr.u8(d1)) return fail(err, "truncated event");
+                if (d1 & 0x80) return fail(err, "status byte in data position");
+                if (!oneDataByte(st)) {
+                    if (!tr.u8(d2)) return fail(err, "truncated event");
+                    if (d2 & 0x80) return fail(err, "status byte in data position");
+                }
                 tracks[t].push_back({tick, st, d1, d2});
             } else if (st == 0xF0 || st == 0xF7) {
                 running = 0;
                 uint32_t n = 0;
-                if (!tr.vlq(n) || !tr.skip(n)) return fail(err, "truncated sysex");
+                const Reader::Vlq lv = tr.vlq(n);
+                if (lv == Reader::VlqTooLong) return fail(err, "sysex length longer than 4 bytes");
+                if (lv != Reader::VlqOk || !tr.skip(n)) return fail(err, "truncated sysex");
             } else if (st == 0xFF) {
                 running = 0;
                 uint8_t type = 0;
                 uint32_t n = 0;
-                if (!tr.u8(type) || !tr.vlq(n)) return fail(err, "truncated meta event");
+                if (!tr.u8(type)) return fail(err, "truncated meta event");
+                const Reader::Vlq lv = tr.vlq(n);
+                if (lv == Reader::VlqTooLong) return fail(err, "meta length longer than 4 bytes");
+                if (lv != Reader::VlqOk) return fail(err, "truncated meta event");
                 const size_t at = tr.pos;
                 if (!tr.skip(n)) return fail(err, "truncated meta event");
                 if (type == 0x51 && n == 3) {
@@ -144,6 +174,8 @@ bool parseSmf(const std::vector<uint8_t>& file, std::vector<MidiEvent>& out, std
 
     // acc = sum(delta ticks * tempo) from tick 0; us = floor(acc / ppq) from the running total
     // at each event, so floors never accumulate.
+    // DECISION P15: one global tempo map from the tempo events of all tracks (format 1 keeps them in
+    // track 0; in a format 0 file there is only one track).
     std::stable_sort(tempos.begin(), tempos.end(), [](const Tempo& a, const Tempo& b) { return a.tick < b.tick; });
     std::vector<uint64_t> accAt(tempos.size());
     {

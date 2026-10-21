@@ -9,17 +9,31 @@ Synth::Synth(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1, SampleMap
     : board_(std::move(bank0), std::move(bank1)),
       map_(std::move(map)),
       fx_(std::move(fx)),
-      voices_(board_.otis(), std::move(fcTable), cfg.voice) {
+      voices_(board_.otis(), std::move(fcTable), cfg.voice),
+      bank_(cfg.waveSet) {
     voices_.init();
     seq_.queueBoot();
     loadEffect(cfg.effect);
     selectWave(cfg.waveSet, cfg.wave);
 }
 
+void Synth::pushLog(std::string line) {
+    constexpr size_t kMaxLog = 256;
+    if (log_.size() >= kMaxLog) {
+        log_.pop_front();
+        ++dropped_;
+    }
+    log_.push_back(std::move(line));
+}
+
+void Synth::drainSeqLog() {
+    for (std::string& s : seq_.takeLog()) pushLog(std::move(s));
+}
+
 void Synth::loadEffect(int index) {
     const EspProgram* p = fx_.find(index);
     if (!p) {
-        log_.push_back("effect " + std::to_string(index) + " not found; nothing loaded");
+        pushLog("effect " + std::to_string(index) + " not found; nothing loaded");
         return;
     }
     seq_.queueLoad(*p, fx_.fadeFrames);
@@ -29,11 +43,11 @@ void Synth::selectWave(int set, int number) {
     const std::string id = std::to_string(set) + ":" + std::to_string(number);
     const Wave* w = map_.find(set, number);
     if (!w) {
-        log_.push_back("wave " + id + " has no zones; ignored");
+        pushLog("wave " + id + " has no zones; ignored");
         return;
     }
     voices_.setWave(w);
-    log_.push_back("wave " + id + (w->name.empty() ? std::string() : " '" + w->name + "'"));
+    pushLog("wave " + id + (w->name.empty() ? std::string() : " '" + w->name + "'"));
 }
 
 void Synth::midi(uint8_t status, uint8_t d1, uint8_t d2) {
@@ -57,6 +71,7 @@ void Synth::midi(uint8_t status, uint8_t d1, uint8_t d2) {
         switch (d1) {
         case 0:
             if (d2 <= 1) bank_ = d2;
+            else pushLog("bank " + std::to_string(d2) + " ignored");
             break;
         case 7:
             voices_.channelVolume(ch, d2);
@@ -66,11 +81,11 @@ void Synth::midi(uint8_t status, uint8_t d1, uint8_t d2) {
             break;
         case 102:
             if (d2 <= 10) loadEffect(d2);
-            else log_.push_back("effect " + std::to_string(d2) + " out of range; ignored");
+            else pushLog("effect " + std::to_string(d2) + " out of range; ignored");
             break;
         case 103:
             if (d2 <= 2) voices_.setBus(d2);
-            else log_.push_back("bus " + std::to_string(d2) + " out of range; ignored");
+            else pushLog("bus " + std::to_string(d2) + " out of range; ignored");
             break;
         case 120:
             voices_.allSoundOff();
@@ -99,12 +114,16 @@ void Synth::render(int16_t* interleavedLR, int frames) {
         voices_.tick();
         board_.frame(interleavedLR[2 * i], interleavedLR[2 * i + 1]);
     }
+    drainSeqLog();
 }
 
 std::vector<std::string> Synth::takeLog() {
-    std::vector<std::string> out = std::move(log_);
+    drainSeqLog();
+    std::vector<std::string> out;
+    if (dropped_) out.push_back("(" + std::to_string(dropped_) + " log lines dropped)");
+    for (std::string& l : log_) out.push_back(std::move(l));
     log_.clear();
-    for (std::string& s : seq_.takeLog()) out.push_back(std::move(s));
+    dropped_ = 0;
     return out;
 }
 

@@ -3,7 +3,14 @@
 // the voice manager, takes MIDI short messages and renders stereo frames at the chip rate
 // (30476180 / 1024 Hz). Pure: no OS code, no threads. Not copyable or movable (the voice manager
 // and sequencer refer to the board, and the voices to the sample map).
+//
+// Real-time contract: render() does not allocate, except that the sequencer appends one log line
+// when an effect load or boot finishes. midi() may allocate: CC102 queues the thousands of ESP
+// host writes of an effect load, and program change and out-of-range messages build log strings.
+// A real-time caller accepts that burst; it happens only on those messages. The log keeps the
+// newest 256 lines; call takeLog() regularly (older lines are dropped and counted).
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -34,9 +41,14 @@ public:
     void midi(uint8_t status, uint8_t d1, uint8_t d2);  // one complete short message (DECISION P10)
     void render(int16_t* interleavedLR, int frames);    // per frame: seq.run, voices.tick, board.frame
     int activeVoices() const { return voices_.activeCount(); }
-    std::vector<std::string> takeLog();  // sequencer log plus wave / effect / controller messages
+    // Wave / effect / controller messages and the sequencer log, in the order produced (sequencer
+    // lines are merged at the end of each render() call). If more than 256 lines piled up, the
+    // first line is "(N log lines dropped)" and the oldest lines are gone.
+    std::vector<std::string> takeLog();
 
 private:
+    void pushLog(std::string line);
+    void drainSeqLog();
     void selectWave(int set, int number);
     void loadEffect(int index);
 
@@ -45,7 +57,8 @@ private:
     EffectLibrary fx_;
     Voices voices_;
     EspSequencer seq_;
-    std::vector<std::string> log_;
+    std::deque<std::string> log_;
+    uint32_t dropped_ = 0;
     int bank_ = 0;  // CC0 value, applied at the next program change
 };
 
