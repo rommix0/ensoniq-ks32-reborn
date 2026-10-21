@@ -16,6 +16,7 @@ set(ENS_TEST_SOURCES
   test_ks32_board.cpp
   test_player_resampler.cpp
   test_player_data.cpp
+  test_player_voices.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})

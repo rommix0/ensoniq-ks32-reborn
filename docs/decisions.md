@@ -365,3 +365,59 @@ Entry template:
 - Evidence: `docs/rom-investigation/findings.md` section B (89-word ESP program, 89 slots per frame at 8 MHz); decision E30.
 - Confidence: Medium.
 - Status: Used by `Esp::advance` callers (the KS-32 board, later Plan 3 tasks). Test: esp_advance_overlong_program_runs_to_end.
+
+## P2: FC table
+- Options: (a) `round(1024 * 2^(i/768))` for i in 0..767, built at start-up; (b) copy the firmware's table (0xC09F64) as data.
+- Choice: (a) for now: 768 entries cover one octave in steps of 4 pitch units (3072 units per octave, 256 per semitone), entry 0 = 0x400 = one sample per frame. The firmware table is to be checked against the formula (Task 2).
+- Evidence: formula round(1024*2^(i/768)); firmware table 0xC09F64 check pending (Task 2).
+- Confidence: Medium (formula, not yet compared with the firmware table).
+- Status: `makeFcTable` in `src/player/voices.cpp`, `// DECISION P2`. Test: voices_fc_table_and_clamps.
+
+## P3: Pitch to FC (octave shift and clamps)
+- Options: (a) clamp P to [-0x4800, 0x5400], octave = floor(P / 3072), index = (P mod 3072) >> 2, FC = table << octave (or >> -octave), clamped to 0xFFFE; (b) saturate the table lookup differently or wrap.
+- Choice: (a), computed in 64-bit integers. 0x5400 is 7 octaves up (FC would reach 0x20000, clamped); -0x4800 is 6 octaves down (FC 0x10). 0xFFFE because FC bit 0 is not implemented, so the register reads back `fc & 0xFFFE`.
+- Evidence: FC step = FC >> 1 in 1/512-sample units (OTIS notes); the plan's formula.
+- Confidence: Medium.
+- Status: `fcForPitch`, `// DECISION P3`. Tests: voices_fc_table_and_clamps, voices_extreme_keys_and_bend_clamp.
+
+## P4: Pitch and bend arithmetic
+- Options: (a) P = key*256 + zone.pitchWord + bend with bend = (value14 - 8192) * (bendSemis*256) / 8192 in integers; (b) fractional (float) bend.
+- Choice: (a): C++ integer division truncates toward zero, so a bend of up to 7 units either side of centre is zero; the sum is clamped by `fcForPitch`. Bend applies per MIDI channel to sounding voices (retuned immediately) and to later notes.
+- Evidence: the plan's pitch formula.
+- Confidence: Medium.
+- Status: `Voices::pitchOf`, `// DECISION P4`. Test: voices_extreme_keys_and_bend_clamp.
+
+## P5: Envelope time base
+- Options: (a) 29762 frames per 1000 ms, integer (`ms * 29762 / 1000`, at least one frame for a non-zero time); (b) 29761.8 Hz in floating point.
+- Choice: (a): the player layer stays integer. The error against 29761.8 Hz is under 0.001 %.
+- Evidence: OTIS frame rate 30.476 MHz / 1024 = 29761.8 Hz.
+- Confidence: High.
+- Status: `msToFrames`, `// DECISION P5`.
+
+## P6: Peak and sustain levels
+- Options: (a) peak byte = 0xFF minus the Mitchell log2 (in 1/16 octave) attenuation of vel*cc7 against 127*127, sustain = peak minus the attenuation of sustainPct against 100; (b) a linear map of velocity onto the byte; (c) a table.
+- Choice: (a): the volume byte is a 4-bit exponent with a linear 4-bit mantissa (O5), which is exactly the Mitchell log2 scale, so 16 bytes are 6 dB and velocity/volume act as amplitude. Zero velocity, cc7 or percent gives silence. Default channel volume is 100 (GM). A CC 7 change gives sounding voices a new peak at once; the sustain level steps to it. The velocity law is a stand-in (the firmware velocity curve is not measured).
+- Evidence: O5 (`otis_vol`), plan section on the player; no firmware measurement.
+- Confidence: Low for the loudness curve, High for the byte scale.
+- Status: `peakByte`/`sustainByte`, `// DECISION P6`. Tests: voices_attack_release_reaches_exact_silence (peak is audible).
+
+## P7: Envelope shape
+- Options: (a) integer 8.8 fixed point in the volume byte: linear attack to peak, linear decay to the sustain level, hold, linear release at a constant byte rate (full scale in releaseMs) until 0; (b) exponential segments; (c) per-voice hardware envelope (the chip has none).
+- Choice: (a): linear in the byte is linear in dB. The chip has no envelope, so `tick()` writes LVOL = RVOL = byte << 8 only when the byte changes. A voice is freed (volume 0, CR = STOP0|STOP1) when its level reaches 0.
+- Evidence: O5 volume byte; the KS-32 firmware drives volume from software.
+- Confidence: Medium (shape is a stand-in, not firmware-measured).
+- Status: `Voices::tick`, `// DECISION P7`. Tests: voices_attack_release_reaches_exact_silence, voices_sustain_holds_until_pedal_up.
+
+## P8: Voice allocation and note-off
+- Options: (a) lowest free voice; else the quietest releasing voice; else the oldest note; a note-off releases every sounding voice of that channel and key; (b) always the oldest; (c) refuse the note.
+- Choice: (a), with hard steals (the new note re-programs the voice with the firmware start order, no cross-fade). Sustain pedal: a note-off while down marks the voices held; pedal up releases them; `allNotesOff` clears the pedals and releases everything.
+- Evidence: standard polyphony practice; the firmware's own steal rule is not known.
+- Confidence: Low.
+- Status: `pickVoice`, `noteOff`, `// DECISION P8`. Tests: voices_steal_33rd_note_and_release_all, voices_sustain_holds_until_pedal_up.
+
+## P9: Muting at note end
+- Options: (a) each tick, read CR of every sounding voice; STOP0/STOP1 set (a one-shot reached END, O1) starts a 2 ms fade to volume 0, then the voice is stopped and freed; (b) cut at once; (c) rely on the sample ending in silence.
+- Choice: (a): a stopped voice keeps fetching and outputting its held sample (O7), so the player must mute it itself; the short fade avoids a click.
+- Evidence: O1, O7.
+- Confidence: Medium.
+- Status: `Voices::tick`, `// DECISION P9`. Test: voices_oneshot_end_mutes.

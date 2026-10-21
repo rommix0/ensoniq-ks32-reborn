@@ -37,7 +37,7 @@ target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp)
 
 # Pure player layer (no OS code). Later tasks add sources to this list.
 add_library(ens_player STATIC src/player/resampler.cpp src/player/json.cpp src/player/sample_map.cpp
-  src/player/effects.cpp)
+  src/player/effects.cpp src/player/voices.cpp)
 target_link_libraries(ens_player PUBLIC ens_common ens_ks32)
 
 # Trace format + runner. The parser and PCM compare are chip-free (reused by the MAME harness).
