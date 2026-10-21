@@ -369,8 +369,8 @@ Entry template:
 ## P2: Pitch (FC table, P formula, clamps)
 - Options: (a) FC table = `round(1024 * 2^(i/768))` for i in 0..767, with P = key*256 + zone.pitchWord (+ bend, P9), P clamped to [-0x4800, 0x5400], octave = floor(P / 3072), index = (P mod 3072) >> 2, FC = table << octave (or >> -octave), clamped to 0xFFFE; (b) copy the firmware table (0xC09F64) as data; (c) floating-point pitch.
 - Choice: (a), integer apart from building the table. 768 entries x 4 units cover one octave (3072 units per octave, 256 per semitone); P = 0 gives FC 0x400, one sample per frame. 0x5400 is seven octaves up (FC would reach 0x20000, clamped); -0x4800 is six octaves down (FC 0x10). 0xFFFE because FC bit 0 is not implemented, so the register reads back `fc & 0xFFFE`.
-- Evidence: formula round(1024*2^(i/768)); firmware table 0xC09F64 check pending (Task 2). FC step = FC >> 1 in 1/512-sample units (OTIS notes).
-- Confidence: Medium (formula, not yet compared with the firmware table).
+- Evidence: formula round(1024*2^(i/768)). Task 2 compared it with the firmware table: the 768 words at 0xC09F64 (0x400..0x7FE) equal round(1024*2^(i/768)) for every i; the largest distance from the unrounded value is 0.4995 and no entry is an exact .5, so (a) and (b) give identical tables and `std::lround` matches (`docs/rom-investigation/effect-params.md` section 1, `tools/extract_effect_params.py`). The firmware's P = key*256 + pitch word and the [-0x4800, 0x5400] clamp are from findings.md 2a. FC step = FC >> 1 in 1/512-sample units (OTIS notes).
+- Confidence: High for the table (bit-exact with the firmware); Medium for the octave shift and the 0xFFFE clamp.
 - Status: `makeFcTable`, `fcForPitch`, `// DECISION P2` in `src/player/voices.cpp`. Tests: voices_fc_table_and_clamps, voices_extreme_keys_and_bend_clamp, voices_note_on_programs_firmware_registers.
 
 ## P3: Voice bus
@@ -421,3 +421,26 @@ Entry template:
 - Evidence: the plan pitch formula; GM default bend range.
 - Confidence: Medium.
 - Status: `Voices::pitchOf`, `pitchBend`, `// DECISION P9`. Test: voices_extreme_keys_and_bend_clamp.
+
+## P11: Effect parameters (mix GPRs, output level, handler GPRs)
+- Options: (a) re-run the firmware's own effect set-up on each effect's default parameters (record bytes +6..+15 at 0xC1FB8A) and use the GPR values it writes; (b) take the parameter block of a particular factory sound; (c) hand-set mix levels measured on the chip core (dry 0 dB, wet about -6 dB, the brief's fallback); (d) only the mix pairs, leaving the other handler-written GPRs at the program record presets.
+- Choice: (a), from `docs/rom-investigation/data/esp/effect_defaults.json`, one entry per ESP program index. After loading the program records, the player writes every GPR in that entry. That covers the mix pairs 7C/7D (FX1), 7A/7B (FX2) and 76/77, the output level 7F, and the 6 to 18 coefficient GPRs per effect that the firmware's parameter handlers compute. The mix values are table 0xC0A72C entries, an equal-power pair `(round(32767*sin(n*pi/254)), the same at 127-n) << 8`. The FX1/FX2 index n comes from the effect's default parameters; the 76/77 index comes from $DE8A. Two ESP programs are shared by two effects each, and the JSON uses the lower effect: program 7 (effects 6, 7), program 9 (effects 9, 10).
+- Evidence: `docs/rom-investigation/effect-params.md` sections 2, 3, 5 and 6. Routine 0xC1CB76 writes the mix GPRs. Handlers via 0xC0FA70 and the effect init routines (record +0) write the rest. `tools/extract_effect_params.py` runs these routines unchanged in a 68000 interpreter. Factory sounds 2, 22, 25, 26 and 36 carry exactly the record defaults. The GPRs only the host supplies (7A-7D and 7F everywhere, 76/77 in programs 5 and 6, 86 in programs 5-7, 8F in program 6) are all among the firmware writes.
+- Hand-set inputs (**provisional**, logged in each `basis`):
+  - The block is the effect default, not a specific sound's parameters.
+  - Master volume $DD72 = 127, which gives 7F = 0x7FFF00.
+  - $DE8A = 0 for effects that never set it (only programs that do not read 76/77).
+  - Modulation sources are at rest.
+- Confidence: High for the tables and index rules. Medium-high for the default index. Medium for the handler values, since the interpreter was checked by hand on five handlers but not against hardware.
+- Status: data produced by Task 2. No mix level is hand-set, so the chip-core fallback was not used. Consumer: the player (Task 5).
+
+## P13: Output fade timing (GPR 7F)
+- Options: (a) the firmware's ramp: GPR 7F from 0 to the target in steps of 0x012F00 (111 verified host writes for target 0x7FFF00), paced by the ESP host protocol, about 6 frames per write, 666 frames (22.4 ms) in all; (b) 20 ms, 595 frames, one write per frame (the plan's placeholder); (c) the lower bound, one transfer per frame, 333 frames.
+- Choice: (a): `fade` in `effect_defaults.json` (`frames` 666, `writes` 111, `step` 012F00, `from` 000000, `to` 7FFF00). The player may step the level every frames/writes frames, or interpolate linearly over 666 frames. The firmware fades down before a program load: 110 writes of -0x012F00 from the current level to 0. Its mix ramps run while 7F = 0, so the player can set the mix GPRs at once.
+- Evidence: `docs/rom-investigation/effect-params.md` section 4:
+  - 0xC1CC1A..0xC1CC38 ramps up and 0xC1CC62 ramps down. Neither loop has a timer.
+  - Each write (0xC1CC80) is three host transfers: select $A0, read-back $80, park $C0.
+  - The ESP makes one transfer per sample, at END (E19 host part, E26).
+  - About 360 68000 cycles between a completed transfer and the next select write miss the PC < 0x28 window (15 us at 8 MHz ESP), so each transfer takes 2 frames for any 68000 clock from about 8 to 16 MHz.
+- Confidence: Low-medium. The step and count are exact; the frames per transfer are a cycle-count estimate (1 to 3 possible), and interrupts can only lengthen the ramp.
+- Status: data produced by Task 2. Consumer: the player (Task 5).
