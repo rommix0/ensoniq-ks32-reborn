@@ -41,8 +41,9 @@ int32_t ceilDiv(int32_t a, int32_t b) { return (a + b - 1) / b; }
 }  // namespace
 
 std::vector<uint16_t> makeFcTable() {
-    // DECISION P2: FC table = round(1024 * 2^(i/768)) for i in 0..767 (formula; the firmware
-    // table at 0xC09F64 is still to be compared). 768 entries x 4 units = one octave.
+    // DECISION P2: FC table = round(1024 * 2^(i/768)) for i in 0..767 (formula; identical to the
+    // firmware table at 0xC09F64 for all 768 entries, effect-params.md section 1). 768 entries x
+    // 4 units = one octave.
     std::vector<uint16_t> t(768);
     for (int i = 0; i < 768; ++i)
         t[static_cast<size_t>(i)] = static_cast<uint16_t>(std::lround(1024.0 * std::exp2(i / 768.0)));
