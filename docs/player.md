@@ -110,13 +110,13 @@ How it works:
 | Pitch bend range | +/-2 semitones | P9 | `src/player/voices.cpp` |
 | FC (pitch) table | formula | P2 | `makeFcTable()` |
 
-Further decisions: P1 (ESP slots per frame), P4 (filters wide open), P6 (velocity and CC 7 law), P7 (note end), P8 (stealing and retrigger), P12 (effect record write order), P13 (22 ms output fade), P14 (ESP boot), P15 (SMF parsing), P16 (ESP output DC residue), P17 (effect changes while a load runs), P18 (render warm-up). All are in `docs/decisions.md` with their options and evidence.
+Further decisions: P1 (ESP slots per frame), P4 (filters wide open), P6 (velocity and CC 7 law), P7 (note end), P8 (stealing and retrigger), P12 (effect record write order), P13 (22 ms output fade), P14 (ESP boot), P15 (SMF parsing), P16 (ESP output DC residue; effect 10 cuts held notes, open), P17 (effect changes while a load runs), P18 (render warm-up). All are in `docs/decisions.md` with their options and evidence.
 
 The FC table is always computed by `makeFcTable()`. The Task 2 survey compared the firmware's table (at 0xC09F64) with the formula and found them identical, so no separate table file is read.
 
 ### Effects
 
-`--effect` is an ESP program index from 0 to 10. Several firmware effects share one program: the mapping from firmware effects to programs is in `docs/rom-investigation/effect-params.md`. The effect names are unknown, so the numbers are the only handle. The mix levels come from the firmware's own default parameters for each program (P11); they are not tuned by ear. Program 1 is the default.
+`--effect` is an ESP program index from 0 to 10. Several firmware effects share one program: the mapping from firmware effects to programs is in `docs/rom-investigation/effect-params.md`. The effect names are unknown, so the numbers are the only handle. The mix levels come from the firmware's own default parameters for each program (P11); they are not tuned by ear. Program 1 is the default. Known problem: program 10 goes silent about 1.5 s after it is loaded (held notes fade out, and later notes on buses 1 and 2 are silent until the next effect load), because its delay writes overwrite its lookup tables until the ESP's delay pointer has entered the program's short delay ring (P16, open).
 
 ## MIDI map (P10)
 

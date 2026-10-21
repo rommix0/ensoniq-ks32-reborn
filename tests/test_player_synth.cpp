@@ -104,6 +104,21 @@ double acRms(const std::vector<int16_t>& pcm, size_t first, size_t n) {
     return worst;
 }
 
+// The four KS-32 ROMs from ENS_ROM_DIR as the two wave banks; false (test skipped) if absent.
+bool loadRomBanks(std::vector<uint16_t>& b0, std::vector<uint16_t>& b1) {
+    const std::string dir = ENS_ROM_DIR;
+    std::vector<uint8_t> u25, u26, rom2, rom3;
+    if (!readBytes(dir + "/sq1-u25.bin", u25) || !readBytes(dir + "/sq1-u26.bin", u26) ||
+        !readBytes(dir + "/rom2.u39", rom2) || !readBytes(dir + "/rom3.u38", rom3)) {
+        std::printf("  skipped: ROMs not found in %s\n", dir.c_str());
+        return false;
+    }
+    std::string err;
+    const bool ok = ens::ks32::buildWaveBanks(u25, u26, rom2, rom3, b0, b1, err);
+    if (!ok) std::printf("  buildWaveBanks: %s\n", err.c_str());
+    return ok;
+}
+
 // Sequencer log lines that report a finished effect load, in order.
 std::vector<std::string> loadedLines(const std::vector<std::string>& log) {
     std::vector<std::string> out;
@@ -378,5 +393,37 @@ TEST(synth_effect_changes_coalesce) {
         for (size_t i = 0; i < p3->instr.size(); ++i)
             same = same && s.board().esp().instr(static_cast<int>(i)) == p3->instr[i];
         CHECK(same);
+    }
+}
+
+TEST(synth_rom_held_note_sustains_on_every_program) {
+    std::vector<uint16_t> b0, b1;
+    if (!loadRomBanks(b0, b1)) return;
+    SampleMap map;
+    EffectLibrary fx;
+    std::string err;
+    CHECK(parseSampleMap(readFile(ENS_DATA_DIR "/sample_map.json"), map, err));
+    CHECK(loadEffectLibrary(fx));
+    const size_t win = kRate / 10;
+    for (int prog = 0; prog <= 10; ++prog) {
+        SynthConfig cfg;  // wave 0:0 (looped), bus 1 (FX1 send), velocity 100
+        cfg.effect = prog;
+        Synth s(b0, b1, map, fx, makeFcTable(), cfg);
+        CHECK(renderUntilReady(s, 4000) <= 4000);
+        s.midi(0x90, 60, 100);
+        const std::vector<int16_t> pcm = renderFrames(s, kRate * 27 / 10);
+        const double at075 = acRms(pcm, kRate * 3 / 4 - win / 2, win);
+        const double at25 = acRms(pcm, kRate * 5 / 2 - win / 2, win);
+        std::printf("  program %d: AC RMS %.1f at 0.75 s, %.1f at 2.5 s\n", prog, at075, at25);
+        CHECK(at075 > 500);
+        if (prog != 10) {
+            CHECK(at25 >= 0.1 * at075);
+        } else {
+            // Known failure, pinned (docs/decisions.md P16 "Open, program 10"): the ESP starts
+            // program 10 with DBASE far above its 0x1F7D-word delay ring, so for about 2 s the
+            // delay writes land outside the ring and overwrite the DRAM lookup tables at
+            // 0x1F7E..0x1FFF; the wet path then stays nearly silent. A fix flips this check.
+            CHECK(at25 < 0.1 * at075);
+        }
     }
 }
