@@ -228,10 +228,22 @@ std::unique_ptr<Synth> makeSynth(const Assets& a, const Options& o) {
 
 uint64_t secondsToFrames(double s) { return static_cast<uint64_t>(std::llround(s * kChipRate)); }
 
-// Applies every event at its frame and renders `tailFrames` after the last one. Events must be
-// sorted by frame. Stereo interleaved int16 at the chip rate. Appends the synth log to `log`.
+// DECISION P18: runs the synth into a throwaway buffer until the ESP boot and the first effect
+// load (with its fade-in, about 2100 frames) are done, so that frame 0 of the WAV is MIDI time 0
+// with the effect fully faded in. Capped at 1 s of frames.
+void warmUp(Synth& synth) {
+    const uint64_t cap = secondsToFrames(1.0);
+    int16_t lr[2];
+    for (uint64_t n = 0; n < cap && !synth.ready(); ++n) synth.render(lr, 1);
+    if (!synth.ready()) fail("the ESP boot and effect load did not finish within 1 s");
+}
+
+// Warms the synth up (warmUp), then applies every event at its frame and renders `tailFrames`
+// after the last one. Events must be sorted by frame. Stereo interleaved int16 at the chip rate.
+// Appends the synth log to `log`.
 std::vector<int16_t> renderEvents(Synth& synth, const std::vector<MidiEvent>& events, uint64_t tailFrames,
                                   std::vector<std::string>& log) {
+    warmUp(synth);
     const uint64_t last = events.empty() ? 0 : events.back().frame;
     const uint64_t total = last + tailFrames;
     std::vector<int16_t> pcm(static_cast<size_t>(total) * 2);
@@ -359,8 +371,8 @@ int listWaves(const Options& o) {
     return 0;
 }
 
-// Each zone's rounded root key for 1 s, with 0.5 s gaps, after a 0.25 s lead-in. The ESP boot and
-// the effect load (with its fade-in) take about 2100 chip frames, 0.07 s.
+// Each zone's rounded root key for 1 s, with 0.5 s gaps, after a 0.25 s lead-in (renderEvents has
+// already finished the ESP boot and the effect load before frame 0).
 int audition(const Options& o) {
     if (o.positional.size() != 1) failUsage("--audition needs <out.wav>");
     Options opt = o;

@@ -35,7 +35,7 @@ Reads a Standard MIDI File (format 0 or 1, PPQ timing), plays it through the chi
 It prints one summary line to stdout, then the synth's log lines indented by two spaces:
 
 ```
-frames 290178  duration 9.750 s  peak 26861  clips 0
+frames 290178  duration 9.750 s  peak 26853  clips 0
   wave 0:0
   esp booted
   effect 1 loaded (id 01)
@@ -46,7 +46,7 @@ frames 290178  duration 9.750 s  peak 26861  clips 0
 
 The render is held in memory, so its length (last event plus tail) is capped at 4 hours; a longer file is rejected with `error: '<file>': render length N s is over the 4 h limit`.
 
-Events in the first 0.07 s (about 2100 chip frames) fall during the ESP boot and the first effect load, before the effect output is faded in, and are mostly inaudible. `tests/data/player_smoke.mid` starts its first note at 0.75 s for this reason.
+Before frame 0 of the WAV, the synth is run (into a buffer that is thrown away) until the ESP boot and the first effect load have finished and the effect output is faded in: about 2100 chip frames, 0.07 s, capped at 1 s (decision P18). So WAV time equals MIDI time, and a note at tick 0 sounds at full level from the first frame. The log lines of the boot and the load are still printed.
 
 ### waves
 
@@ -63,7 +63,7 @@ Events in the first 0.07 s (about 2100 chip frames) fall during the ESP boot and
 
 `--set internal` or `--set rom3` lists one set. Listing needs only the data directory, not the ROMs.
 
-`waves --audition <set>:<n> <out.wav>` renders one wave: each zone's root key (rounded), 1 s per note, 0.5 s apart, after a 0.25 s lead-in that covers the ESP boot and effect load. A tail of up to 1 s follows (`--tail`, capped at 1). It uses the same render path and options as `render` and prints the same summary line. If a zone's root key lies outside the zone's own key range, the key is played by a neighbouring zone, and a line says so.
+`waves --audition <set>:<n> <out.wav>` renders one wave: each zone's root key (rounded), 1 s per note, 0.5 s apart, after a 0.25 s lead-in (the ESP boot and effect load are done before frame 0, as for `render`). A tail of up to 1 s follows (`--tail`, capped at 1). It uses the same render path and options as `render` and prints the same summary line. If a zone's root key lies outside the zone's own key range, the key is played by a neighbouring zone, and a line says so.
 
 ### play
 
@@ -110,7 +110,7 @@ How it works:
 | Pitch bend range | +/-2 semitones | P9 | `src/player/voices.cpp` |
 | FC (pitch) table | formula | P2 | `makeFcTable()` |
 
-Further decisions: P1 (ESP slots per frame), P4 (filters wide open), P6 (velocity and CC 7 law), P7 (note end), P8 (stealing and retrigger), P12 (effect record write order), P13 (22 ms output fade), P14 (ESP boot), P15 (SMF parsing), P16 (ESP output DC residue). All are in `docs/decisions.md` with their options and evidence.
+Further decisions: P1 (ESP slots per frame), P4 (filters wide open), P6 (velocity and CC 7 law), P7 (note end), P8 (stealing and retrigger), P12 (effect record write order), P13 (22 ms output fade), P14 (ESP boot), P15 (SMF parsing), P16 (ESP output DC residue), P17 (effect changes while a load runs), P18 (render warm-up). All are in `docs/decisions.md` with their options and evidence.
 
 The FC table is always computed by `makeFcTable()`. The Task 2 survey compared the firmware's table (at 0xC09F64) with the formula and found them identical, so no separate table file is read.
 
@@ -130,7 +130,7 @@ Omni: every channel plays, and the channel only keeps its own sustain, pitch ben
 | CC 0 | 0 = internal set, 1 = expansion ROM 3; takes effect at the next program change |
 | CC 7 | Channel volume (P6) |
 | CC 64 | Sustain pedal (64 and above = down) |
-| CC 102 | Effect 0 to 10: queues an ESP effect load (fade out, halt, load, resume); other values are ignored and logged |
+| CC 102 | Effect 0 to 10: queues an ESP effect load (fade out, halt, load, resume); other values are ignored and logged. While a load runs, a further CC 102 waits, and a later one replaces the waiting one, so a fast knob sweep loads only the first and the last value (decision P17) |
 | CC 103 | Bus 0 to 2; others are ignored and logged |
 | CC 120 | All sound off |
 | CC 123 | All notes off |

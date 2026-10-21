@@ -487,3 +487,10 @@ Entry template:
 - Evidence: the final review's finding (CC 102 loads never coalesced, about 68 ms and 0.5 MB each); the firmware's own load routine 0xC1C8C0 always runs whole (effect-params.md section 2).
 - Confidence: Medium (a player convention; the firmware's handling of fast effect changes is not known).
 - Status: `// DECISION P17` in `Synth::loadEffect` and the `pending_` member (`src/player/synth.{h,cpp}`); `Synth::ready()` is false while a load runs or waits. Real-time contract in `synth.h`: `render()` allocates when it queues the pending load, once per effect change. Test: synth_effect_changes_coalesce (ten CC 102 back to back load only the first and the last, in about two loads' time: 4140 frames against 2070 for one; the ESP then holds the last program's instructions).
+
+## P18: Offline render warm-up
+- Options: (a) `render` and `waves --audition` run the synth into a throwaway buffer until `Synth::ready()` (ESP boot and first effect load finished, output faded in) before WAV frame 0, capped at 1 s of frames, an error if not ready by then; (b) start the WAV at power-on (the previous behaviour: a tick-0 note was silent for about 40 ms and then faded in with the effect; the first 2100 frames were boot and load); (c) delay the MIDI events by a fixed lead-in.
+- Choice: (a): WAV time equals MIDI time and a note at tick 0 is at full level from its first frame. The warm-up takes 2122 frames with the default effect (boot 718, load about 1400) and its log lines (`esp booted`, `effect N loaded`) are still printed. Live `play` is not changed (its stream starts at power-on; `--demo` keeps its 0.1 s lead-in).
+- Evidence: the final review's finding; test synth_ready_after_boot_and_load (ready after 2122 frames, a note started then is at its sustained level once its 5 ms attack is over).
+- Confidence: High.
+- Status: `// DECISION P18` at `warmUp` in `tools/ks32play/main.cpp`, called by `renderEvents`. The cross-toolchain identity hash in `docs/verification-plan3.md` was re-taken after this change.
