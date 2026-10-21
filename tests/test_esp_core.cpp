@@ -542,3 +542,81 @@ TEST(esp_mac_saturates_in_core) {
     CHECK_EQ(e.gpr(6), 0x7FFFFFu);
     CHECK_EQ(e.gpr(7), 0xFFFFFFu);
 }
+
+TEST(esp_advance_running_matches_runSample) {
+    // DECISION E30: while running, advance(89) is one runSample() (program fits the frame).
+    FakeBus busA, busB;
+    Esp a(busA), b(busB);
+    for (Esp* e : {&a, &b}) {
+        e->setInstr(0, alu(Op::MOV, 235, 241));  // SER0L > SER3L
+        e->setInstr(1, alu(Op::MOV, 234, 240));  // SER0R > SER3R
+        e->setInstr(2, nop());
+        e->setInstr(3, nop());
+        e->setInstr(4, nop());
+        e->setInstr(5, end());
+    }
+    for (int n = 0; n < 4; ++n) {
+        const int16_t inL = int16_t(0x1111 * (n + 1)), inR = int16_t(-0x0777 * (n + 1));
+        a.setSerialIn(0, inL, inR);
+        b.setSerialIn(0, inL, inR);
+        CHECK_EQ(a.runSample(), 6);
+        CHECK_EQ(b.advance(89), 6);
+        int16_t al = 0, ar = 0, bl = 0, br = 0;
+        a.serialOut(3, al, ar);
+        b.serialOut(3, bl, br);
+        CHECK_EQ(al, bl);
+        CHECK_EQ(ar, br);
+        CHECK_EQ(bl, inL);  // the program really moved the input to SER3
+    }
+}
+
+TEST(esp_advance_halted_runs_idle_slots) {
+    // DECISION E30: halted, advance(slots) is `slots` idleStep() calls and returns 0.
+    FakeBus bus;
+    Esp e(bus);
+    e.setGpr(244, 0xFF);      // MEMSIZ
+    e.setGpr(245, 0x00FF00);  // DLENGTH: 256 RAM-clear writes
+    e.setHaltPin(true);
+    e.hostWrite(0x1F, 0x02);  // halt now (E24)
+    CHECK(e.halted());
+    e.hostWrite(0x12, 0x03);
+    e.hostWrite(0x12, 0x02);  // start the clear (E25)
+    CHECK_EQ(e.hostRead(0x12) & 2, 2);
+    CHECK_EQ(e.advance(89), 0);
+    CHECK_EQ(e.hostRead(0x12) & 2, 2);  // 89 of 256 writes
+    CHECK_EQ(e.advance(89), 0);
+    CHECK_EQ(e.hostRead(0x12) & 2, 2);  // 178 of 256
+    CHECK_EQ(e.advance(89), 0);
+    CHECK_EQ(e.hostRead(0x12) & 2, 0);  // 267 >= 256: done
+}
+
+TEST(esp_advance_halt_at_end_idles_rest_of_frame) {
+    // DECISION E30: an END that halts the chip leaves slots - steps idle periods in the frame.
+    // Refresh is enabled, so each idle period decrements DBASE once (E25/E28). The END itself
+    // decrements it once too (E19), giving 10-word program: 1 (END) + 79 (89 - 10) = 80 units.
+    // DLENGTH 0x00FF00 with MEMSIZ 0xFF is 256 units, so DBASE wraps per E7.
+    FakeBus bus;
+    Esp e(bus);
+    e.setGpr(244, 0xFF);
+    e.setGpr(245, 0x00FF00);
+    for (int i = 0; i < 9; ++i) e.setInstr(i, nop());
+    e.setInstr(9, end());
+    const uint32_t before = e.agen().dbase;
+    e.setHaltPin(true);
+    CHECK_EQ(e.advance(89), 10);
+    CHECK(e.halted());
+    const uint32_t expect = (before - 80u * 0x100u) & 0xFFFFu;
+    CHECK_EQ(e.agen().dbase, expect);
+    // The next frame is fully halted: 89 more refresh units.
+    CHECK_EQ(e.advance(89), 0);
+    CHECK_EQ(e.agen().dbase, (expect - 89u * 0x100u) & 0xFFFFu);
+}
+
+TEST(esp_advance_overlong_program_runs_to_end) {
+    // DECISION P1: a program longer than the slot budget still runs to END.
+    FakeBus bus;
+    Esp e(bus);
+    for (int i = 0; i < 119; ++i) e.setInstr(i, nop());
+    e.setInstr(119, end());
+    CHECK_EQ(e.advance(89), 120);
+}

@@ -29,6 +29,11 @@ public:
     explicit Esp(EspBus& bus);
     void reset();
     int runSample();  // executes from PC until END (E11 cap); returns steps run
+    // DECISION E30: one serial frame of `slots` instruction periods (KS-32: 89, P1). Running:
+    // runSample(), then, if that END halted the chip, idleStep() for the rest of the frame
+    // (max(0, slots - steps) times). Halted: idleStep() `slots` times. Returns the instructions
+    // executed (0 while halted). A program longer than `slots` still runs to END (P1).
+    int advance(int slots);
     void setSerialIn(int port, int16_t l, int16_t r);  // ports 0..3, latched into SERnL/R
     void serialOut(int port, int16_t& l, int16_t& r) const;
     bool halted() const { return halted_; }

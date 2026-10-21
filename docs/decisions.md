@@ -336,10 +336,10 @@ Entry template:
 
 ## E30: Sample-rate model and halted time
 - Options: (a) one `Esp::runSample()` per OTIS frame runs the program to END with no instruction budget; halted time advances only through explicit `idleStep()` calls; (b) a slots-per-sample budget (about one instruction per 125 ns at 8 MHz) with an advance API that interleaves running and halted time.
-- Choice: (a). This equals hardware only when the program length is at most the ESP's slots per frame (KS-32: 89 words = 89 slots at 8 MHz, `docs/rom-investigation/findings.md` section B). While halted nothing advances (host requests, RAM clear, refresh) unless the caller calls `idleStep()`, about once per 300 ns (one instruction period), see `src/esp/esp.h`. A slots-per-sample budget and advance API is deferred to the start of Plan 3 (ruling R17).
-- Evidence: findings.md section B (89-word program, 89 slots per frame at 8 MHz); decisions E11, E28; ESP notes part 2 section 5.
+- Choice: (b), implemented as `Esp::advance(int slots)` (ruling R17), with (a) kept as `runSample()`/`idleStep()`, whose behaviour is unchanged. `advance` spends one serial frame of `slots` instruction periods. Running: it calls `runSample()`; if that END halted the chip (HALT pin high) it calls `idleStep()` for the rest of the frame (`max(0, slots - steps)` times); otherwise the frame is spent. Halted: it calls `idleStep()` `slots` times. It returns the instructions executed (0 while halted). Overrun: a program longer than `slots` still runs to END (P1); the over-budget instructions take no extra time from a following frame, so such a program is not hardware-faithful, but the KS-32 programs are at most 89 words (`docs/rom-investigation/findings.md` section B). The board calls `advance(89)` once per frame, so a halted ESP progresses with emulated time (host requests, RAM clear, refresh).
+- Evidence: findings.md section B (89-word program, 89 slots per frame at 8 MHz); decisions E11, E25, E28; ESP notes part 2 section 5.
 - Confidence: Medium.
-- Status: Implemented in Esp::runSample and Esp::idleStep, `// DECISION E30` markers in `src/esp/esp.h` and `src/esp/esp.cpp`. Tests: those named under E11 and E28.
+- Status: Implemented in Esp::advance, `// DECISION E30` markers in `src/esp/esp.h` and `src/esp/esp.cpp`. Tests: esp_advance_running_matches_runSample, esp_advance_halted_runs_idle_slots, esp_advance_halt_at_end_idles_rest_of_frame, esp_advance_overlong_program_runs_to_end; `runSample`/`idleStep` behaviour is covered by the tests named under E11 and E28.
 
 ## Trace runner
 
@@ -356,3 +356,12 @@ Entry template:
 - Evidence: ESP notes part 2 section 5.1.2, 5.4.1; decisions E24, E25, E28; controller rulings R2/R15.
 - Confidence: Medium.
 - Status: Implemented in TraceRunner (Task 11), `// DECISION TR2` in `src/trace/trace.cpp`. Tests: trace_esp_passthrough, trace_espidle_finishes_ram_clear, trace_halted_esp_outputs_nothing_and_resumes. The MAME harness maps these conventions onto MAME in `tools/mame_ref/main.cpp` (`// DECISION TR2 (MAME mapping)`, Task 12): the `$1F` write is passed to MAME's host_w, and the idle steps have no MAME counterpart; see `docs/mame-ref.md`.
+
+## Player
+
+## P1: ESP slots per frame
+- Options: (a) 89 instruction periods per frame (8 MHz ESP, 3 clocks per instruction, one 29.76 kHz frame; every KS-32 ESP program is exactly 89 words); (b) 160 slots (the full program memory); (c) run-to-END only (no budget, choice (a) of E30).
+- Choice: (a): the board calls `esp.advance(89)` once per frame. A program longer than the budget still runs to END (no mid-program cut-off, no carry-over into the next frame); the only effect of the budget is the number of idle periods after a halting END.
+- Evidence: `docs/rom-investigation/findings.md` section B (89-word ESP program, 89 slots per frame at 8 MHz); decision E30.
+- Confidence: Medium.
+- Status: Used by `Esp::advance` callers (the KS-32 board, later Plan 3 tasks). Test: esp_advance_overlong_program_runs_to_end.
