@@ -17,6 +17,7 @@ set(ENS_TEST_SOURCES
   test_player_resampler.cpp
   test_player_data.cpp
   test_player_voices.cpp
+  test_player_esp_loader.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})
