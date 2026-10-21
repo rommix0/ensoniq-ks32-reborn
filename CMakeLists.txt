@@ -29,6 +29,10 @@ add_library(ens_esp STATIC src/esp/esp_alu.cpp src/esp/esp_mac.cpp src/esp/esp_a
   src/esp/esp_isa.cpp src/esp/esp.cpp)
 target_link_libraries(ens_esp PUBLIC ens_common)
 
+# KS-32 board: wave ROM layout, OTIS + ESP + delay DRAM and the frame routing.
+add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp)
+target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp)
+
 # Trace format + runner. The parser and PCM compare are chip-free (reused by the MAME harness).
 add_library(ens_trace_parse STATIC src/trace/trace_parse.cpp)
 target_include_directories(ens_trace_parse PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
