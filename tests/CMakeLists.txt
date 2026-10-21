@@ -18,6 +18,8 @@ set(ENS_TEST_SOURCES
   test_player_data.cpp
   test_player_voices.cpp
   test_player_esp_loader.cpp
+  test_player_synth.cpp
+  test_player_smf.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})

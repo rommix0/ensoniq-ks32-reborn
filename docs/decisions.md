@@ -378,7 +378,7 @@ Entry template:
 - Choice: (a). `VoiceConfig::bus` (0..2) and `Voices::setBus`; the CR channel-address bits [9:8] get bus + 1, so bus 1 is `runFrame().ch[2]`. CH0 is not used (the firmware uses it only for the boot clock test).
 - Evidence: decision TR1; findings.md section C (voices start with CA 1, 2 or 3).
 - Confidence: Medium.
-- Status: `// DECISION P3` in `src/player/voices.h` and `Voices::start`/`setBus`. Tests: voices_note_on_programs_firmware_registers (CR 0x0E0C, CA = 2), voices_attack_release_reaches_exact_silence (reads ch[2]).
+- Status: `// DECISION P3` in `src/player/voices.h` and `Voices::start`/`setBus`. Tests: voices_note_on_programs_firmware_registers (CR 0x0E0C, CA = 2), voices_attack_release_reaches_exact_silence (reads ch[2]). The bus is also switched at run time by CC103 in `Synth::midi` (0..2, others ignored and logged; test synth_controllers_and_messages).
 
 ## P4: Filter setup
 - Options: (a) CR LP3 = LP4 = 1, K1 = K2 = 0xFFF0 (filter wide open) and the filter storage registers (page|0x20, regs 1-6) zeroed at every note start; (b) leave the filter state from the previous note; (c) a per-wave cutoff.
@@ -421,6 +421,13 @@ Entry template:
 - Evidence: the plan pitch formula; GM default bend range.
 - Confidence: Medium.
 - Status: `Voices::pitchOf`, `pitchBend`, `// DECISION P9`. Test: voices_extreme_keys_and_bend_clamp.
+
+## P10: MIDI map
+- Options: (a) omni (every channel plays, the channel only keeps its own sustain, bend and volume): note on/off (velocity-0 note-on = note off), pitch bend (d1 | d2 << 7), program change = wave number in the bank set by CC0 (0 internal, 1 rom3; stored, applied at the next program change), CC7 volume, CC64 sustain (>= 64 down), CC102 effect 0..10 (queues an ESP effect load; other values ignored and logged), CC103 bus 0..2 (others ignored and logged), CC120 all sound off, CC123 all notes off; all other messages ignored; (b) General MIDI program numbers mapped to waves; (c) one MIDI channel per bus.
+- Choice: (a). The KS-32 sounds are not a GM set, so program change addresses the wave table directly. A program change to a wave with no zones is logged ("wave S:N has no zones; ignored") and the previous wave stays selected.
+- Evidence: the plan (P10 row); `docs/rom-investigation/data/sample_map.json` (waves with zones, sets 0 and 1).
+- Confidence: Medium (a test-player convention, not firmware behaviour).
+- Status: `// DECISION P10` in `Synth::midi` (`src/player/synth.cpp`). Tests: synth_velocity0_is_note_off, synth_program_change_missing_wave_ignored, synth_controllers_and_messages.
 
 ## P11: Effect parameters (mix GPRs, output level, handler GPRs)
 - Options: (a) re-run the firmware's own effect set-up on each effect's default parameters (record bytes +6..+15 at 0xC1FB8A) and use the GPR values it writes; (b) take the parameter block of a particular factory sound; (c) hand-set mix levels measured on the chip core (dry 0 dB, wet about -6 dB, the brief's fallback); (d) only the mix pairs, leaving the other handler-written GPRs at the program record presets.
