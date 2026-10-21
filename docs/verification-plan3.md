@@ -71,7 +71,7 @@ Flags (clips, or a raw tail over 10 s):
   not sound: the AC tail ends 0.1 s after the note-off, and the output sits on a constant
   -145.6 LSB (left, -47 dBFS) and -66.6 LSB (right, -54 dBFS) with AC RMS 0.5 LSB. The DC arrives
   over about 2 s after the note-off (seconds 5 to 7 of the render) and then does not change. It is
-  larger than the -3..-18 LSB that decision P16 describes for programs 0 to 9, and above the
+  larger than the 0..-23 LSB that effects 0 to 9 settle on in this sweep (P16; -3..-18 LSB on the Task 5 decay-test stimulus), and above the
   |DC| <= 32 bound the decay tests use. The floor-truncation explanation does not cover it. Effect
   10 also has the lowest peak (about 8800), and Task 5 saw it output sound with no input; P16 lists
   program 10 as an open issue.
