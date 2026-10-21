@@ -2,10 +2,12 @@
 //   ks32play render <in.mid> <out.wav> [--resampled <out2.wav>] [--rate <hz>] [--tail <s>] [common]
 //   ks32play waves [--set internal|rom3]
 //   ks32play waves --audition <set>:<n> <out.wav> [common]
-// The only layer with file I/O. Exit 0 on success, 2 on any error (one "error: ..." line on stderr).
-// Organisation for the live `play` command (Task 10): parseOptions() -> loadAssets() -> makeSynth(),
-// then one cmd* function per command.
+//   ks32play play [--midi <index>] [--list] [--demo] [common]
+// The only layer with file I/O and OS calls. Exit 0 on success, 2 on any error (one "error: ..."
+// line on stderr). parseOptions() -> loadAssets() -> makeSynth(), then one cmd* function per command.
+// Live play (WinMM MIDI in, WASAPI out) is Windows-only: midi_in_win.*, audio_out_wasapi.*.
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -27,18 +29,33 @@
 #include "player/voices.h"
 #include "player/wav.h"
 
+#ifdef _WIN32
+#include "audio_out_wasapi.h"
+#include "midi_in_win.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <mutex>
+#endif
+
 using namespace ens::player;
 
 namespace {
 
 constexpr double kChipRate = 30476180.0 / 1024.0;  // exact chip frame rate (Hz)
 
-// A command-line error: reported as "error: <msg>", exit code 2.
+// A command-line error: reported as "error: <msg>" (then the usage text if `usage`), exit code 2.
 struct Failure {
     std::string msg;
+    bool usage = false;
 };
 
-[[noreturn]] void fail(const std::string& msg) { throw Failure{msg}; }
+[[noreturn]] void fail(const std::string& msg) { throw Failure{msg, false}; }
+[[noreturn]] void failUsage(const std::string& msg) { throw Failure{msg, true}; }
 
 struct Options {
     std::vector<std::string> positional;
@@ -54,6 +71,10 @@ struct Options {
     std::string setName;    // waves --set
     bool audition = false;  // waves --audition
     int auditionSet = 0, auditionWave = 0;
+    int midi = 0;          // play --midi
+    bool midiSet = false;
+    bool list = false;     // play --list
+    bool demo = false;     // play --demo
 };
 
 bool parseInt(const std::string& s, int lo, int hi, int& out) {
@@ -105,6 +126,11 @@ Options parseOptions(int argc, char** argv, int first) {
             o.positional.push_back(a);
             continue;
         }
+        if (a == "--list" || a == "--demo") {  // the only options without a value
+            if (a == "--list") o.list = true;
+            else o.demo = true;
+            continue;
+        }
         if (i + 1 >= argc) fail("option " + a + " needs a value");
         const std::string v = argv[++i];
         bool ok = true;
@@ -117,6 +143,10 @@ Options parseOptions(int argc, char** argv, int first) {
         else if (a == "--resampled") o.resampled = v;
         else if (a == "--rate") ok = parseInt(v, 8000, 384000, o.rate);
         else if (a == "--tail") ok = parseDouble(v, 0.0, 600.0, o.tail);
+        else if (a == "--midi") {
+            ok = parseInt(v, 0, 9999, o.midi);
+            o.midiSet = true;
+        }
         else if (a == "--set") {
             ok = (v == "internal" || v == "rom3");
             o.setName = v;
@@ -276,13 +306,22 @@ int renderAndWrite(const Options& o, const std::vector<MidiEvent>& events, uint6
 // ---- commands ---------------------------------------------------------------------------------
 
 int cmdRender(const Options& o) {
-    if (o.positional.size() != 2) fail("render needs <in.mid> <out.wav>");
+    if (o.positional.size() != 2) failUsage("render needs <in.mid> <out.wav>");
     const std::string& in = o.positional[0];
     const std::vector<uint8_t> file = readOrFail(in, "MIDI file");
     std::vector<MidiEvent> events;
     std::string err;
     if (!parseSmf(file, events, err)) fail("'" + in + "': " + err);
-    return renderAndWrite(o, events, secondsToFrames(o.tail), o.positional[1]);
+    // A hostile or broken SMF can put events days apart; the whole render is held in memory.
+    const uint64_t cap = secondsToFrames(4 * 3600.0);
+    const uint64_t last = events.empty() ? 0 : events.back().frame;
+    const uint64_t tail = secondsToFrames(o.tail);
+    if (last > cap || last + tail > cap) {
+        char len[32];
+        std::snprintf(len, sizeof len, "%.0f", static_cast<double>(last + tail) / kChipRate);
+        fail("'" + in + "': render length " + len + " s is over the 4 h limit");
+    }
+    return renderAndWrite(o, events, tail, o.positional[1]);
 }
 
 // Root key of a zone: pitch word = -256 * root key (findings: root key = -w / 256).
@@ -323,7 +362,7 @@ int listWaves(const Options& o) {
 // Each zone's rounded root key for 1 s, with 0.5 s gaps, after a 0.25 s lead-in. The ESP boot and
 // the effect load (with its fade-in) take about 2100 chip frames, 0.07 s.
 int audition(const Options& o) {
-    if (o.positional.size() != 1) fail("--audition needs <out.wav>");
+    if (o.positional.size() != 1) failUsage("--audition needs <out.wav>");
     Options opt = o;
     opt.waveSet = o.auditionSet;
     opt.wave = o.auditionWave;
@@ -349,16 +388,273 @@ int audition(const Options& o) {
 
 int cmdWaves(const Options& o) {
     if (o.audition) return audition(o);
-    if (!o.positional.empty()) fail("waves takes no positional arguments (did you mean --audition?)");
+    if (!o.positional.empty()) failUsage("waves takes no positional arguments (did you mean --audition?)");
     return listWaves(o);
 }
 
-void usage() {
-    std::fprintf(stderr,
+// ---- live play (Windows) ------------------------------------------------------------------------
+
+#ifdef _WIN32
+
+// Synth log lines from the audio thread, printed by the main thread.
+class LogQueue {
+public:
+    void push(std::vector<std::string>& lines) {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (std::string& l : lines) lines_.push_back(std::move(l));
+    }
+    std::vector<std::string> take() {
+        std::lock_guard<std::mutex> lock(mu_);
+        std::vector<std::string> out;
+        out.swap(lines_);
+        return out;
+    }
+
+private:
+    std::mutex mu_;
+    std::vector<std::string> lines_;
+};
+
+// --demo: C E G C' G E ... at 8 notes/s for 4 s after a 0.1 s lead-in (past the ESP boot and the
+// first effect load), each note held 0.1 s; the run ends 1 s after the last note off.
+std::vector<MidiEvent> demoEvents() {
+    static const uint8_t kNotes[] = {60, 64, 67, 72, 67, 64};
+    std::vector<MidiEvent> ev;
+    for (int k = 0; k < 32; ++k) {
+        const uint64_t t = secondsToFrames(0.1 + k * 0.125);
+        const uint8_t key = kNotes[k % 6];
+        ev.push_back({t, 0x90, key, 100});
+        ev.push_back({t + secondsToFrames(0.1), 0x80, key, 0});
+    }
+    return ev;
+}
+
+// Everything the audio thread touches. render() runs on the WASAPI thread: it applies the queued
+// MIDI (or the demo events due), renders chip frames in blocks of up to 64 through the resampler
+// until the device's request is covered, and copies the synth's L/R to the first two channels.
+struct LiveEngine {
+    Synth& synth;
+    LogQueue& log;
+    MidiIn* midi = nullptr;                        // live mode
+    const std::vector<MidiEvent>* demo = nullptr;  // demo mode
+
+    std::unique_ptr<Resampler> rs;  // created once the device rate is known, then `ready` is set
+    std::atomic<bool> ready{false};
+    std::atomic<bool> finished{false};  // demo: the sequence and its tail are rendered
+    std::vector<float> fifo;            // resampled L/R not yet sent to the device
+    uint64_t chipFrame = 0;
+    uint64_t demoEnd = 0;
+    size_t demoNext = 0;
+    int16_t block[64 * 2] = {};
+
+    LiveEngine(Synth& s, LogQueue& l) : synth(s), log(l) {}
+
+    void render(float* out, uint32_t frames, uint32_t channels) {
+        std::fill(out, out + static_cast<size_t>(frames) * channels, 0.0f);
+        if (!ready.load(std::memory_order_acquire)) return;
+        uint32_t m = 0;
+        if (midi)
+            while (midi->poll(m))
+                synth.midi(static_cast<uint8_t>(m), static_cast<uint8_t>(m >> 8), static_cast<uint8_t>(m >> 16));
+        while (fifo.size() / 2 < frames) {
+            int n = 64;
+            if (demo) {
+                for (; demoNext < demo->size() && (*demo)[demoNext].frame <= chipFrame; ++demoNext) {
+                    const MidiEvent& e = (*demo)[demoNext];
+                    synth.midi(e.status, e.d1, e.d2);
+                }
+                if (demoNext < demo->size())
+                    n = static_cast<int>(std::min<uint64_t>(64, (*demo)[demoNext].frame - chipFrame));
+            }
+            synth.render(block, n);
+            rs->process(block, static_cast<size_t>(n), fifo);
+            chipFrame += static_cast<uint64_t>(n);
+        }
+        for (uint32_t f = 0; f < frames; ++f) {
+            out[static_cast<size_t>(f) * channels] = fifo[2 * static_cast<size_t>(f)];
+            out[static_cast<size_t>(f) * channels + 1] = fifo[2 * static_cast<size_t>(f) + 1];
+        }
+        fifo.erase(fifo.begin(), fifo.begin() + 2 * static_cast<std::ptrdiff_t>(frames));  // keeps capacity
+        if (demo && chipFrame >= demoEnd) finished.store(true);
+        std::vector<std::string> lines = synth.takeLog();
+        if (!lines.empty()) log.push(lines);
+    }
+};
+
+std::atomic<bool> g_interrupted{false};
+
+BOOL WINAPI onConsoleCtrl(DWORD type) {
+    if (type != CTRL_C_EVENT && type != CTRL_BREAK_EVENT) return FALSE;
+    g_interrupted = true;  // quit cleanly from the main loop
+    return TRUE;
+}
+
+// Waits for Enter. On a console it reads key events; otherwise (stdin redirected) a background
+// thread reads raw bytes with ReadFile (not the CRT, whose stream lock could stall exit) and flags
+// the first newline. End of input is not a quit, so `play --demo < nul` runs to its end.
+class EnterWatcher {
+public:
+    EnterWatcher() {
+        in_ = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        const bool valid = in_ && in_ != INVALID_HANDLE_VALUE;
+        console_ = valid && GetConsoleMode(in_, &mode);
+        if (valid && !console_) {
+            std::shared_ptr<std::atomic<bool>> seen = seen_;
+            HANDLE h = in_;
+            std::thread([seen, h] {  // detached: process exit ends it if it is still blocked
+                char c = 0;
+                DWORD n = 0;
+                while (ReadFile(h, &c, 1, &n, nullptr) && n == 1)
+                    if (c == '\n' || c == '\r') {
+                        seen->store(true);
+                        return;
+                    }
+            }).detach();
+        }
+    }
+    // True once Enter was pressed; otherwise waits up to `ms` milliseconds.
+    bool pressed(DWORD ms) {
+        if (!console_) {
+            Sleep(ms);
+            return seen_->load();
+        }
+        if (WaitForSingleObject(in_, ms) != WAIT_OBJECT_0) return false;
+        INPUT_RECORD rec[16];
+        DWORD n = 0;
+        if (!ReadConsoleInputW(in_, rec, 16, &n)) return false;
+        for (DWORD i = 0; i < n; ++i)
+            if (rec[i].EventType == KEY_EVENT && rec[i].Event.KeyEvent.bKeyDown &&
+                rec[i].Event.KeyEvent.wVirtualKeyCode == VK_RETURN)
+                return true;
+        return false;
+    }
+
+private:
+    HANDLE in_ = nullptr;
+    bool console_ = false;
+    std::shared_ptr<std::atomic<bool>> seen_ = std::make_shared<std::atomic<bool>>(false);
+};
+
+int listDevices() {
+    const std::vector<std::string> names = MidiIn::devices();
+    if (names.empty()) {
+        std::printf("no MIDI input devices\n");
+    } else {
+        std::printf("MIDI inputs:\n");
+        for (size_t i = 0; i < names.size(); ++i) std::printf("  %zu: %s\n", i, names[i].c_str());
+    }
+    std::string desc, err;
+    if (AudioOut::describeDefault(desc, err))
+        std::printf("audio output (default device): %s\n", desc.c_str());
+    else
+        std::printf("audio output: %s\n", err.c_str());
+    return 0;
+}
+
+void printLog(LogQueue& log) {
+    for (const std::string& l : log.take()) std::printf("  %s\n", l.c_str());
+    std::fflush(stdout);
+}
+
+int cmdPlay(const Options& o) {
+    if (!o.positional.empty()) failUsage("play takes no positional arguments");
+    if (o.list) return listDevices();
+
+    // Pick the MIDI input before loading anything, so a bad index fails fast.
+    std::string midiName;
+    if (!o.demo) {
+        const std::vector<std::string> names = MidiIn::devices();
+        if (o.midiSet && o.midi >= static_cast<int>(names.size()))
+            fail("MIDI input " + std::to_string(o.midi) + " not found (" + std::to_string(names.size()) +
+                 " devices)");
+        if (names.empty()) fail("no MIDI input devices (use --demo to test audio)");
+        midiName = std::to_string(o.midi) + ": " + names[static_cast<size_t>(o.midi)];
+    }
+
+    const Assets assets = loadAssets(o);
+    const std::unique_ptr<Synth> synth = makeSynth(assets, o);
+    const std::vector<std::string> first = synth->takeLog();  // the constructor's lines
+    LogQueue log;
+    LiveEngine engine(*synth, log);
+    const std::vector<MidiEvent> demo = demoEvents();
+    MidiIn midi;
+    if (o.demo) {
+        engine.demo = &demo;
+        engine.demoEnd = demo.back().frame + secondsToFrames(1.0);
+    } else {
+        engine.midi = &midi;
+    }
+
+    AudioOut audio;
+    uint32_t rate = 0, channels = 0;
+    std::string err;
+    if (!audio.start([&engine](float* out, uint32_t frames, uint32_t ch) { engine.render(out, frames, ch); }, rate,
+                     channels, err))
+        fail(err);
+    // The callback outputs silence until `ready`; from here on only the audio thread uses the engine.
+    engine.rs = std::make_unique<Resampler>(kChipRate, static_cast<double>(rate), 2);
+    engine.fifo.reserve((static_cast<size_t>(audio.bufferFrames()) + 4096) * 2);  // refills never reallocate
+    engine.ready.store(true, std::memory_order_release);
+
+    if (!o.demo && !midi.open(o.midi, err)) {
+        audio.stop();
+        fail(err);
+    }
+
+    const Wave* w = assets.map.find(o.waveSet, o.wave);
+    std::printf("wave %d:%d (%s)  effect %d  bus %d\n", o.waveSet, o.wave,
+                w && !w->name.empty() ? w->name.c_str() : "-", o.effect, o.bus);
+    std::printf("audio: default device, %s, buffer %u frames (%.1f ms)\n", audio.formatName().c_str(),
+                audio.bufferFrames(), audio.bufferFrames() * 1000.0 / rate);
+    if (o.demo)
+        std::printf("midi: none (--demo: 4 s arpeggio, then it stops by itself)\n");
+    else
+        std::printf("midi: %s\n", midiName.c_str());
+    std::printf("Press Enter to quit.\n");
+    for (const std::string& l : first) std::printf("  %s\n", l.c_str());
+    std::fflush(stdout);
+
+    SetConsoleCtrlHandler(onConsoleCtrl, TRUE);
+    EnterWatcher enter;
+    while (!engine.finished.load() && !audio.failed() && !g_interrupted.load() && !enter.pressed(50)) printLog(log);
+
+    audio.stop();
+    midi.close();
+    SetConsoleCtrlHandler(onConsoleCtrl, FALSE);
+    printLog(log);
+
+    // The run's health in one line: underruns are audible gaps, clipped samples hit full scale.
+    const AudioOut::Stats st = audio.stats();
+    char peakDb[32] = "-inf";
+    if (st.peak > 0.0f) std::snprintf(peakDb, sizeof peakDb, "%.1f", 20.0 * std::log10(static_cast<double>(st.peak)));
+    std::printf("audio: %llu periods, %llu frames (%.2f s), %llu underruns, peak %.3f (%s dBFS), %llu clipped, "
+                "slowest refill %.2f ms",
+                static_cast<unsigned long long>(st.periods), static_cast<unsigned long long>(st.frames),
+                static_cast<double>(st.frames) / rate, static_cast<unsigned long long>(st.underruns),
+                static_cast<double>(st.peak), peakDb, static_cast<unsigned long long>(st.clipped), st.maxRenderMs);
+    if (o.demo)
+        std::printf("; demo %zu events\n", engine.demoNext);
+    else
+        std::printf("; midi %llu messages, %llu dropped\n", static_cast<unsigned long long>(midi.received()),
+                    static_cast<unsigned long long>(midi.dropped()));
+    if (audio.failed()) fail(audio.error());
+    return 0;
+}
+
+#else
+
+int cmdPlay(const Options&) { fail("play needs Windows (WinMM and WASAPI)"); }
+
+#endif
+
+void usage(std::FILE* to) {
+    std::fprintf(to,
                  "usage:\n"
                  "  ks32play render <in.mid> <out.wav> [--resampled <out2.wav>] [--rate <hz>] [--tail <s>] [common]\n"
                  "  ks32play waves [--set internal|rom3]\n"
                  "  ks32play waves --audition <set>:<n> <out.wav> [common]\n"
+                 "  ks32play play [--midi <index>] [--list] [--demo] [common]\n"
                  "common: --roms <dir>  --data <dir>  --effect <0-10>  --bus <0-2>  --wave <set>:<n>\n"
                  "        --adsr <attackMs,decayMs,sustainPct,releaseMs>\n"
                  "see docs/player.md\n");
@@ -369,16 +665,22 @@ void usage() {
 int main(int argc, char** argv) {
     try {
         if (argc < 2) {
-            usage();
+            usage(stderr);
             return 2;
         }
         const std::string cmd = argv[1];
+        if (cmd == "--help" || cmd == "-h" || cmd == "help") {
+            usage(stdout);
+            return 0;
+        }
+        if (cmd != "render" && cmd != "waves" && cmd != "play") failUsage("unknown command '" + cmd + "'");
         const Options o = parseOptions(argc, argv, 2);
         if (cmd == "render") return cmdRender(o);
         if (cmd == "waves") return cmdWaves(o);
-        fail("unknown command '" + cmd + "'");
+        return cmdPlay(o);
     } catch (const Failure& f) {
         std::fprintf(stderr, "error: %s\n", f.msg.c_str());
+        if (f.usage) usage(stderr);
         return 2;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());

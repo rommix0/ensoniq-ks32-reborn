@@ -65,9 +65,13 @@ add_executable(pcm_diff tools/pcm_diff/main.cpp)
 target_link_libraries(pcm_diff PRIVATE ens_trace_parse)
 target_compile_definitions(pcm_diff PRIVATE _CRT_SECURE_NO_WARNINGS)
 
-# KS-32 MIDI test player: offline render and waves (live play is added by a later task).
+# KS-32 MIDI test player: offline render and waves; live play (WinMM MIDI in, WASAPI out) on Windows.
 add_executable(ks32play tools/ks32play/main.cpp tools/ks32play/files.cpp)
 target_link_libraries(ks32play PRIVATE ens_player)
+if(WIN32)
+  target_sources(ks32play PRIVATE tools/ks32play/midi_in_win.cpp tools/ks32play/audio_out_wasapi.cpp)
+  target_link_libraries(ks32play PRIVATE winmm ole32 avrt)
+endif()
 target_compile_definitions(ks32play PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # MAME reference harness (Task 12): vendored MAME chip code, built only on request.

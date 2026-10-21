@@ -2,7 +2,7 @@
 
 `ks32play` plays MIDI through the emulated KS-32 sound chips (the OTIS wave chip, the ESP effects DSP and the delay DRAM) with a small stand-in for the KS-32 firmware's voice control. It is a test tool for the chip emulation, not a re-implementation of the KS-32 sequencer, so its choices (MIDI map, envelope, velocity law) are labelled decisions P1 to P15 in `docs/decisions.md`.
 
-This page covers the offline commands, `render` and `waves`. Live `play` (WinMM MIDI in, WASAPI out) is described with the task that adds it.
+This page covers the offline commands, `render` and `waves`, and live `play` (WinMM MIDI in, WASAPI out, Windows only).
 
 ## What you need
 
@@ -16,12 +16,13 @@ This page covers the offline commands, `render` and `waves`. Live `play` (WinMM 
 ks32play render <in.mid> <out.wav> [--resampled <out2.wav>] [--rate <hz>] [--tail <s>] [common]
 ks32play waves [--set internal|rom3]
 ks32play waves --audition <set>:<n> <out.wav> [common]
+ks32play play [--midi <index>] [--list] [--demo] [common]
 
 common: --roms <dir>   --data <dir>   --effect <0-10>   --bus <0-2>   --wave <set>:<n>
         --adsr <attackMs,decayMs,sustainPct,releaseMs>
 ```
 
-Options may come before or after the positional arguments. Every option takes a value.
+Options may come before or after the positional arguments. Every option takes a value, except `--list` and `--demo`. `ks32play --help` (or `-h`) prints the usage text and exits 0. An unknown command or a wrong number of arguments prints an error and the usage text, and exits 2.
 
 ### render
 
@@ -43,6 +44,8 @@ frames 290178  duration 9.750 s  peak 26861  clips 0
 
 `peak` is the largest absolute sample of the chip-rate file. `clips` counts samples equal to 32767 or -32768. The log lists wave and effect selections, controller values that were out of range and ignored, and the ESP boot and effect loads.
 
+The render is held in memory, so its length (last event plus tail) is capped at 4 hours; a longer file is rejected with `error: '<file>': render length N s is over the 4 h limit`.
+
 Events in the first 0.07 s (about 2100 chip frames) fall during the ESP boot and the first effect load, before the effect output is faded in, and are mostly inaudible. `tests/data/player_smoke.mid` starts its first note at 0.75 s for this reason.
 
 ### waves
@@ -61,6 +64,40 @@ Events in the first 0.07 s (about 2100 chip frames) fall during the ESP boot and
 `--set internal` or `--set rom3` lists one set. Listing needs only the data directory, not the ROMs.
 
 `waves --audition <set>:<n> <out.wav>` renders one wave: each zone's root key (rounded), 1 s per note, 0.5 s apart, after a 0.25 s lead-in that covers the ESP boot and effect load. A tail of up to 1 s follows (`--tail`, capped at 1). It uses the same render path and options as `render` and prints the same summary line. If a zone's root key lies outside the zone's own key range, the key is played by a neighbouring zone, and a line says so.
+
+### play
+
+`play` plays the chips live: MIDI from a WinMM input device, audio to the default Windows output device through WASAPI in shared mode. It uses the common options (`--wave`, `--effect`, `--bus`, `--adsr`, `--roms`, `--data`) as `render` does; the MIDI map below applies, so program change, CC 0, CC 102 and CC 103 change wave, effect and bus while playing.
+
+```
+ks32play play --list
+ks32play play --midi 1 --wave 1:0
+ks32play play --demo
+```
+
+- `--list` prints the MIDI inputs (`index: name`, or `no MIDI input devices`) and the default audio device's mix format, then exits 0. It needs no ROMs.
+- `--midi <index>` picks the MIDI input (default 0). An index past the end fails with `error: MIDI input 99 not found (2 devices)`. With no MIDI inputs at all, `play` fails with `no MIDI input devices (use --demo to test audio)`. A device another program holds open fails with `midiInOpen error 4, in use by another program`.
+- `--demo` needs no MIDI device: it plays a C-E-G-C arpeggio up and down (8 notes per second for 4 s, after a 0.1 s lead-in that covers the ESP boot and effect load) on `--wave`, then stops by itself 1 s after the last note.
+
+At start it prints the wave, effect and bus, the audio format, the MIDI device and `Press Enter to quit.`, then the synth log lines (indented) as they come. Enter or Ctrl+C stops it. On the way out it prints one line about the run:
+
+```
+audio: 513 periods, 246816 frames (5.14 s), 0 underruns, peak 0.239 (-12.4 dBFS), 0 clipped, slowest refill 2.29 ms; demo 64 events
+```
+
+- `periods`: buffer refills (one per device period, normally 10 ms); `frames`: device frames written.
+- `underruns`: refills that found the device buffer empty, which means an audible gap. It should be 0.
+- `peak`: the largest output sample (1.0 = full scale); `clipped`: samples that were outside [-1, 1] and were clamped.
+- `slowest refill`: the longest time spent rendering one refill. It must stay well under the device period.
+- Live mode ends with `midi N messages, M dropped` instead of the demo count (dropped means the 1024-message queue was full).
+
+How it works:
+
+- Audio: the default render device, shared mode, its mix format (32-bit float or 16-bit PCM, plain or `WAVE_FORMAT_EXTENSIBLE`; any rate; 2 or more channels, the synth on front left and right and silence on the others), event-driven, a 20 ms buffer requested. Any other mix format fails with `error: unsupported audio format (...)`. The render thread joins the MMCSS "Pro Audio" class.
+- Each refill (on the render thread): the queued MIDI messages go to the synth, then the chips run in blocks of up to 64 frames through the resampler (chip rate to the device rate) until the refill is covered. MIDI timing is therefore quantised to the device period (about 10 ms), plus the 20 ms buffer and about 1 ms of resampler delay.
+- MIDI: the WinMM callback only queues complete channel messages; system messages (clock, active sensing, sysex) are dropped. Data bytes are masked to 7 bits. The synth runs only on the render thread.
+- The code is in `tools/ks32play/audio_out_wasapi.*` and `tools/ks32play/midi_in_win.*`; it uses only Windows libraries (winmm, ole32, avrt).
+- Both the MSVC and the MinGW builds have `play`. Device names are printed as UTF-8, so a name with non-ASCII characters may show garbled in a console that is not set to UTF-8 (`chcp 65001`).
 
 ## Defaults and where each decision lives
 
@@ -116,6 +153,9 @@ Any error prints one line to stderr and exits with status 2, for example:
 error: cannot open ROM 'nowhere/sq1-u25.bin'
 error: cannot open MIDI file 'nosuch.mid'
 error: bad value '11' for --effect
+error: MIDI input 99 not found (2 devices)
 ```
+
+Usage errors (unknown command, wrong argument count) are followed by the usage text.
 
 A successful run exits 0.
