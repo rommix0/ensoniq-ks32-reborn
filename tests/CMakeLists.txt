@@ -15,10 +15,12 @@ set(ENS_TEST_SOURCES
   test_esp_programs.cpp
   test_ks32_board.cpp
   test_player_resampler.cpp
+  test_player_data.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})
 target_link_libraries(ens_tests PRIVATE ens_player ens_ks32 ens_trace ens_otis ens_esp ens_common)
 target_compile_definitions(ens_tests PRIVATE ENS_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+  ENS_DATA_DIR="${CMAKE_SOURCE_DIR}/docs/rom-investigation/data" ENS_ROM_DIR="${ENS_ROM_DIR}"
   _CRT_SECURE_NO_WARNINGS)
 add_test(NAME ens_tests COMMAND ens_tests)
