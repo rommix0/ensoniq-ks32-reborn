@@ -14,6 +14,7 @@ constexpr int kPitchMin = -0x4800, kPitchMax = 0x5400;
 constexpr int kFramesPerSecond = 29762;
 constexpr int kFadeMs = 2;
 constexpr int32_t kFullScale = 0xFF00;  // 8.8 level of the loudest byte, 0xFF
+constexpr int kSilentByte = 0x10;       // volume exponent 0: the chip mutes bytes below this (O5)
 
 enum : uint16_t { CrStop = 0x3, CrBs = 0x4, CrLp3 = 0x400, CrLp4 = 0x800 };
 
@@ -24,27 +25,15 @@ int msToFrames(int ms) {
     return std::max<int>(1, static_cast<int>(static_cast<int64_t>(ms) * kFramesPerSecond / 1000));
 }
 
-// Mitchell log2 in 1/16 octave (n >= 1). The volume byte is itself a 4-bit exponent with a
-// linear 4-bit mantissa, so one byte step is 1/16 octave on this scale (O5).
-int lg16(uint32_t n) {
-    int k = 0;
-    while ((n >> (k + 1)) != 0) ++k;
-    return k * 16 + static_cast<int>(((n - (1u << k)) * 16u) >> k);
-}
-
-// DECISION P6: peak volume byte = 0xFF minus the Mitchell-log attenuation of vel*cc7 against
-// 127*127 (16 bytes per 6 dB; velocity and channel volume both act as amplitude); the sustain
-// level is the peak minus the attenuation of sustainPct against 100. Zero velocity, cc7 or
-// percent means silence.
+// DECISION P6: peak byte = max(0x10, 0xF0 - (127-vel)*40/127 - (127-cc7)*40/127), integer
+// division, each term separately. Sustain uses the same law with the percent mapped onto 0..127.
 int peakByte(int vel, int cc7) {
-    if (vel <= 0 || cc7 <= 0) return 0;
-    const int atten = lg16(127 * 127) - lg16(static_cast<uint32_t>(vel * cc7));
-    return std::max(0, 0xFF - atten);
+    return std::max(kSilentByte, 0xF0 - (127 - vel) * 40 / 127 - (127 - cc7) * 40 / 127);
 }
 int sustainByte(int peak, int pct) {
-    if (pct <= 0) return 0;
     if (pct >= 100) return peak;
-    return std::max(0, peak - (lg16(100) - lg16(static_cast<uint32_t>(pct))));
+    if (pct <= 0) return kSilentByte;  // 0 % = silent hold
+    return std::max(kSilentByte, peak - (127 - pct * 127 / 100) * 40 / 127);
 }
 
 int32_t ceilDiv(int32_t a, int32_t b) { return (a + b - 1) / b; }
@@ -53,7 +42,7 @@ int32_t ceilDiv(int32_t a, int32_t b) { return (a + b - 1) / b; }
 
 std::vector<uint16_t> makeFcTable() {
     // DECISION P2: FC table = round(1024 * 2^(i/768)) for i in 0..767 (formula; the firmware
-    // table at 0xC09F64 is to be checked against it). 768 entries x 4 units = one octave.
+    // table at 0xC09F64 is still to be compared). 768 entries x 4 units = one octave.
     std::vector<uint16_t> t(768);
     for (int i = 0; i < 768; ++i)
         t[static_cast<size_t>(i)] = static_cast<uint16_t>(std::lround(1024.0 * std::exp2(i / 768.0)));
@@ -61,9 +50,8 @@ std::vector<uint16_t> makeFcTable() {
 }
 
 uint16_t fcForPitch(const std::vector<uint16_t>& table, int32_t p) {
-    // DECISION P3: P clamps to [-0x4800, 0x5400]; octave = floor(P / 3072), table index =
-    // (P mod 3072) >> 2; FC is the table value shifted by the octave and clamped to 0xFFFE
-    // (FC bit 0 is not implemented by the chip).
+    // DECISION P2: P clamps to [-0x4800, 0x5400]; octave = floor(P / 3072), table index =
+    // (P mod 3072) >> 2; FC = table value shifted by the octave, clamped to 0xFFFE.
     p = std::clamp<int32_t>(p, kPitchMin, kPitchMax);
     const int32_t oct = p >= 0 ? p / kPitchPerOctave : -((-p + kPitchPerOctave - 1) / kPitchPerOctave);
     const int32_t rem = p - oct * kPitchPerOctave;
@@ -75,9 +63,14 @@ uint16_t fcForPitch(const std::vector<uint16_t>& table, int32_t p) {
 Voices::Voices(Otis& otis, std::vector<uint16_t> fcTable, VoiceConfig cfg)
     : otis_(otis), table_(std::move(fcTable)), cfg_(cfg) {
     cfg_.bus = std::clamp(cfg_.bus, 0, 2);
+    resetChannels();
+}
+
+void Voices::resetChannels() {
     std::fill(std::begin(bend_), std::end(bend_), 8192);
     std::fill(std::begin(cc7_), std::end(cc7_), 100);  // GM default channel volume
     std::fill(std::begin(pedal_), std::end(pedal_), false);
+    clock_ = 0;
 }
 
 void Voices::init() {
@@ -89,32 +82,38 @@ void Voices::init() {
         otis_.write(0, CrStop);
         otis_.write(8, 0);
         otis_.write(9, 0);
+        // DECISION P4: K1 = K2 = 0xFFF0 (filter wide open) for every voice.
         otis_.write(6, 0xFFF0);
         otis_.write(7, 0xFFF0);
         slot_[v] = Slot();
     }
+    resetChannels();
 }
 
 void Voices::setWave(const Wave* w) { wave_ = w; }
-void Voices::setBus(int bus) { cfg_.bus = std::clamp(bus, 0, 2); }
+void Voices::setBus(int bus) {
+    // DECISION P3: every note goes to one bus (OTIS channel CA = bus + 1), chosen by the caller.
+    cfg_.bus = std::clamp(bus, 0, 2);
+}
 
 int Voices::pitchOf(const Slot& s) const {
-    // DECISION P4: P = key*256 + zone.pitchWord + bend, bend = (value14 - 8192) * (bendSemis*256)
-    // / 8192 in integer arithmetic (truncation toward zero); fcForPitch clamps the sum.
+    // DECISION P9: bend = (value14 - 8192) * (bendSemis*256) / 8192 in integer arithmetic
+    // (truncation toward zero), bendSemis = +-2 by default, added to
+    // P = key*256 + zone.pitchWord (P2); fcForPitch clamps the sum.
     const int bend = (bend_[s.ch] - 8192) * (cfg_.bendSemis * 256) / 8192;
     return s.basePitch + bend;
 }
 
 int Voices::pickVoice() const {
-    // DECISION P8: allocation takes the lowest free voice; with none free it steals the quietest
-    // releasing (or fading) voice, else the oldest note.
+    // DECISION P8: lowest free voice; else the oldest voice in release (by start order); else
+    // the oldest voice. A steal re-programs the voice with the firmware start order (hard cut).
     for (int v = 0; v < 32; ++v)
         if (!slot_[v].active) return v;
     int best = -1;
     for (int v = 0; v < 32; ++v) {
         const Slot& s = slot_[v];
         if ((s.stage == Stage::Release || s.stage == Stage::Fade) &&
-            (best < 0 || s.level < slot_[best].level))
+            (best < 0 || s.age < slot_[best].age))
             best = v;
     }
     if (best >= 0) return best;
@@ -139,12 +138,14 @@ void Voices::start(int v, int ch, int key, int vel) {
     s.fc = fcForPitch(table_, pitchOf(s));
 
     // Firmware voice-start order (findings "Voice start").
+    // DECISION P3: CA = bus + 1. DECISION P4: LP3 = LP4 = 1 (all four poles low-pass).
     const uint16_t cr = static_cast<uint16_t>(z.crLow | ((z.bank & 1) ? CrBs : 0) |
                                               ((cfg_.bus + 1) << 8) | CrLp3 | CrLp4);
     page(v);
     otis_.write(8, 0);
     otis_.write(9, 0);
     otis_.write(0, cr);
+    // DECISION P4: K1 = K2 = 0xFFF0 and the filter storage of the page|0x20 cleared at note start.
     otis_.write(7, 0xFFF0);
     otis_.write(6, 0xFFF0);
     page(v | 0x20);
@@ -155,9 +156,9 @@ void Voices::start(int v, int ch, int key, int vel) {
         otis_.write(static_cast<uint8_t>(reg), static_cast<uint16_t>(a29 >> 16));
         otis_.write(static_cast<uint8_t>(reg + 1), static_cast<uint16_t>((a29 & 0xFFFF) | lowBits));
     };
-    addr(z.loopStart, 2, 0);                                           // START
-    addr(z.end, 4, static_cast<uint16_t>((z.endFrac << 5) & 0xFFE0));  // END (+ fraction)
-    addr(z.start, 10, 0);                                              // ACC
+    addr(z.loopStart, 2, 0);                                         // START
+    addr(z.end, 4, static_cast<uint16_t>((z.endFrac & 0xF) << 5));   // END (+ 4-bit fraction)
+    addr(z.start, 10, 0);                                            // ACC
     otis_.write(1, s.fc);
     otis_.write(0, static_cast<uint16_t>(cr & ~CrStop));
 }
@@ -169,7 +170,17 @@ void Voices::noteOn(int ch, int key, int vel) {
         return;
     }
     if (!wave_ || wave_->zones.empty()) return;
-    start(pickVoice(), ch, std::clamp(key, 0, 127), std::min(vel, 127));
+    key = std::clamp(key, 0, 127);
+    // DECISION P8: one voice per (channel, key): a repeated note restarts its own voice
+    // (also one in release or held by the pedal) instead of taking a second one.
+    int v = -1;
+    for (int i = 0; i < 32; ++i)
+        if (slot_[i].active && slot_[i].ch == ch && slot_[i].key == key) {
+            v = i;
+            break;
+        }
+    if (v < 0) v = pickVoice();
+    start(v, ch, key, std::min(vel, 127));
 }
 
 void Voices::release(Slot& s) {
@@ -179,8 +190,8 @@ void Voices::release(Slot& s) {
 
 void Voices::noteOff(int ch, int key) {
     ch &= 15;
-    // DECISION P8: a note-off releases every sounding, unreleased voice of that channel and key
-    // (a retriggered key has several), or marks them held while the sustain pedal is down.
+    // DECISION P8: there is at most one voice per (channel, key); its note-off releases it, or
+    // marks it held while the sustain pedal is down.
     for (Slot& s : slot_) {
         if (!s.active || s.ch != ch || s.key != key) continue;
         if (s.stage == Stage::Release || s.stage == Stage::Fade || s.held) continue;
@@ -235,10 +246,12 @@ void Voices::writeVol(int v, int byte) {
 }
 
 void Voices::free(int v) {
+    // DECISION P7: the voice ends with LVOL = RVOL = 0 and CR = STOP0|STOP1 (a stopped voice
+    // still outputs its held sample, O7, hence the volume write too), then it is freed.
     page(v);
     otis_.write(8, 0);
     otis_.write(9, 0);
-    otis_.write(0, CrStop);  // a stopped voice still outputs its held sample (O7), hence volume 0 too
+    otis_.write(0, CrStop);
     slot_[v] = Slot();
 }
 
@@ -253,8 +266,8 @@ void Voices::tick() {
         Slot& s = slot_[v];
         if (!s.active) continue;
 
-        // DECISION P9: a one-shot that reached END sets STOP0 (O1) but keeps outputting its held
-        // sample (O7); detect the stop bits and fade out over kFadeMs instead of clicking, then free.
+        // DECISION P7: a one-shot that reached END sets STOP0 (O1) but keeps outputting its held
+        // sample (O7); detect the stop bits and fade out over kFadeMs instead of clicking.
         if (s.stage != Stage::Release && s.stage != Stage::Fade) {
             page(v);
             if (otis_.read(0) & CrStop) {
@@ -263,9 +276,9 @@ void Voices::tick() {
             }
         }
 
-        // DECISION P7: the envelope is integer and linear in the volume byte (8.8 fixed point), so
-        // it is a straight ramp in dB: attack to peak, decay to the sustain level, hold, then release
-        // at a constant byte rate (full scale in releaseMs) until level 0, which frees the voice.
+        // DECISION P5: one envelope update per frame, integer, 8.8 fixed point and linear in the
+        // volume byte (a straight ramp in dB): attack to peak, decay to the sustain level, hold,
+        // then release at a constant byte rate (full scale in releaseMs).
         const int32_t peakL = s.peak << 8;
         const int32_t susL = sustainByte(s.peak, a.sustainPct) << 8;
         bool done = false;
@@ -291,9 +304,11 @@ void Voices::tick() {
             case Stage::Sustain: s.level = susL; break;
             case Stage::Release:
             case Stage::Fade: {
+                // DECISION P7: release (releaseMs) and the finished-one-shot fade (kFadeMs) end
+                // once the volume byte is below 0x10 (silent); then the voice is freed.
                 const int n = std::max(1, msToFrames(s.stage == Stage::Fade ? kFadeMs : a.releaseMs));
                 s.level -= ceilDiv(kFullScale, n);
-                if (s.level <= 0) done = true;
+                if ((s.level >> 8) < kSilentByte) done = true;
                 break;
             }
         }

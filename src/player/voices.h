@@ -9,14 +9,15 @@
 
 namespace ens::player {
 
+// DECISION P5: defaults attack 5 ms, decay 0, sustain 100 %, release 250 ms.
 struct Adsr {
     int attackMs = 5, decayMs = 0, sustainPct = 100, releaseMs = 250;
 };
 
 struct VoiceConfig {
-    int bus = 1;  // 0..2; OTIS channel (CA) = bus + 1
+    int bus = 1;  // DECISION P3: default bus 1, 0..2; OTIS channel (CA) = bus + 1
     Adsr adsr;
-    int bendSemis = 2;  // pitch bend range, +/- semitones
+    int bendSemis = 2;  // DECISION P9: pitch bend range +/- 2 semitones by default
 };
 
 // 768 entries, round(1024 * 2^(i/768)): FC for one octave above the base, 4 pitch units per entry.
@@ -56,6 +57,7 @@ private:
         uint16_t fc = 0;
     };
 
+    void resetChannels();
     void page(int p) { otis_.write(15, static_cast<uint16_t>(p)); }
     void start(int v, int ch, int key, int vel);
     void release(Slot& s);
