@@ -138,6 +138,19 @@ int Esp::runSample() {
     return steps;
 }
 
+// DECISION E30: advance(slots) is choice (b): a frame of `slots` instruction periods in which
+// running and halted time interleave. runSample() stays choice (a) and is reused unchanged.
+// DECISION P1: no mid-program cut-off; an over-long program runs to END and uses no idle time.
+int Esp::advance(int slots) {
+    int steps = 0;
+    if (!halted_) {
+        steps = runSample();
+        if (!halted_) return steps;  // still running: the frame is spent
+    }
+    for (int i = steps; i < slots; ++i) idleStep();
+    return steps;
+}
+
 // DECISION E17: the nine-phase step. ALU(k-1) commits after MUL(k) has fetched its operands
 // (so an ALU result reaches the MUL two steps later), MUL(k-1) commits before ALU(k) fetches
 // (next step), and ALU(k-1)'s MACH/MACL preload lands just before MUL(k) accumulates.

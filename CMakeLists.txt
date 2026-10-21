@@ -11,6 +11,8 @@ else()
   add_compile_options(-Wall -Wextra)
 endif()
 
+set(ENS_ROM_DIR "${CMAKE_SOURCE_DIR}/ks-32" CACHE PATH "KS-32 ROM directory for ROM-dependent tests")
+
 option(ENS_BUILD_MAME_REF "Build the vendored MAME reference tool" OFF)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})  # build/ens_tests
@@ -28,6 +30,16 @@ target_link_libraries(ens_otis PUBLIC ens_common)
 add_library(ens_esp STATIC src/esp/esp_alu.cpp src/esp/esp_mac.cpp src/esp/esp_agen.cpp
   src/esp/esp_isa.cpp src/esp/esp.cpp)
 target_link_libraries(ens_esp PUBLIC ens_common)
+
+# KS-32 board: wave ROM layout, OTIS + ESP + delay DRAM and the frame routing.
+add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp)
+target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp)
+
+# Pure player layer (no OS code). Later tasks add sources to this list.
+add_library(ens_player STATIC src/player/resampler.cpp src/player/json.cpp src/player/sample_map.cpp
+  src/player/effects.cpp src/player/voices.cpp src/player/esp_loader.cpp src/player/synth.cpp
+  src/player/smf.cpp src/player/wav.cpp)
+target_link_libraries(ens_player PUBLIC ens_common ens_ks32)
 
 # Trace format + runner. The parser and PCM compare are chip-free (reused by the MAME harness).
 add_library(ens_trace_parse STATIC src/trace/trace_parse.cpp)
@@ -52,6 +64,15 @@ target_compile_definitions(ens_trace_cli PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(pcm_diff tools/pcm_diff/main.cpp)
 target_link_libraries(pcm_diff PRIVATE ens_trace_parse)
 target_compile_definitions(pcm_diff PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# KS-32 MIDI test player: offline render and waves; live play (WinMM MIDI in, WASAPI out) on Windows.
+add_executable(ks32play tools/ks32play/main.cpp tools/ks32play/files.cpp)
+target_link_libraries(ks32play PRIVATE ens_player)
+if(WIN32)
+  target_sources(ks32play PRIVATE tools/ks32play/midi_in_win.cpp tools/ks32play/audio_out_wasapi.cpp)
+  target_link_libraries(ks32play PRIVATE winmm ole32 avrt)
+endif()
+target_compile_definitions(ks32play PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # MAME reference harness (Task 12): vendored MAME chip code, built only on request.
 if(ENS_BUILD_MAME_REF)
