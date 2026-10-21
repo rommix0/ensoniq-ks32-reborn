@@ -45,7 +45,7 @@ the default 4 s tail). Measures (both channels, L / R):
   given as seconds after the last note-off. "(never)" means the last window of the file is still
   at or above the threshold.
 - **-60 dB AC**: the same on the AC RMS of each window (the window mean removed). The effect
-  outputs settle on a small DC (decision R10, P16), so the AC figure is the decay of the sound
+  outputs settle on a small DC (decision P16; first seen in the Task 5 decay test), so the AC figure is the decay of the sound
   itself; it is the one to read.
 - **DC / AC** of the final 0.1 s window (11.9 s to 12.0 s after the note-off).
 
@@ -71,13 +71,14 @@ Flags (clips, or a raw tail over 10 s):
   not sound: the AC tail ends 0.1 s after the note-off, and the output sits on a constant
   -145.6 LSB (left, -47 dBFS) and -66.6 LSB (right, -54 dBFS) with AC RMS 0.5 LSB. The DC arrives
   over about 2 s after the note-off (seconds 5 to 7 of the render) and then does not change. It is
-  larger than the -3..-18 LSB that decision P16 describes, and above the |DC| <= 32 bound the
-  decay tests use. Effect 10 also has the lowest peak (about 8800), which suggests a different
-  program type; see P16.
+  larger than the -3..-18 LSB that decision P16 describes for programs 0 to 9, and above the
+  |DC| <= 32 bound the decay tests use. The floor-truncation explanation does not cover it. Effect
+  10 also has the lowest peak (about 8800), and Task 5 saw it output sound with no input; P16 lists
+  program 10 as an open issue.
 - Effects 7 and 9 have the longest real tails: 5.5 to 7.8 s raw (about 2 s on the AC measure). Their DC
   was still moving at 12 s (effect 9: -19.6 / -22.9 at 12 s, -19.0 / -22.0 in the last window),
   so the raw time depends on the DC and not only on the reverb.
-- Effects 4 and 8 have almost no tail (0.2 s) and settle at 0 DC: probably non-reverb effects.
+- Effects 4 and 8 have almost no tail (0.2 s) and settle at 0 DC.
 
 Raw numbers are stated first because that is what a plain `decay_time.py` run would print; the
 AC column is the one that describes the sound.
@@ -116,7 +117,7 @@ below full scale.
 | P6 | Velocity and CC 7 law | Stand-in, not measured. Confidence Low. | Dynamics |
 | P7 | Note end | A short fade then mute. Confidence Medium. | Clicks at note end |
 | P8 | Stealing and retrigger | A guess at polyphony practice, not the firmware rule. Confidence Low. | Behaviour when more than 32 notes sound |
-| P16 | ESP output DC residue | Accepted for now (option a). Confidence Medium. Effect 10 is above the range the entry describes (see the sweep). | Nothing audible expected; a click when an effect starts or stops on effect 10 would point at this |
+| P16 | ESP output DC residue | Accepted for now (option a) for programs 0 to 9 (Medium). Program 10 is open (Low): its DC, no-input output and low peak are not explained (see the sweep). | Nothing audible expected; a click when an effect starts or stops on effect 10 would point at this |
 
 P1 to P4, P9, P10, P12, P14 and P15 are settled to Medium or better and need no listening
 judgement.
