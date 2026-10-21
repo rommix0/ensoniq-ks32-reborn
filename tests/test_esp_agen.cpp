@@ -111,6 +111,52 @@ TEST(agen_period_odd_dlength) {
     CHECK_EQ(a.physical(RamOp::ReadDelay, 0x000300), first);
 }
 
+TEST(agen_delay_wrap_is_modulo_when_dbase_above_dlength) {
+    Agen a;  // program 10 after the firmware-style load: DBASE far above the ring
+    a.memsiz = 0xFF;
+    a.writeReg(245, 0x1F7DFF);  // ring words 0..0x1F7D, period 0x1F7E
+    a.dbase = 0xF71700;
+    // sum word 0xF71A; 0xF71A mod 0x1F7E = 0x1AA8 (a single subtraction would give 0xD79C).
+    CHECK_EQ(a.physical(RamOp::ReadDelay, 0x000300), 0x1AA8u);
+    CHECK_EQ(a.physical(RamOp::WriteDelay, 0x000300), 0x1AA8u);
+    // An offset beyond one ring length wraps the same way.
+    a.dbase = 0x000000;
+    CHECK_EQ(a.physical(RamOp::ReadDelay, 0x5F7A00), 0x5F7Au % 0x1F7Eu);
+}
+
+TEST(agen_delay_never_leaves_ring_for_any_dbase) {
+    Agen a;
+    a.memsiz = 0xFF;
+    a.writeReg(245, 0x1F7DFF);
+    a.writeReg(246, 0x1FBF00);  // the program's tables sit above the ring
+    a.writeReg(247, 0x1F7E00);
+    const uint32_t offs[] = {0x000000u, 0x000300u, 0x1F7D00u, 0x1F7E00u, 0x7FFF00u, 0xFFFF00u};
+    bool outside = false;
+    for (uint32_t w = 0; w <= 0xFFFFu; w++) {
+        a.dbase = w << 8;
+        for (uint32_t off : offs)
+            if (a.physical(RamOp::WriteDelay, off) > 0x1F7Du) outside = true;
+    }
+    CHECK(!outside);
+}
+
+TEST(agen_delay_walk_continuous_from_dbase_above_dlength) {
+    Agen a;  // from an out-of-ring DBASE the tap still walks down one word per sample,
+    a.memsiz = 0xFF;  // across the DBASE reload, with period 0x1F7E
+    a.writeReg(245, 0x1F7DFF);
+    a.dbase = 0x3F1000;  // sum word 0x3F13: above twice the ring length
+    uint32_t prev = a.physical(RamOp::ReadDelay, 0x000300);
+    bool continuous = prev <= 0x1F7Du;
+    for (int i = 0; i < 0x3F20; i++) {
+        a.endOfSample();
+        const uint32_t cur = a.physical(RamOp::ReadDelay, 0x000300);
+        if (cur != (prev + 0x1F7Du) % 0x1F7Eu) continuous = false;
+        prev = cur;
+    }
+    CHECK(continuous);
+    CHECK(a.dbase <= a.dlength20());  // DBASE passed 0 and reloaded inside the ring
+}
+
 TEST(agen_table_not_masked_by_dlength) {
     Agen a;
     a.memsiz = 0xFF;

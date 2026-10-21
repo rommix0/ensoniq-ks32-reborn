@@ -116,7 +116,7 @@ The FC table is always computed by `makeFcTable()`. The Task 2 survey compared t
 
 ### Effects
 
-`--effect` is an ESP program index from 0 to 10. Several firmware effects share one program: the mapping from firmware effects to programs is in `docs/rom-investigation/effect-params.md`. The effect names are unknown, so the numbers are the only handle. The mix levels come from the firmware's own default parameters for each program (P11); they are not tuned by ear. Program 1 is the default. Known problem: program 10 goes silent about 1.5 s after it is loaded (held notes fade out, and later notes on buses 1 and 2 are silent until the next effect load), because its delay writes overwrite its lookup tables until the ESP's delay pointer has entered the program's short delay ring (P16, open).
+`--effect` is an ESP program index from 0 to 10. Several firmware effects share one program: the mapping from firmware effects to programs is in `docs/rom-investigation/effect-params.md`. The effect names are unknown, so the numbers are the only handle. The mix levels come from the firmware's own default parameters for each program (P11); they are not tuned by ear. Program 1 is the default. Program 10 idles on a constant DC of about -158 / -72 LSB that comes from the program itself (P16); it is inaudible. Its earlier cut-off of held notes, about 1.5 s after the load, was fixed by the ESP delay-wrap decision E31.
 
 ## MIDI map (P10)
 

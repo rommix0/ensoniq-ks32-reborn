@@ -33,11 +33,12 @@ uint32_t Agen::physical(RamOp op, uint32_t offset24) const {
         case RamOp::ReadDelay:
         case RamOp::WriteDelay:
         case RamOp::ReadDelayDump: {
-            // DECISION E7: circular delay; compare and wrap on address bits only, the wrap
-            // subtracts DLENGTH + unit so the ring period equals DBASE's period.
+            // DECISION E7: circular delay; compare and wrap on address bits only, modulo
+            // DLENGTH + unit so the ring period equals DBASE's period.
+            // DECISION E31: the wrap is a full modulo, so any DBASE or offset stays in the ring.
             s = ((dbase20() + offset24) & kMask24) & keep;
             const uint32_t len = dlength20() & keep;
-            if (s > len) s = (s - (len + unit())) & kMask24 & keep;
+            if (s > len) s %= len + unit();
             return ramWord(s);
         }
         case RamOp::ReadTableA:
