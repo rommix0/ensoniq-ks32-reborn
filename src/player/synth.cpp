@@ -13,7 +13,7 @@ Synth::Synth(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1, SampleMap
       bank_(cfg.waveSet) {
     voices_.init();
     seq_.queueBoot();
-    loadEffect(cfg.effect);
+    loadEffect(cfg.effect, true);  // straight behind the boot
     selectWave(cfg.waveSet, cfg.wave);
 }
 
@@ -30,13 +30,24 @@ void Synth::drainSeqLog() {
     for (std::string& s : seq_.takeLog()) pushLog(std::move(s));
 }
 
-void Synth::loadEffect(int index) {
+void Synth::loadEffect(int index, bool queueNow) {
     const EspProgram* p = fx_.find(index);
     if (!p) {
         pushLog("effect " + std::to_string(index) + " not found; nothing loaded");
         return;
     }
-    seq_.queueLoad(*p, fx_.fadeFrames);
+    // DECISION P17: at most one load waits behind the one in progress. A change while a load
+    // (or the boot) runs replaces the waiting program instead of queueing another full load;
+    // render() starts it when the sequencer is idle, with the usual fade out, load, fade in.
+    if (queueNow || (seq_.idle() && pending_ < 0)) seq_.queueLoad(*p, fx_.fadeFrames);
+    else pending_ = index;
+}
+
+void Synth::startPending() {
+    if (pending_ < 0 || !seq_.idle()) return;
+    const EspProgram* p = fx_.find(pending_);
+    pending_ = -1;
+    if (p) seq_.queueLoad(*p, fx_.fadeFrames);
 }
 
 void Synth::selectWave(int set, int number) {
@@ -54,7 +65,7 @@ void Synth::midi(uint8_t status, uint8_t d1, uint8_t d2) {
     // DECISION P10: omni (the channel only separates sustain, bend and volume state). Note on/off,
     // pitch bend, program change = wave number in the bank last set by CC0 (0 internal, 1 rom3;
     // applied at the program change), CC7 volume, CC64 sustain (>= 64 down), CC102 effect 0..10
-    // (queues a load), CC103 bus 0..2, CC120 all sound off, CC123 all notes off. Everything else
+    // (queues a load, P17), CC103 bus 0..2, CC120 all sound off, CC123 all notes off. Everything else
     // is ignored.
     const int ch = status & 0x0F;
     d1 &= 0x7F;
@@ -110,6 +121,7 @@ void Synth::midi(uint8_t status, uint8_t d1, uint8_t d2) {
 
 void Synth::render(int16_t* interleavedLR, int frames) {
     for (int i = 0; i < frames; ++i) {
+        startPending();
         seq_.run(board_);
         voices_.tick();
         board_.frame(interleavedLR[2 * i], interleavedLR[2 * i + 1]);

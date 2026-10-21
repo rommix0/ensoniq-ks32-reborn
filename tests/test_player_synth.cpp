@@ -70,6 +70,48 @@ std::vector<int16_t> renderFrames(Synth& s, int frames) {
     return buf;
 }
 
+// Renders one frame at a time until ready(); returns the frames used (maxFrames + 1 if never).
+int renderUntilReady(Synth& s, int maxFrames) {
+    int16_t lr[2];
+    for (int n = 0; n < maxFrames; ++n) {
+        if (s.ready()) return n;
+        s.render(lr, 1);
+    }
+    return s.ready() ? maxFrames : maxFrames + 1;
+}
+
+bool loadEffectLibrary(EffectLibrary& fx) {
+    std::string err;
+    const bool ok = parseEffects(readFile(ENS_DATA_DIR "/esp/esp_programs.json"),
+                                 readFile(ENS_DATA_DIR "/esp/effect_defaults.json"), fx, err);
+    if (!ok) std::printf("  parseEffects: %s\n", err.c_str());
+    return ok;
+}
+
+// AC RMS (window mean removed) of `n` stereo frames from frame `first`, the larger channel.
+double acRms(const std::vector<int16_t>& pcm, size_t first, size_t n) {
+    double worst = 0;
+    for (size_t c = 0; c < 2; ++c) {
+        double mean = 0, sq = 0;
+        for (size_t i = 0; i < n; ++i) mean += pcm[(first + i) * 2 + c];
+        mean /= static_cast<double>(n);
+        for (size_t i = 0; i < n; ++i) {
+            const double d = pcm[(first + i) * 2 + c] - mean;
+            sq += d * d;
+        }
+        worst = std::max(worst, std::sqrt(sq / static_cast<double>(n)));
+    }
+    return worst;
+}
+
+// Sequencer log lines that report a finished effect load, in order.
+std::vector<std::string> loadedLines(const std::vector<std::string>& log) {
+    std::vector<std::string> out;
+    for (const std::string& l : log)
+        if (l.find(" loaded (id ") != std::string::npos) out.push_back(l);
+    return out;
+}
+
 }  // namespace
 
 TEST(synth_velocity0_is_note_off) {
@@ -267,4 +309,74 @@ TEST(synth_rom_note_sounds_and_decays) {
     std::printf("  ROM note: peak %d, final AC RMS %.3f, DC %.3f\n", peak, worstRms, worstDc);
     CHECK(worstRms <= 4.0);
     CHECK(worstDc <= 32.0);
+}
+
+TEST(synth_ready_after_boot_and_load) {
+    EffectLibrary fx;
+    CHECK(loadEffectLibrary(fx));
+    // A 16-word triangle-ish loop so the output has AC content; bus 0 (dry, scaled only by GPR 7F).
+    std::vector<uint16_t> bank(256, 0);
+    for (int i = 0; i < 16; ++i) bank[static_cast<size_t>(i)] = static_cast<uint16_t>((i < 8 ? i : 16 - i) * 0x0800 - 0x2000);
+    SynthConfig cfg;
+    cfg.voice.bus = 0;
+    Synth s(bank, {}, syntheticMap(), std::move(fx), makeFcTable(), cfg);
+    CHECK(!s.ready());
+    const int frames = renderUntilReady(s, 4000);
+    std::printf("  ready after %d frames\n", frames);
+    CHECK(frames >= 718);   // the boot alone (P14)
+    CHECK(frames <= 2200);  // boot + first load with its fade-in
+    CHECK(hasLine(s.takeLog(), "effect 1 loaded"));
+
+    // A note started at ready() is at full level once its 5 ms attack (149 frames) is over: the
+    // effect output is already faded in, so the early window matches a late one.
+    s.midi(0x90, 60, 127);
+    const std::vector<int16_t> pcm = renderFrames(s, 4400);
+    const double early = acRms(pcm, 160, 160), late = acRms(pcm, 4000, 160);
+    std::printf("  early %.1f late %.1f\n", early, late);
+    CHECK(late > 1000);
+    CHECK(early >= 0.97 * late);
+    CHECK(early <= 1.03 * late);
+}
+
+TEST(synth_effect_changes_coalesce) {
+    EffectLibrary fx;
+    CHECK(loadEffectLibrary(fx));
+    Synth s(std::vector<uint16_t>(256, 0x4000), {}, syntheticMap(), std::move(fx), makeFcTable(), SynthConfig());
+    CHECK(renderUntilReady(s, 4000) <= 4000);
+    s.takeLog();
+
+    // One effect change on its own: fade out, load, fade in.
+    s.midi(0xB0, 102, 2);
+    CHECK(!s.ready());
+    const int one = renderUntilReady(s, 20000);
+    CHECK(one <= 20000);
+    const std::vector<std::string> oneLog = loadedLines(s.takeLog());
+    CHECK_EQ(oneLog.size(), 1u);
+
+    // Ten back to back (a knob sweep): the first starts at once, each later one replaces the
+    // pending program, so only the first and the last are loaded (DECISION P17).
+    const int progs[10] = {0, 4, 5, 6, 7, 8, 9, 10, 1, 3};
+    for (int p : progs) s.midi(0xB0, 102, static_cast<uint8_t>(p));
+    const int ten = renderUntilReady(s, 200000);
+    std::printf("  one change %d frames, ten changes %d frames\n", one, ten);
+    const std::vector<std::string> log = loadedLines(s.takeLog());
+    CHECK_EQ(log.size(), 2u);
+    if (log.size() == 2) {
+        CHECK(log[0].find("effect 0 loaded") != std::string::npos);
+        CHECK(log[1].find("effect 3 loaded") != std::string::npos);
+    }
+    CHECK(ten >= one * 3 / 2);  // two loads ...
+    CHECK(ten <= one * 5 / 2);  // ... not ten
+
+    // The ESP runs the last program.
+    EffectLibrary ref;
+    CHECK(loadEffectLibrary(ref));
+    const EspProgram* p3 = ref.find(3);
+    CHECK(p3 != nullptr);
+    if (p3) {
+        bool same = true;
+        for (size_t i = 0; i < p3->instr.size(); ++i)
+            same = same && s.board().esp().instr(static_cast<int>(i)) == p3->instr[i];
+        CHECK(same);
+    }
 }
