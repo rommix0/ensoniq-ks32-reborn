@@ -3,7 +3,7 @@
 Closing check of Plan 3 (the MIDI test player): the test suite on both required toolchains,
 cross-toolchain identity of the chip-rate render, a sweep of all 11 effect programs on the smoke
 file, the live-play device and demo figures, the open decisions, and what the user should listen
-for. The user's own acceptance run (the pass bar) is still pending; see the last section.
+for. The user's own acceptance run (the pass bar) passed on 2026-10-21; see the last section.
 
 ## Test counts
 
@@ -154,10 +154,11 @@ what an effect change exercises, so clicks at CC 102 may also be related to it.
 - **Latency.** Keys should feel responsive. The device period is 10 ms and the output buffer is
   about 22 ms.
 
-## User acceptance: pending
+## User acceptance: passed (2026-10-21)
 
-Not done yet. The user runs the player with their own keyboard and records the verdict here. From
-the worktree root, with the MSVC build:
+The user played the MSVC build live from their Q25 keyboard (MIDI input 1), including effect 10 after
+the E31 delay-wrap fix, and reported: "this all seems to be working." This meets the pass bar of the
+design (section 3). The commands used, from the repository root (`--roms` can be omitted there):
 
 ```powershell
 build-msvc\Release\ks32play.exe play --demo --roms "C:/Users/abart/Desktop/Ensoniq KS-32/ks-32"
