@@ -1,6 +1,6 @@
 # ks32play: KS-32 MIDI test player
 
-`ks32play` plays MIDI through the emulated KS-32 sound chips (the OTIS wave chip, the ESP effects DSP and the delay DRAM) with a small stand-in for the KS-32 firmware's voice control. It is a test tool for the chip emulation, not a re-implementation of the KS-32 sequencer, so its choices (MIDI map, envelope, velocity law) are labelled decisions P1 to P15 in `docs/decisions.md`.
+`ks32play` plays MIDI through the emulated KS-32 sound chips (the OTIS wave chip, the ESP effects DSP and the delay DRAM) with a small stand-in for the KS-32 firmware's voice control. It is a test tool for the chip emulation, not a re-implementation of the KS-32 sequencer, so its choices (MIDI map, envelope, velocity law) are labelled decisions P1 to P16 in `docs/decisions.md`.
 
 This page covers the offline commands, `render` and `waves`, and live `play` (WinMM MIDI in, WASAPI out, Windows only).
 
@@ -110,7 +110,7 @@ How it works:
 | Pitch bend range | +/-2 semitones | P9 | `src/player/voices.cpp` |
 | FC (pitch) table | formula | P2 | `makeFcTable()` |
 
-Further decisions: P1 (ESP slots per frame), P4 (filters wide open), P6 (velocity and CC 7 law), P7 (note end), P8 (stealing and retrigger), P12 (effect record write order), P13 (20 ms output fade), P14 (ESP boot), P15 (SMF parsing). All are in `docs/decisions.md` with their options and evidence.
+Further decisions: P1 (ESP slots per frame), P4 (filters wide open), P6 (velocity and CC 7 law), P7 (note end), P8 (stealing and retrigger), P12 (effect record write order), P13 (22 ms output fade), P14 (ESP boot), P15 (SMF parsing), P16 (ESP output DC residue). All are in `docs/decisions.md` with their options and evidence.
 
 The FC table is always computed by `makeFcTable()`. The Task 2 survey compared the firmware's table (at 0xC09F64) with the formula and found them identical, so no separate table file is read.
 
@@ -159,3 +159,7 @@ error: MIDI input 99 not found (2 devices)
 Usage errors (unknown command, wrong argument count) are followed by the usage text.
 
 A successful run exits 0.
+
+## Verification
+
+Test counts, the cross-toolchain identity check, the effect sweep and the user listening checklist are in `docs/verification-plan3.md`.

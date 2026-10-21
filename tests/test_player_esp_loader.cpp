@@ -300,7 +300,7 @@ TEST(loader_every_program_runs_and_decays) {
         CHECK(ref > 100.0);  // the effect passes the send to the output
         // The brief asks for RMS <= 4 LSB. The chip core leaves a small negative DC residue in the
         // recirculating programs (floor truncation in the MAC readout and the 16-bit RAM write; see
-        // the Task 5 report), so the tail is checked as AC RMS <= 4 and |DC| <= 32 (-60 dBFS).
+        // decision P16), so the tail is checked as AC RMS <= 4 and |DC| <= 32 (-60 dBFS).
         CHECK(acL <= 4.0);
         CHECK(acR <= 4.0);
         CHECK(std::abs(dcL) <= 32.0);

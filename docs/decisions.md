@@ -472,3 +472,10 @@ Entry template:
 - Evidence: the SMF 1.0 specification (chunk skipping, running status, variable-length quantities of at most 4 bytes); the plan timing formula (us = floor(sum(ticks * tempo) / ppq), frame = floor(us * 30476180 / 1024000000)).
 - Confidence: High for the spec rules, Medium for rejecting rather than tolerating files that continue running status after a meta event.
 - Status: `// DECISION P15` markers in `parseSmf` (`src/player/smf.cpp`). Tests: smf_skips_unknown_chunk, smf_rejects_5_byte_vlq, smf_rejects_status_in_data_position, smf_rejects_truncations_without_crash, smf_rejects_bad_headers, smf_tempo_change_midway.
+
+## P16: ESP output DC residue
+- Options: (a) accept the small negative DC (-3..-18 LSB) the effect programs settle on after a sound ends; (b) change the ESP core's MAC readout / DOL rounding to round toward zero; (c) add a DC blocker in the player.
+- Choice: (a) for now.
+- Evidence: 9 of 11 programs settle on -3..-18 LSB DC with AC RMS of at most 0.87 LSB (Task 5 decay test). This is consistent with the floor truncation of the DOL write and the MAC readout already pinned by Plan 1 (`docs/verification-plan1.md`: the 2 LSB zero-input limit cycle; MAME agrees bit for bit on the esp_mix and reverb paths). The KS-32's analog outputs are AC-coupled, and the DC is about -65 dBFS. Plan 3 verification (`docs/verification-plan3.md`) saw the same on the smoke file: effects 0 to 9 settle on 0 to -22 LSB, but effect 10 settles on -146 LSB (left) and -67 LSB (right), about -47 dBFS and -54 dBFS, which is larger than this entry's range.
+- Confidence: Medium.
+- Status: the decay tests (`tests/test_player_esp_loader.cpp` `loader_every_program_runs_and_decays`, `tests/test_player_synth.cpp` `synth_rom_note_sounds_and_decays`) check AC RMS and |DC| <= 32 separately.
