@@ -6,3 +6,4 @@ datasheets/
 *.pcm
 .superpowers/
 __pycache__/
+.worktrees/
