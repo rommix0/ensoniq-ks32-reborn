@@ -54,8 +54,10 @@ public:
     // queue filled from PC. 40 cycles (UM table 8-14). Clears halted() and stopped(); no
     // other register changes. Not counted in exceptionCount().
     void reset();
-    // Exactly one instruction or one exception; returns its cycles. A halted or stopped CPU
-    // idles 4 cycles (DECISION M6). An exception an instruction causes (TRAP, CHK, privilege
+    // Exactly one instruction or one exception; returns its cycles. A halted CPU idles 4
+    // cycles, and so does a stopped one with nothing to take (DECISION M6); a stopped CPU with
+    // a pending trace, or an interrupt level above the SR mask (setIpl, DECISION M7), takes it
+    // instead and is no longer stopped. An exception an instruction causes (TRAP, CHK, privilege
     // violation, address error, ...) belongs to that instruction's step; the trace exception
     // after an instruction that started with T = 1 is a step of its own (UM 6.3.8), and it
     // also ends a STOP.
@@ -70,8 +72,14 @@ public:
     bool stopped() const { return stopped_; }
     uint64_t totalCycles() const { return total_; }
 
+    // Instruction-boundary architectural state, for tests and debugging; NOT a save state.
+    // Registers holds no stopped/halted flag, pending trace, level 7 latch or IPL, so
+    // restoring regs() into another Cpu does not reproduce those (a CPU that was stopped would
+    // re-execute its STOP). setRegs masks sr with 0xA71F (T, S, I2..I0, X N Z V C), refills the
+    // internal IR/IRC from r.prefetch, clears a pending trace and leaves stopped()/halted()
+    // as they were.
     Registers regs() const;            // DECISION M3: pc/prefetch as in the suite
-    void setRegs(const Registers& r);  // also refills the internal IR/IRC from r.prefetch
+    void setRegs(const Registers& r);
 
     // Address of the last instruction started (after reset() or setRegs(): the PC).
     uint32_t instructionAddress() const { return instrAddr_; }

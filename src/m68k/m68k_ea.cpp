@@ -136,7 +136,7 @@ void Cpu::storeRmw(const Loc& l, int size, uint32_t v) {
     }
     if (size == kByte) write8(l.addr, static_cast<uint8_t>(v));
     else if (size == kWord) write16(l.addr, static_cast<uint16_t>(v));
-    else write32Desc(l.addr, v);  // M13: read-modify-write long stores go low word first
+    else write32Desc(l.addr, v);  // DECISION M13: read-modify-write long stores go low word first
 }
 
 }  // namespace ens::m68k

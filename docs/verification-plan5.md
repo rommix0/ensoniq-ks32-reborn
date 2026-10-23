@@ -79,11 +79,13 @@ Scc, TAS, TRAP, TRAPV, TST.b/w/l, UNLINK.
 
 ### M1's allowed classes
 
-- **smp (self-modifying prefetch): 0.** The class never occurs on the real suite. M1 says a class
-  that never occurs is deleted; the runner still has it, and its removal is left open for the
-  controller (it changes the runner's output format, which this task does not own).
+- **smp (self-modifying prefetch): 0.** The class never occurs on the real suite. It is kept on
+  purpose (final review, M1): it guards self-modifying prefetch cases the suite happens not to
+  contain and keeps the runner's output format stable.
 - **aef (address-error frame): 31371**, all from two decisions that follow the manuals where the
-  suite's generator differs, and both differences sit in the first 8 bytes of the 14-byte frame:
+  suite's generator differs. Since the final review the class accepts nothing else: vector 3
+  taken, every register, the prefetch words and the cycles exact, and the only RAM difference is
+  the low byte of the frame's status word (SSP + 1) in bits 3..0; the 31371 cases still pass:
   - 3401 are the M12 function code of PC-relative operand reads (program space as in PRM 2.0; the
     suite records data space). Example: MOVE.w `3e3a [MOVE.w (d16, PC), D7] 759`. They are spread
     over the arithmetic, logic, MOVE, MOVEA, MOVEM, CHK, MUL/DIV and MOVEtoSR/CCR files above.
@@ -96,6 +98,10 @@ Scc, TAS, TRAP, TRAPV, TST.b/w/l, UNLINK.
 - **dev (manual deviation by name): 3.** `80ef [DIVU (d16, A7), D0] 5745` (M15: the stacked PC of
   divide by zero is the next instruction's, UM 6.3.5), and `e502 [ASL.b Q, D2] 1583` and
   `e502 [ASL.b Q, D2] 1761` (M19: the suite's recorded initial and final states are inconsistent).
+  Since the final review each entry names the fields it may differ in, and any other difference
+  is a FAIL: DIVU 5745 only RAM 0x7FF (the stacked PC's low byte: expected 0x00, got 0x04); ASL.b
+  1583 D2 and the condition codes (SR 0x2713 expected, 0x270A got); ASL.b 1761 D2 only. All
+  three still pass as dev with the same output on both builds.
 
 ## Cross-toolchain identity
 
@@ -174,7 +180,7 @@ not committed.
 
 | Id | Topic | Confidence |
 |---|---|---|
-| M1 | Suite pass criterion (exact, plus smp, aef and dev by name) | Medium (smp never occurs; aef is fully explained by M12; dev is 3 named cases) |
+| M1 | Suite pass criterion (exact, plus smp, aef and dev by name) | Medium (smp never occurs and is kept as a guard; aef is fully explained by M12 and limited to status bits 3..0; dev is 3 named cases limited to named fields) |
 | M2 | Undefined flags and results follow the suite | High for BCD, DIV overflow and CHK N/V/C; Medium for divide by zero (one case) and CHK Z for Dn = 0 (no case) |
 | M3 | PC and prefetch convention (suite's) | High |
 | M4 | Interrupt timing: 44 cycles, order of the acknowledge cycle | High for 44 and the frame; Medium for the acknowledge cycle's position |

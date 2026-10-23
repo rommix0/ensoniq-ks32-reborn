@@ -113,28 +113,73 @@ uint8_t expectedAt(const HarteTest& t, uint32_t addr) {
 }
 
 // DECISION M1: the manual-deviation table. Each entry is one suite test, by exact name, where
-// a decision follows the PRM/UM against the suite; nothing else may be listed.
+// a decision follows the PRM/UM against the suite; nothing else may be listed. An entry also
+// names the only fields the decision covers (D registers, SR bits, one RAM byte): a listed
+// test with any other difference is a failure, so the entry cannot hide a second bug.
+constexpr uint32_t kNoRam = 0xFFFFFFFFu;  // no RAM address (bus addresses are 24-bit)
 struct ManualDeviationEntry {
     const char* name;
     const char* decision;
+    uint8_t dMask;     // bit n: D<n> may differ
+    uint16_t srMask;   // SR bits that may differ
+    uint32_t ramAddr;  // the one RAM byte that may differ, or kNoRam
 };
 constexpr ManualDeviationEntry kManualDeviations[] = {
-    // Divide by zero stacks the next instruction's address (UM 6.3.5); the suite stacks the
-    // instruction's own address.
-    {"80ef [DIVU (d16, A7), D0] 5745", "M15"},
-    // The suite's recorded initial D2 cannot produce its final D2 and C (no ASL.b #2 can
-    // change bits 31..8); the model's result follows from the recorded initial state.
-    {"e502 [ASL.b Q, D2] 1583", "M19"},
-    {"e502 [ASL.b Q, D2] 1761", "M19"},
+    // DECISION M15: divide by zero stacks the next instruction's address (UM 6.3.5); the suite stacks the
+    // instruction's own address. Only RAM 0x7FF differs: the low byte of the stacked PC.
+    {"80ef [DIVU (d16, A7), D0] 5745", "M15", 0x00, 0x0000, 0x7FF},
+    // DECISION M19: the suite's recorded initial D2 cannot produce its final D2 and C (no ASL.b #2 can
+    // change bits 31..8); the model's result follows from the recorded initial state. D2 differs
+    // (and, in 1583, the condition codes the final state derived from the other D2).
+    {"e502 [ASL.b Q, D2] 1583", "M19", 0x04, 0x001F, kNoRam},
+    {"e502 [ASL.b Q, D2] 1761", "M19", 0x04, 0x0000, kNoRam},
 };
+
+// Every address the CPU wrote or the test names, sorted, once. An address missing from gotRam
+// reads 0.
+std::vector<uint32_t> ramAddresses(const HarteTest& t, const RamList& gotRam) {
+    std::vector<uint32_t> addrs;
+    for (const auto& e : gotRam) addrs.push_back(e.first);
+    for (const auto& e : t.final.ram) addrs.push_back(e.first);
+    std::sort(addrs.begin(), addrs.end());
+    addrs.erase(std::unique(addrs.begin(), addrs.end()), addrs.end());
+    return addrs;
+}
 
 HarteResult classifyCore(const HarteTest& t, const Registers& got, const RamList& gotRam,
                          uint32_t gotCycles, uint32_t instrAddr, int vectorTaken, std::string* diffText);
 
+// True when every difference between the test's final state and `got` lies in the fields the
+// entry's decision covers (DECISION M1).
+bool deviationCovers(const ManualDeviationEntry& e, const HarteTest& t, const Registers& got,
+                     const RamList& gotRam, uint32_t gotCycles) {
+    const Registers& exp = t.final.regs;
+    for (int i = 0; i < 8; ++i) {
+        if (((e.dMask >> i) & 1) == 0 && exp.d[i] != got.d[i]) return false;
+    }
+    for (int i = 0; i < 7; ++i) {
+        if (exp.a[i] != got.a[i]) return false;
+    }
+    if (exp.usp != got.usp || exp.ssp != got.ssp || exp.pc != got.pc) return false;
+    if (((exp.sr ^ got.sr) & ~e.srMask) != 0) return false;
+    if (exp.prefetch[0] != got.prefetch[0] || exp.prefetch[1] != got.prefetch[1]) return false;
+    if (t.cycles != gotCycles) return false;
+    for (uint32_t a : ramAddresses(t, gotRam)) {
+        bool found = false;
+        if (expectedAt(t, a) != lookup(gotRam, a, found) && a != e.ramAddr) return false;
+    }
+    return true;
+}
+
 HarteResult classify(const HarteTest& t, const Registers& got, const RamList& gotRam,
                      uint32_t gotCycles, uint32_t instrAddr, int vectorTaken, std::string* diffText) {
     const HarteResult r = classifyCore(t, got, gotRam, gotCycles, instrAddr, vectorTaken, diffText);
-    if (r == HarteResult::Fail && manualDeviation(t.name) != nullptr) return HarteResult::ManualDeviation;
+    if (r != HarteResult::Fail) return r;
+    for (const ManualDeviationEntry& e : kManualDeviations) {
+        if (t.name == e.name && deviationCovers(e, t, got, gotRam, gotCycles)) {
+            return HarteResult::ManualDeviation;
+        }
+    }
     return r;
 }
 
@@ -154,32 +199,35 @@ HarteResult classifyCore(const HarteTest& t, const Registers& got, const RamList
     d.hexField("prefetch1", exp.prefetch[1], got.prefetch[1]);
     const bool prefetchEqual = exp.prefetch[0] == got.prefetch[0] && exp.prefetch[1] == got.prefetch[1];
 
-    // RAM: every byte the CPU wrote or the test names. An address missing from gotRam reads 0.
-    std::vector<uint32_t> addrs;
-    for (const auto& e : gotRam) addrs.push_back(e.first);
-    for (const auto& e : t.final.ram) addrs.push_back(e.first);
-    std::sort(addrs.begin(), addrs.end());
-    addrs.erase(std::unique(addrs.begin(), addrs.end()), addrs.end());
-    std::vector<uint32_t> ramDiffs;
-    for (uint32_t a : addrs) {
+    // RAM: every byte the CPU wrote or the test names.
+    struct RamDiff {
+        uint32_t addr;
+        uint8_t expected, got;
+    };
+    std::vector<RamDiff> ramDiffs;
+    for (uint32_t a : ramAddresses(t, gotRam)) {
         bool found = false;
         const uint8_t g = lookup(gotRam, a, found);
         const uint8_t e = expectedAt(t, a);
         if (e != g) {
-            ramDiffs.push_back(a);
+            ramDiffs.push_back({a, e, g});
             d.add("ram[" + hex(a) + "]", hex(e), hex(g));
         }
     }
     if (!d.any) return HarteResult::Pass;
     if (!coreEqual) return HarteResult::Fail;
 
-    // DECISION M1: d, a, usp, ssp, pc, sr and cycles are always exact (except for a test in
-    // the manual-deviation table, see classify). Two classes may absorb the rest. (1) SelfModifyingPrefetch: the test's own final RAM shows a write inside the
-    // instruction's prefetch window [instrAddr, instrAddr + 6), and every difference is a RAM byte
-    // inside that window or one/both prefetch words (the closing fetch reads the old or the new
-    // value depending on the order of write and fetch, which the suite records from the hardware).
-    // (2) AddressErrorFrame: vector 3 and prefetch words equal, every RAM difference in the
-    // first 8 bytes (status word, access address, IR) of the 14-byte frame at the final SSP.
+    // DECISION M1: d, a, usp, ssp, pc, sr and cycles are always exact (a listed manual
+    // deviation is judged in classify). Two classes may absorb the rest. (1)
+    // SelfModifyingPrefetch: the test's own final RAM shows a write inside the instruction's
+    // prefetch window [instrAddr, instrAddr + 6), and every difference is a RAM byte inside
+    // that window or one/both prefetch words (the closing fetch reads the old or the new value
+    // depending on the order of write and fetch, which the suite records from the hardware).
+    // The suite has no such case (smp 0); the class stays to guard self-modifying code the
+    // suite does not contain. (2) AddressErrorFrame: vector 3 taken, prefetch words equal, and
+    // the only RAM difference is in bits 3..0 (I/N and FC2..FC0) of the low byte of the frame's
+    // status word, at SSP + 1; every other frame byte (R/W bit, access address, IR, SR, PC) is
+    // exact (M12: the suite's I/N and function-code choices).
     auto inWindow = [instrAddr](uint32_t a) { return a >= instrAddr && a - instrAddr < 6; };
     bool wroteInWindow = false;
     for (const auto& e : t.final.ram) {
@@ -187,9 +235,9 @@ HarteResult classifyCore(const HarteTest& t, const Registers& got, const RamList
         if (inWindow(e.first) && e.second != lookup(t.initial.ram, e.first, found)) wroteInWindow = true;
     }
     bool ramInWindow = true, ramInFrame = true;
-    for (uint32_t a : ramDiffs) {
-        if (!inWindow(a)) ramInWindow = false;
-        if (!(a >= got.ssp && a - got.ssp < 8)) ramInFrame = false;
+    for (const RamDiff& r : ramDiffs) {
+        if (!inWindow(r.addr)) ramInWindow = false;
+        if (r.addr != got.ssp + 1 || ((r.expected ^ r.got) & ~0x0Fu) != 0) ramInFrame = false;
     }
     if (wroteInWindow && ramInWindow) return HarteResult::SelfModifyingPrefetch;
     if (vectorTaken == 3 && prefetchEqual && ramInFrame) return HarteResult::AddressErrorFrame;

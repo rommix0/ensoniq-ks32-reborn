@@ -209,8 +209,9 @@ int main(int argc, char** argv) {
         for (const HarteTest& t : tests) {
             const HarteResult r = runner.run(t, diff);
             // DECISION M1: a test passes when it is exact or falls in one of the three allowed
-            // classes. A listed manual deviation that no longer fails is a stale table entry.
-            if (r != HarteResult::ManualDeviation) {
+            // classes. A listed manual deviation that no longer fails is a stale table entry; one
+            // that fails outside the fields its entry covers is an ordinary FAIL (listed below).
+            if (r != HarteResult::ManualDeviation && r != HarteResult::Fail) {
                 if (const char* id = manualDeviation(t.name)) {
                     std::printf("  WARNING stale manual deviation (%s): %s no longer fails\n", id,
                                 t.name.c_str());

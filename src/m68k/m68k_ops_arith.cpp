@@ -35,6 +35,7 @@ uint32_t Cpu::readPredec(int r, int size, uint32_t& addr) {
     // -(An) for the memory forms of ADDX/SUBX/ABCD/SBCD, after the one 2-clock idle the
     // caller runs. A long is read low word first, An stepping by 2 per word, so an odd An
     // faults at An - 2 and keeps that value (suite ADDX.l "db8a [ADDX.l -(A2), -(A5)] 7").
+    // DECISION M13: the long -(An) read goes low word first.
     if (size == kLong) {
         a_[r] -= 2;
         const uint32_t lo = read16(a_[r]);
@@ -141,7 +142,7 @@ void Cpu::opAddxSubx(int size, bool isSub) {
     }
     // One 2-clock idle for both predecrements; read source, read destination; byte and
     // word: closing fetch, write; long: low word, closing fetch, high word (suite ADDX.l
-    // "d98e [ADDX.l -(A6), -(A4)] 1").
+    // "d98e [ADDX.l -(A6), -(A4)] 1"). DECISION M13: the long store goes low word first.
     idle(2);
     uint32_t srcAddr = 0, dstAddr = 0;
     const uint32_t src = readPredec(ry, size, srcAddr);

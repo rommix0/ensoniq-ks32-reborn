@@ -31,6 +31,8 @@ void Cpu::addressFault(uint32_t addr, bool read, bool program) {
     faultAddr_ = addr;
     faultPc_ = pc_ - 2;  // DECISION M11: the suite stacks the address of the word before IRC
     const uint16_t fc = static_cast<uint16_t>((supervisor() ? 4 : 0) | (program ? 2 : 1));
+    // DECISION M12: I/N = 0 for a fault while an instruction runs (UM 6.3.9.1), also on the first
+    // fetch at an odd jump target; the suite sets 1 there (27970 cases, reported as aef).
     faultStatus_ = static_cast<uint16_t>((read ? 0x10 : 0) | (notInstruction_ ? 0x08 : 0) | fc);
     throw AddressFault{};
 }
@@ -195,6 +197,8 @@ int Cpu::run(int cycles) {
     // is clamped to int.
     int64_t done = 0;
     while (done < cycles) {
+        // DECISION M7: a stopped CPU with an interrupt to take (pendingInterrupt) is stepped,
+        // not idled; step() takes it.
         if (halted_ || (stopped_ && !tracePending_ && pendingInterrupt() == 0)) {
             total_ += static_cast<uint64_t>(cycles - done);
             done = cycles;
@@ -282,6 +286,8 @@ void Cpu::exception(int vector, uint32_t stackedPc, int leadIdle) {
 void Cpu::enterException(int vector, uint32_t stackedPc, int leadIdle, bool group2, int newMask) {
     // UM 6.2.5: copy the SR, then S = 1 and T = 0 (setSr switches A7 to the SSP); an
     // interrupt also loads the mask with its level.
+    // DECISION M4: an interrupt (newMask >= 0) loads the mask with its level here; the 44
+    // clocks are laid out in Cpu::interrupt.
     const uint16_t oldSr = sr_;
     uint16_t newSr = static_cast<uint16_t>((sr_ | kSrS) & ~kSrT);
     if (newMask >= 0) newSr = static_cast<uint16_t>((newSr & ~0x0700) | (newMask << 8));
