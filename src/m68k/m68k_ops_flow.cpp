@@ -172,7 +172,7 @@ void Cpu::opReset() {
 
 void Cpu::opStop() {
     // PRM STOP: the immediate word to SR, the PC to the next instruction, then no more
-    // fetching until a trace, interrupt (Task 7) or reset exception. UM table 8-12: 4(0/0),
+    // fetching until a trace, interrupt (DECISION M7) or reset exception. UM table 8-12: 4(0/0),
     // so the queue is not refilled.
     // DECISION M22: the IR/IRC words stay as they were (the STOP opcode and its immediate)
     // and regs().pc is the next instruction's address; the exception that ends the STOP

@@ -28,6 +28,7 @@ struct Bus {
     virtual void write8(uint32_t addr, uint8_t v) = 0;
     virtual void write16(uint32_t addr, uint16_t v) = 0;
     // Interrupt acknowledge for `level` (1..7): a vector number 0..255, kAutovector or kSpurious.
+    // DECISION M24: any other answer is taken as kSpurious.
     virtual int interruptAcknowledge(int level) {
         (void)level;
         return kAutovector;
@@ -61,7 +62,10 @@ public:
     int step();
     // DECISION M6: whole instructions until >= cycles have passed; returns cycles used.
     int run(int cycles);
-    void setIpl(int level);  // 0..7, clamped (interrupts: Task 7)
+    // Interrupt request level 0..7 (clamped), latched and sampled at the next instruction
+    // boundary (DECISION M7): levels above the SR mask are taken, level 7 also once per rise to 7.
+    // A pending interrupt above the mask wakes a stopped CPU; a halted one stays halted.
+    void setIpl(int level);
     bool halted() const { return halted_; }
     bool stopped() const { return stopped_; }
     uint64_t totalCycles() const { return total_; }
@@ -154,6 +158,15 @@ private:
     // frame (PC, SR) on the SSP, fetch the vector and refill the prefetch queue. 34 cycles,
     // of which `leadIdle` (4) are internal clocks before the frame (TRAPV has none).
     void exception(int vector, uint32_t stackedPc, int leadIdle = 4);
+    // The shared entry. `group2` marks an exception an instruction causes (it decides the I/N
+    // bit and the trace block; exception() infers it from the vector, an interrupt passes it
+    // explicitly because a device may supply any vector 0..255). newMask >= 0 also loads the
+    // interrupt mask.
+    void enterException(int vector, uint32_t stackedPc, int leadIdle, bool group2, int newMask);
+    // The level of the interrupt to take at this instruction boundary, or 0 (DECISION M7).
+    int pendingInterrupt() const;
+    // The interrupt exception for `level`: acknowledge cycle, then the 44-cycle entry (DECISION M4).
+    void interrupt(int level);
     void privilegeViolation() { exception(8, instrAddr_); }  // vector 8, the instruction's address
     // Group 0: the 14-byte address-error frame for the fault in fault*_. 50 cycles. A fault
     // inside it is a double fault and halts (DECISION M9).
@@ -246,6 +259,7 @@ private:
     uint16_t ir_ = 0, irc_ = 0;
     uint16_t opcode_ = 0;  // ir_ when the instruction started (ir_ moves on at its closing fetch)
     int ipl_ = 0;
+    bool irq7Pending_ = false;  // a rise to level 7 not yet taken (DECISION M7)
     bool halted_ = false, stopped_ = false;
     // Trace (UM 6.3.8): pending after an instruction that started with T = 1 and was executed;
     // traceBlocked_ is set when the instruction instead took an illegal, line A/F or

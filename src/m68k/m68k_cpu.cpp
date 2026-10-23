@@ -1,6 +1,8 @@
 // 68000 run loop, bus cycles, prefetch queue, status register and exception entry.
 #include "m68k/m68k.h"
 
+#include <cstdint>
+
 namespace ens::m68k {
 
 namespace {
@@ -125,6 +127,7 @@ void Cpu::reset() {
     halted_ = false;
     stopped_ = false;
     tracePending_ = false;
+    irq7Pending_ = false;  // DECISION M7: a level 7 held through the reset is not a rise
     notInstruction_ = true;
     setSr(0x2700);  // S = 1 (the USP is kept in otherSp_), T = 0, mask 7
     // UM table 8-14: 40(6/0). The six reads are the vector longs and the two prefetch words;
@@ -144,16 +147,24 @@ void Cpu::reset() {
 
 int Cpu::step() {
     cycles_ = 0;
-    if (halted_ || (stopped_ && !tracePending_)) {
+    if (halted_) {
         idle(4);  // DECISION M6: a halted or stopped CPU idles one bus-cycle time per step()
     } else {
         try {
             if (tracePending_) {
                 // UM 6.3.8: after the instruction, a group-1 exception stacking the address of
-                // the next instruction (34 cycles, table 8-14). It ends a STOP (PRM STOP).
+                // the next instruction (34 cycles, table 8-14). It ends a STOP (PRM STOP). It
+                // comes before an interrupt (UM 6.3.9: trace, then interrupt).
                 tracePending_ = false;
                 stopped_ = false;
                 exception(kVectorTrace, pc_ - 2);
+            } else if (const int level = pendingInterrupt(); level != 0) {
+                // DECISION M7: pending interrupts are looked at between instructions, also
+                // while stopped. The interrupt ends a STOP.
+                stopped_ = false;
+                interrupt(level);
+            } else if (stopped_) {
+                idle(4);  // DECISION M6
             } else {
                 instrAddr_ = pc_ - 2;
                 opcode_ = ir_;
@@ -179,21 +190,54 @@ int Cpu::step() {
 
 int Cpu::run(int cycles) {
     // DECISION M6: whole instructions until >= cycles (overshoot < one instruction); a halted
-    // or stopped CPU consumes exactly the rest of the slice.
-    int done = 0;
+    // or stopped CPU that has nothing to take consumes exactly the rest of the slice. The
+    // slice is counted in 64 bits, so no sum of step() results can overflow, and the result
+    // is clamped to int.
+    int64_t done = 0;
     while (done < cycles) {
-        if (halted_ || (stopped_ && !tracePending_)) {
+        if (halted_ || (stopped_ && !tracePending_ && pendingInterrupt() == 0)) {
             total_ += static_cast<uint64_t>(cycles - done);
             done = cycles;
             break;
         }
         done += step();
     }
-    return done;
+    return done > INT32_MAX ? INT32_MAX : static_cast<int>(done);
 }
 
 void Cpu::setIpl(int level) {
-    ipl_ = level < 0 ? 0 : (level > 7 ? 7 : level);
+    const int l = level < 0 ? 0 : (level > 7 ? 7 : level);
+    // DECISION M7: a rise to level 7 arms the edge latch; any other level disarms it, since a
+    // level that is gone before the next instruction boundary is never sampled.
+    if (l == 7 && ipl_ != 7) irq7Pending_ = true;
+    if (l != 7) irq7Pending_ = false;
+    ipl_ = l;
+}
+
+int Cpu::pendingInterrupt() const {
+    // DECISION M7: the level latched by setIpl() is compared with the SR mask at each
+    // instruction boundary (UM 6.3.2: taken when higher than the mask, so levels 1..6 are
+    // level-sensitive and a held request is taken again whenever the mask drops below it).
+    // Level 7 is also taken once for each rise to 7, whatever the mask.
+    const int mask = (sr_ >> 8) & 7;
+    if (ipl_ > mask || (ipl_ == 7 && irq7Pending_)) return ipl_;
+    return 0;
+}
+
+void Cpu::interrupt(int level) {
+    // DECISION M4: 44 clocks, UM table 8-14 interrupt 44(5/3) with a 4-clock acknowledge cycle
+    // and no E-clock/VMA synchronisation jitter (a cycle count must not depend on the phase of
+    // a clock the bus does not model). Order (the UM gives the totals, not the order): 6
+    // internal clocks, the acknowledge cycle (4), 4 internal clocks, the frame (PC low, SR, PC
+    // high), the vector read, the first prefetch, 2 internal clocks, the second prefetch: 12
+    // internal clocks and 8 bus cycles. The acknowledge counts as the table's fifth read.
+    if (level == 7) irq7Pending_ = false;
+    idle(6);
+    const int ack = bus_.interruptAcknowledge(level);
+    idle(4);
+    // DECISION M24: an answer outside 0..255 that is not kAutovector is taken as spurious.
+    const int vector = ack >= 0 && ack <= 255 ? ack : (ack == kAutovector ? 24 + level : 24);
+    enterException(vector, pc_ - 2, 4, false, level);
 }
 
 // ---- register access ----------------------------------------------------------------------
@@ -232,11 +276,18 @@ uint32_t Cpu::exceptionCount(int vector) const {
 // ---- exceptions ---------------------------------------------------------------------------
 
 void Cpu::exception(int vector, uint32_t stackedPc, int leadIdle) {
-    // UM 6.2.5: copy the SR, then S = 1 and T = 0 (setSr switches A7 to the SSP).
+    enterException(vector, stackedPc, leadIdle, isGroup2(vector), -1);
+}
+
+void Cpu::enterException(int vector, uint32_t stackedPc, int leadIdle, bool group2, int newMask) {
+    // UM 6.2.5: copy the SR, then S = 1 and T = 0 (setSr switches A7 to the SSP); an
+    // interrupt also loads the mask with its level.
     const uint16_t oldSr = sr_;
-    setSr(static_cast<uint16_t>((sr_ | kSrS) & ~kSrT));
+    uint16_t newSr = static_cast<uint16_t>((sr_ | kSrS) & ~kSrT);
+    if (newMask >= 0) newSr = static_cast<uint16_t>((newSr & ~0x0700) | (newMask << 8));
+    setSr(newSr);
     ++exceptions_[vector & 0xFF];
-    if (!isGroup2(vector)) {
+    if (!group2) {
         notInstruction_ = true;  // UM 6.3.9.1: the frame's I/N bit
         // UM 6.3.8: an illegal or privileged instruction is not executed, so not traced. A
         // group-2 exception (TRAP, TRAPV, CHK, divide by zero) is followed by the trace.
