@@ -7,3 +7,4 @@ datasheets/
 .superpowers/
 __pycache__/
 .worktrees/
+testdata/

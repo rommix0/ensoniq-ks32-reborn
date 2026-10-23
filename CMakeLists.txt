@@ -11,6 +11,8 @@ else()
   add_compile_options(-Wall -Wextra)
 endif()
 
+set(ENS_M68K_TESTS_DIR "${CMAKE_SOURCE_DIR}/testdata/680x0/68000/m68t" CACHE PATH
+  "Converted Tom Harte 68000 tests (.m68t, see docs/m68k.md); m68k_suite skips when absent")
 set(ENS_ROM_DIR "${CMAKE_SOURCE_DIR}/ks-32" CACHE PATH "KS-32 ROM directory for ROM-dependent tests")
 
 option(ENS_BUILD_MAME_REF "Build the vendored MAME reference tool" OFF)
@@ -34,6 +36,10 @@ target_link_libraries(ens_esp PUBLIC ens_common)
 # Motorola 68000 core (Plan 5). Later tasks add the instruction-family sources to this list.
 add_library(ens_m68k STATIC src/m68k/m68k_decode.cpp src/m68k/m68k_cpu.cpp)
 target_link_libraries(ens_m68k PUBLIC ens_common)
+
+# Tom Harte's per-instruction tests (.m68t reader and runner); the data itself is not in the repo.
+add_library(ens_m68k_harte STATIC src/m68k/harte_format.cpp)
+target_link_libraries(ens_m68k_harte PUBLIC ens_m68k)
 
 # KS-32 board: wave ROM layout, OTIS + ESP + delay DRAM and the frame routing.
 add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp)
@@ -77,6 +83,12 @@ if(WIN32)
   target_link_libraries(ks32play PRIVATE winmm ole32 avrt)
 endif()
 target_compile_definitions(ks32play PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# 68000 per-instruction suite runner (tools/m68k_harte/convert_harte.py makes the .m68t files).
+add_executable(m68k_harte tools/m68k_harte/main.cpp)
+target_link_libraries(m68k_harte PRIVATE ens_m68k_harte)
+target_compile_definitions(m68k_harte PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_test(NAME m68k_suite COMMAND m68k_harte ${ENS_M68K_TESTS_DIR})
 
 # MAME reference harness (Task 12): vendored MAME chip code, built only on request.
 if(ENS_BUILD_MAME_REF)
