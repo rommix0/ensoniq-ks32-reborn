@@ -31,8 +31,15 @@ struct HarteTest {
 bool parseHarte(const std::vector<uint8_t>& bytes, std::vector<HarteTest>& out, std::string& err);
 
 // DECISION M1: Pass = registers (incl. prefetch), cycles and RAM all equal the suite's final
-// state. Two documented deviations are allowed classes, never a Pass.
-enum class HarteResult { Pass, Fail, SelfModifyingPrefetch, AddressErrorFrame };
+// state. Two documented deviations are allowed classes, never a Pass. A third,
+// ManualDeviation, is a failing test listed by exact name in a fixed table, each entry with
+// the decision id that overrides the suite there (see manualDeviation).
+enum class HarteResult { Pass, Fail, SelfModifyingPrefetch, AddressErrorFrame, ManualDeviation };
+
+// The decision id (e.g. "M15") that overrides the suite for the test of this exact name, or
+// nullptr. DECISION M1: an entry needs a decision that follows the manuals against the suite;
+// entries are never added just to silence a failure. A listed test that passes is stale.
+const char* manualDeviation(const std::string& testName);
 
 // Runs one test: loads the initial state into a sparse 24-bit bus, setRegs, one step(), compares.
 // `diff` receives one line per difference ("field: expected X, got Y"). Builds a Cpu per call;

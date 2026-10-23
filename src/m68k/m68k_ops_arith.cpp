@@ -331,6 +331,8 @@ void Cpu::opDiv(bool isSigned) {
 void Cpu::opChk() {
     // CHK <ea>,Dn (word): no trap 10(1/0)+; trap (UM table 8-14) 40(4/3)+. The closing
     // fetch runs first and the frame stacks the next instruction's address (suite CHK).
+    // DECISION M16: a trap for Dn > bound takes 38 + <ea>, one for Dn < 0 (within the bound)
+    // 40 + <ea>, as the suite has it; the UM's single 40 covers only the second case.
     const uint32_t bound = signExtend(readEa(opcode_ & 0x3F, kWord), kWord);
     const uint32_t dn = signExtend(d_[(opcode_ >> 9) & 7], kWord);
     prefetch();
@@ -345,11 +347,11 @@ void Cpu::opChk() {
     };
     if (signedGreater(dn, bound)) {
         // Above the bound (also when negative): the trap starts at once, 38 + <ea> in all
-        // (suite CHK "4581 [CHK D1, D2] 443").
+        // (DECISION M16; suite CHK "4581 [CHK D1, D2] 443").
         setCcr(static_cast<uint16_t>((ccr & ~kCcrN) | (negative ? kCcrN : 0)));
         exception(kVectorChk, pc_ - 2);
     } else if (negative) {
-        // Below zero: 2 more clocks, 40 + <ea> (the UM's figure).
+        // Below zero: 2 more clocks, 40 + <ea> (the UM's figure; DECISION M16).
         setCcr(static_cast<uint16_t>(ccr | kCcrN));
         idle(2);
         exception(kVectorChk, pc_ - 2);

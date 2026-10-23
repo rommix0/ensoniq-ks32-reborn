@@ -1,8 +1,9 @@
 // m68k_harte: run Tom Harte's 68000 per-instruction tests (converted to .m68t) against ens_m68k.
 //   m68k_harte <dir> [--only NAME[,NAME]] [--max-fail N]
-// One line per file: "NAME: pass/total (smp a, aef b)" where pass includes the two allowed
-// classes (DECISION M1: self-modifying prefetch, address-error frame). The first --max-fail
-// (default 3) failing tests of a file are listed with their first 3 differences.
+// One line per file: "NAME: pass/total (smp a, aef b, dev c)" where pass includes the three
+// allowed classes (DECISION M1: self-modifying prefetch, address-error frame, manual deviation
+// by name). The first --max-fail (default 3) failing tests of a file are listed with their
+// first 3 differences; a manual-deviation test that passes is reported as a stale entry.
 // Exit codes: 0 all tests pass (or the data is missing: "skip"), 1 any failure, 2 usage or
 // corrupt data.
 #include <algorithm>
@@ -105,7 +106,7 @@ int main(int argc, char** argv) {
     }
 
     HarteRunner runner;
-    uint64_t totalTests = 0, totalPass = 0, totalSmp = 0, totalAef = 0;
+    uint64_t totalTests = 0, totalPass = 0, totalSmp = 0, totalAef = 0, totalDev = 0;
     for (const fs::path& f : files) {
         std::vector<uint8_t> bytes;
         std::vector<HarteTest> tests;
@@ -115,13 +116,23 @@ int main(int argc, char** argv) {
                          err.empty() ? "cannot read file" : err.c_str());
             return 2;
         }
-        uint64_t pass = 0, smp = 0, aef = 0;
+        uint64_t pass = 0, smp = 0, aef = 0, dev = 0;
         int listed = 0;
         std::string diff;
         for (const HarteTest& t : tests) {
             const HarteResult r = runner.run(t, diff);
-            // DECISION M1: a test passes when it is exact or falls in one of the two allowed classes.
-            if (r == HarteResult::Pass) {
+            // DECISION M1: a test passes when it is exact or falls in one of the three allowed
+            // classes. A listed manual deviation that no longer fails is a stale table entry.
+            if (r != HarteResult::ManualDeviation) {
+                if (const char* id = manualDeviation(t.name)) {
+                    std::printf("  WARNING stale manual deviation (%s): %s no longer fails\n", id,
+                                t.name.c_str());
+                }
+            }
+            if (r == HarteResult::ManualDeviation) {
+                ++pass;
+                ++dev;
+            } else if (r == HarteResult::Pass) {
                 ++pass;
             } else if (r == HarteResult::SelfModifyingPrefetch) {
                 ++pass;
@@ -135,16 +146,19 @@ int main(int argc, char** argv) {
                 printFirstLines(diff, 3);
             }
         }
-        std::printf("%s: %llu/%llu (smp %llu, aef %llu)\n", f.stem().string().c_str(),
+        std::printf("%s: %llu/%llu (smp %llu, aef %llu, dev %llu)\n", f.stem().string().c_str(),
                     static_cast<unsigned long long>(pass), static_cast<unsigned long long>(tests.size()),
-                    static_cast<unsigned long long>(smp), static_cast<unsigned long long>(aef));
+                    static_cast<unsigned long long>(smp), static_cast<unsigned long long>(aef),
+                    static_cast<unsigned long long>(dev));
         totalTests += tests.size();
         totalPass += pass;
         totalSmp += smp;
         totalAef += aef;
+        totalDev += dev;
     }
-    std::printf("total: %llu/%llu (smp %llu, aef %llu)\n", static_cast<unsigned long long>(totalPass),
-                static_cast<unsigned long long>(totalTests), static_cast<unsigned long long>(totalSmp),
-                static_cast<unsigned long long>(totalAef));
+    std::printf("total: %llu/%llu (smp %llu, aef %llu, dev %llu)\n",
+                static_cast<unsigned long long>(totalPass), static_cast<unsigned long long>(totalTests),
+                static_cast<unsigned long long>(totalSmp), static_cast<unsigned long long>(totalAef),
+                static_cast<unsigned long long>(totalDev));
     return totalPass == totalTests ? 0 : 1;
 }

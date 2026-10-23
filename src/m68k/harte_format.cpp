@@ -112,8 +112,30 @@ uint8_t expectedAt(const HarteTest& t, uint32_t addr) {
     return lookup(t.initial.ram, addr, found);
 }
 
+// DECISION M1: the manual-deviation table. Each entry is one suite test, by exact name, where
+// a decision follows the PRM/UM against the suite; nothing else may be listed.
+struct ManualDeviationEntry {
+    const char* name;
+    const char* decision;
+};
+constexpr ManualDeviationEntry kManualDeviations[] = {
+    // Divide by zero stacks the next instruction's address (UM 6.3.5); the suite stacks the
+    // instruction's own address.
+    {"80ef [DIVU (d16, A7), D0] 5745", "M15"},
+};
+
+HarteResult classifyCore(const HarteTest& t, const Registers& got, const RamList& gotRam,
+                         uint32_t gotCycles, uint32_t instrAddr, int vectorTaken, std::string* diffText);
+
 HarteResult classify(const HarteTest& t, const Registers& got, const RamList& gotRam,
                      uint32_t gotCycles, uint32_t instrAddr, int vectorTaken, std::string* diffText) {
+    const HarteResult r = classifyCore(t, got, gotRam, gotCycles, instrAddr, vectorTaken, diffText);
+    if (r == HarteResult::Fail && manualDeviation(t.name) != nullptr) return HarteResult::ManualDeviation;
+    return r;
+}
+
+HarteResult classifyCore(const HarteTest& t, const Registers& got, const RamList& gotRam,
+                         uint32_t gotCycles, uint32_t instrAddr, int vectorTaken, std::string* diffText) {
     Diffs d{diffText};
     const Registers& exp = t.final.regs;
     for (int i = 0; i < 8; ++i) d.hexField("d" + std::to_string(i), exp.d[i], got.d[i]);
@@ -147,8 +169,8 @@ HarteResult classify(const HarteTest& t, const Registers& got, const RamList& go
     if (!d.any) return HarteResult::Pass;
     if (!coreEqual) return HarteResult::Fail;
 
-    // DECISION M1: d, a, usp, ssp, pc, sr and cycles are always exact. Two classes may absorb the
-    // rest. (1) SelfModifyingPrefetch: the test's own final RAM shows a write inside the
+    // DECISION M1: d, a, usp, ssp, pc, sr and cycles are always exact (except for a test in
+    // the manual-deviation table, see classify). Two classes may absorb the rest. (1) SelfModifyingPrefetch: the test's own final RAM shows a write inside the
     // instruction's prefetch window [instrAddr, instrAddr + 6), and every difference is a RAM byte
     // inside that window or one/both prefetch words (the closing fetch reads the old or the new
     // value depending on the order of write and fetch, which the suite records from the hardware).
@@ -294,6 +316,13 @@ HarteResult HarteRunner::run(const HarteTest& t, std::string& diff) {
     for (uint32_t a : addrs) gotRam.emplace_back(a, bus.mem[a]);
     return classify(t, cpu.regs(), gotRam, static_cast<uint32_t>(cycles), cpu.instructionAddress(),
                     vector, &diff);
+}
+
+const char* manualDeviation(const std::string& testName) {
+    for (const ManualDeviationEntry& e : kManualDeviations) {
+        if (testName == e.name) return e.decision;
+    }
+    return nullptr;
 }
 
 HarteResult runHarteTest(const HarteTest& t, std::string& diff) {

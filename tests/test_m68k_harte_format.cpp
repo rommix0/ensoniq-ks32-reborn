@@ -176,3 +176,23 @@ TEST(harte_failure_classes) {
         CHECK(classifyHarteFailure(t, t.final.regs, none, 4, 0x400, -1) == HarteResult::Pass);
     }
 }
+
+TEST(harte_manual_deviation_by_name) {
+    // DECISION M1: a failing test listed by name with the decision that overrides the suite
+    // (here M15) is a ManualDeviation; the same failure under any other name is a Fail.
+    const RamList none;
+    HarteTest t = baseTest();
+    t.name = "80ef [DIVU (d16, A7), D0] 5745";
+    Registers r = t.final.regs;
+    r.d[0] = 1;  // a core difference: no other class could absorb it
+    CHECK(classifyHarteFailure(t, r, none, 4, 0x400, -1) == HarteResult::ManualDeviation);
+    CHECK(classifyHarteFailure(t, t.final.regs, none, 4, 0x400, -1) == HarteResult::Pass);
+    HarteTest u = t;
+    u.name = "80ef [DIVU (d16, A7), D0] 5746";
+    CHECK(classifyHarteFailure(u, r, none, 4, 0x400, -1) == HarteResult::Fail);
+    CHECK(manualDeviation("80ef [DIVU (d16, A7), D0] 5745") != nullptr);
+    if (const char* id = manualDeviation("80ef [DIVU (d16, A7), D0] 5745")) {
+        CHECK(std::string(id) == "M15");
+    }
+    CHECK(manualDeviation("synthetic") == nullptr);
+}
