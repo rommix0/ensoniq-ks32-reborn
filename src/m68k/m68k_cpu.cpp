@@ -355,6 +355,47 @@ void Cpu::execute(Op op) {
     case Op::Sbcd: opAbcdSbcd(true); return;
     case Op::Nbcd: opNbcd(); return;
     case Op::Chk: opChk(); return;
+    case Op::AndB: opLogic(kByte, 0); return;
+    case Op::AndW: opLogic(kWord, 0); return;
+    case Op::AndL: opLogic(kLong, 0); return;
+    case Op::OrB: opLogic(kByte, 1); return;
+    case Op::OrW: opLogic(kWord, 1); return;
+    case Op::OrL: opLogic(kLong, 1); return;
+    case Op::AndToMemB: opLogicToMem(kByte, 0); return;
+    case Op::AndToMemW: opLogicToMem(kWord, 0); return;
+    case Op::AndToMemL: opLogicToMem(kLong, 0); return;
+    case Op::OrToMemB: opLogicToMem(kByte, 1); return;
+    case Op::OrToMemW: opLogicToMem(kWord, 1); return;
+    case Op::OrToMemL: opLogicToMem(kLong, 1); return;
+    case Op::EorB: opLogicToMem(kByte, 2); return;
+    case Op::EorW: opLogicToMem(kWord, 2); return;
+    case Op::EorL: opLogicToMem(kLong, 2); return;
+    case Op::AndiB: opLogicImm(kByte, 0); return;
+    case Op::AndiW: opLogicImm(kWord, 0); return;
+    case Op::AndiL: opLogicImm(kLong, 0); return;
+    case Op::OriB: opLogicImm(kByte, 1); return;
+    case Op::OriW: opLogicImm(kWord, 1); return;
+    case Op::OriL: opLogicImm(kLong, 1); return;
+    case Op::EoriB: opLogicImm(kByte, 2); return;
+    case Op::EoriW: opLogicImm(kWord, 2); return;
+    case Op::EoriL: opLogicImm(kLong, 2); return;
+    case Op::NotB: opNot(kByte); return;
+    case Op::NotW: opNot(kWord); return;
+    case Op::NotL: opNot(kLong); return;
+    case Op::ShiftRegB: opShiftReg(kByte); return;
+    case Op::ShiftRegW: opShiftReg(kWord); return;
+    case Op::ShiftRegL: opShiftReg(kLong); return;
+    case Op::ShiftMem: opShiftMem(); return;
+    case Op::BtstDyn: opBit(0, false); return;
+    case Op::BchgDyn: opBit(1, false); return;
+    case Op::BclrDyn: opBit(2, false); return;
+    case Op::BsetDyn: opBit(3, false); return;
+    case Op::BtstImm: opBit(0, true); return;
+    case Op::BchgImm: opBit(1, true); return;
+    case Op::BclrImm: opBit(2, true); return;
+    case Op::BsetImm: opBit(3, true); return;
+    case Op::Scc: opScc(); return;
+    case Op::Tas: opTas(); return;
     }
 }
 

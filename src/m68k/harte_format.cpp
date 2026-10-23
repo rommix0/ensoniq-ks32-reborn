@@ -122,6 +122,10 @@ constexpr ManualDeviationEntry kManualDeviations[] = {
     // Divide by zero stacks the next instruction's address (UM 6.3.5); the suite stacks the
     // instruction's own address.
     {"80ef [DIVU (d16, A7), D0] 5745", "M15"},
+    // The suite's recorded initial D2 cannot produce its final D2 and C (no ASL.b #2 can
+    // change bits 31..8); the model's result follows from the recorded initial state.
+    {"e502 [ASL.b Q, D2] 1583", "M19"},
+    {"e502 [ASL.b Q, D2] 1761", "M19"},
 };
 
 HarteResult classifyCore(const HarteTest& t, const Registers& got, const RamList& gotRam,

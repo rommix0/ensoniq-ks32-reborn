@@ -56,6 +56,22 @@ enum class Op : uint16_t {
     Abcd, Sbcd,                 // 1100 / 1000 xxx1 0000 ryyy: Dy,Dx or -(Ay),-(Ax)
     Nbcd,                       // 0100 1000 00 <data alterable ea>
     Chk,                        // 0100 DDD1 10 <data ea> (word)
+    // Logic, shifts and bit operations (Task 5).
+    AndB, AndW, AndL,           // 1100 DDD0ss <data ea>: <ea> & Dn -> Dn
+    AndToMemB, AndToMemW, AndToMemL,  // 1100 DDD1ss <memory alterable ea>
+    OrB, OrW, OrL,              // 1000 DDD0ss <data ea>
+    OrToMemB, OrToMemW, OrToMemL,     // 1000 DDD1ss <memory alterable ea>
+    EorB, EorW, EorL,           // 1011 DDD1ss <data alterable ea>: Dn ^ <ea> -> <ea>
+    AndiB, AndiW, AndiL,        // 0000 0010 ss <data alterable ea>, #imm
+    OriB, OriW, OriL,           // 0000 0000 ss
+    EoriB, EoriW, EoriL,        // 0000 1010 ss
+    NotB, NotW, NotL,           // 0100 0110 ss <data alterable ea>
+    ShiftRegB, ShiftRegW, ShiftRegL,  // 1110 cccd ss i tt rrr: kind in d and tt
+    ShiftMem,                   // 1110 0ttd 11 <memory alterable ea>: word by 1
+    BtstDyn, BchgDyn, BclrDyn, BsetDyn,  // 0000 DDD1 oo <ea>: bit number in Dn
+    BtstImm, BchgImm, BclrImm, BsetImm,  // 0000 1000 oo <ea>, #bit
+    Scc,                        // 0101 cccc 11 <data alterable ea>
+    Tas,                        // 0100 1010 11 <data alterable ea>
 };
 
 Op decodeOp(uint16_t opcode);

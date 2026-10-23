@@ -26,6 +26,15 @@ AluOut sub(uint32_t a, uint32_t b, int size, bool x, bool subx);
 AluOut abcd(uint8_t a, uint8_t b, bool x, uint16_t ccrIn);
 AluOut sbcd(uint8_t a, uint8_t b, bool x, uint16_t ccrIn);
 
+// Shift and rotate kinds for shift(); a left/right pair is kind and kind + 1.
+enum ShiftKind : int { kAsl, kAsr, kLsl, kLsr, kRol, kRor, kRoxl, kRoxr };
+
+// ASx, LSx, ROx and ROXx of the low `size` bytes of v by `count` places (0..63; the caller
+// has applied the modulo 64 of a register count). x is the old X flag. The returned ccr has
+// the new X (X is unchanged for count 0 and for ROL/ROR), N, Z, V (ASL only: the MSB changed
+// at some step) and C (the last bit shifted out; 0 for count 0, but X for ROXL/ROXR).
+AluOut shift(int kind, uint32_t v, int count, int size, bool x);
+
 // MULU/MULS total clocks without the source's address calculation: 38 + 2n (UM 8.3), n the
 // ones of the source (MULU) or the 01/10 pairs of the source with a 0 appended below (MULS).
 int mulCycles(uint16_t src, bool isSigned);

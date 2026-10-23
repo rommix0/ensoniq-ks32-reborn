@@ -80,6 +80,49 @@ AluOut sbcd(uint8_t a, uint8_t b, bool x, uint16_t ccrIn) {
     return {r, ccr};
 }
 
+AluOut shift(int kind, uint32_t v, int count, int size, bool x) {
+    const uint32_t m = maskOf(size), msb = msbOf(size);
+    v &= m;
+    const bool left = (kind & 1) == 0;
+    const bool rotate = kind >= kRol;
+    const bool extended = kind >= kRoxl;
+    bool c = extended && count == 0 ? x : false;
+    bool v1 = false;
+    bool xr = x;  // the bit rotating through X (ROXx)
+    // One place at a time: at most 63 steps, no shift by the operand width.
+    for (int i = 0; i < count; ++i) {
+        const uint32_t old = v;
+        if (left) {
+            c = (v & msb) != 0;
+            v = (v << 1) & m;
+            if (kind == kRol) v |= c ? 1u : 0u;
+            if (kind == kRoxl) v |= xr ? 1u : 0u;
+            if (kind == kAsl && ((old ^ v) & msb) != 0) v1 = true;
+        } else {
+            c = (v & 1u) != 0;
+            v >>= 1;
+            if (kind == kAsr) v |= old & msb;
+            if (kind == kRor) v |= c ? msb : 0u;
+            if (kind == kRoxr) v |= xr ? msb : 0u;
+        }
+        xr = c;
+    }
+    // DECISION M18: ASR by more places than the operand has bits leaves C = X = 0, also for a
+    // negative operand (all sign bits). The PRM's "last bit shifted out" would be the sign
+    // bit; every suite case (ASR.b/w/l, thousands) has 0, and has 1 for a count equal to
+    // the size. The logical shifts and ROXx agree with the PRM there.
+    if (kind == kAsr && count > size * 8) c = false;
+    uint16_t ccr = 0;
+    if ((v & msb) != 0) ccr |= kN;
+    if (v == 0) ccr |= kZ;
+    if (v1) ccr |= kV;
+    if (c) ccr |= kC;
+    // X follows C for every kind but the rotates (ROL/ROR); a zero count leaves it.
+    const bool newX = (count == 0 || (rotate && !extended)) ? x : c;
+    if (newX) ccr |= kX;
+    return {v, ccr};
+}
+
 int mulCycles(uint16_t src, bool isSigned) {
     // UM 8.3: 38 + 2n. MULS: n = 01 or 10 pairs of the 17 bits src:0.
     const uint32_t bits = isSigned ? ((uint32_t(src) << 1) ^ uint32_t(src)) & 0xFFFF : src;

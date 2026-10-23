@@ -197,6 +197,19 @@ private:
     void setCmpFlags(uint32_t a, uint32_t b, int size);
     uint32_t readPredec(int r, int size, uint32_t& addr);
 
+    // ---- logic, shifts and bit operations (m68k_ops_logic.cpp) ---------------------------
+    // `kind` of the logic handlers is 0 AND, 1 OR, 2 EOR.
+    void opLogic(int size, int kind);          // AND, OR <ea>,Dn
+    void opLogicToMem(int size, int kind);     // AND, OR Dn,<memory>; EOR Dn,<data alterable>
+    void opLogicImm(int size, int kind);       // ANDI, ORI, EORI
+    void opNot(int size);
+    void opShiftReg(int size);                 // ASx, LSx, ROx, ROXx Dx,Dy / #n,Dy
+    void opShiftMem();                         // the same, word-sized memory operand by 1
+    void opBit(int kind, bool immediate);      // kind 0 BTST, 1 BCHG, 2 BCLR, 3 BSET
+    void opScc();
+    void opTas();
+    bool condition(int cc) const;              // the 16 condition codes of Scc, DBcc and Bcc
+
     Bus& bus_;
     std::vector<Op> table_;  // decodeOp of every opcode word, filled by the constructor
 

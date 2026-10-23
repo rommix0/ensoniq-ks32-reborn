@@ -34,9 +34,25 @@ Op decodeLine0(uint16_t op) {
         default: return Op::MovepToMemL;
         }
     }
-    // ADDI, SUBI, CMPI (the 68000's CMPI has no PC-relative destination).
-    if (((op >> 6) & 3) == 3 || !eaIn(op & 0x3F, kEaDataAlterable)) return Op::Illegal;
+    const uint16_t ea = op & 0x3F;
+    const int bitOp = (op >> 6) & 3;  // BTST, BCHG, BCLR, BSET
+    const auto bitAt = [bitOp](Op btst) {
+        return static_cast<Op>(static_cast<uint16_t>(btst) + bitOp);
+    };
+    if ((op & 0x0100) != 0) {  // dynamic: bit number in Dn; BTST also tests an immediate byte
+        return eaIn(ea, bitOp == 0 ? kEaData : kEaDataAlterable) ? bitAt(Op::BtstDyn) : Op::Illegal;
+    }
+    if ((op & 0xFF00) == 0x0800) {  // static: BTST has no immediate operand (PRM)
+        const uint16_t allowed = bitOp == 0 ? static_cast<uint16_t>(kEaData & ~(1u << 11)) : kEaDataAlterable;
+        return eaIn(ea, allowed) ? bitAt(Op::BtstImm) : Op::Illegal;
+    }
+    // ORI, ANDI, SUBI, ADDI, EORI, CMPI (the 68000's CMPI has no PC-relative destination).
+    // The immediate forms to CCR and SR have an immediate "destination": Task 6.
+    if (bitOp == 3 || !eaIn(ea, kEaDataAlterable)) return Op::Illegal;
     switch (op & 0xFF00) {
+    case 0x0000: return sized(Op::OriB, op);
+    case 0x0200: return sized(Op::AndiB, op);
+    case 0x0A00: return sized(Op::EoriB, op);
     case 0x0600: return sized(Op::AddiB, op);
     case 0x0400: return sized(Op::SubiB, op);
     case 0x0C00: return sized(Op::CmpiB, op);
@@ -65,10 +81,10 @@ Op decodeAddSub(uint16_t op, Op base) {
     }
 }
 
-// ADDQ/SUBQ (line 5, size 0..2). Scc and DBcc (size 3) are Task 5/6.
+// ADDQ/SUBQ (line 5, size 0..2) and Scc (size 3; DBcc, mode 1, is Task 6).
 Op decodeLine5(uint16_t op) {
     const uint16_t ea = op & 0x3F;
-    if (((op >> 6) & 3) == 3) return Op::Illegal;
+    if (((op >> 6) & 3) == 3) return eaIn(ea, kEaDataAlterable) ? Op::Scc : Op::Illegal;
     if (!eaIn(ea, kEaDataAlterable | (1u << 1))) return Op::Illegal;
     if (eaIndex(ea) == 1 && ((op >> 6) & 3) == 0) return Op::Illegal;  // no byte to An
     return sized((op & 0x0100) != 0 ? Op::SubqB : Op::AddqB, op);
@@ -79,7 +95,10 @@ Op decodeLine8(uint16_t op) {
     if ((op & 0x01C0) == 0x00C0) return eaIn(ea, kEaData) ? Op::Divu : Op::Illegal;
     if ((op & 0x01C0) == 0x01C0) return eaIn(ea, kEaData) ? Op::Divs : Op::Illegal;
     if ((op & 0x01F0) == 0x0100) return Op::Sbcd;
-    return Op::Illegal;  // OR: Task 5
+    if ((op & 0x0100) == 0) {  // OR <ea>,Dn (size 3 is DIVU, above)
+        return eaIn(ea, kEaData) ? sized(Op::OrB, op) : Op::Illegal;
+    }
+    return eaIn(ea, kEaMemoryAlterable) ? sized(Op::OrToMemB, op) : Op::Illegal;  // mode 0/1: SBCD, PACK
 }
 
 Op decodeLineB(uint16_t op) {
@@ -91,8 +110,9 @@ Op decodeLineB(uint16_t op) {
     case 0: return eaIn(ea, kEaData) ? Op::CmpB : Op::Illegal;
     case 1:
     case 2: return eaIn(ea, kEaAll) ? sized(Op::CmpB, op) : Op::Illegal;
-    default:  // 4..6: CMPM for mode 1; EOR otherwise (Task 5)
-        return ((ea >> 3) & 7) == 1 ? sized(Op::CmpmB, op) : Op::Illegal;
+    default:  // 4..6: CMPM for mode 1; EOR Dn,<ea> otherwise
+        if (((ea >> 3) & 7) == 1) return sized(Op::CmpmB, op);
+        return eaIn(ea, kEaDataAlterable) ? sized(Op::EorB, op) : Op::Illegal;
     }
 }
 
@@ -110,10 +130,15 @@ Op decodeLine4(uint16_t op) {
     }
     if ((op & 0xF1C0) == 0x41C0) return eaIn(ea, kEaControl) ? Op::Lea : Op::Illegal;
     if ((op & 0xF1C0) == 0x4180) return eaIn(ea, kEaData) ? Op::Chk : Op::Illegal;
-    if ((op & 0xFF00) == 0x4000 || (op & 0xFF00) == 0x4400 || (op & 0xFF00) == 0x4A00) {
-        // NEGX, NEG, TST; size 3 is MOVE from SR / MOVE to CCR / TAS (Tasks 5, 6).
+    if ((op & 0xFFC0) == 0x4AC0) return eaIn(ea, kEaDataAlterable) ? Op::Tas : Op::Illegal;  // incl. 4AFC
+    if ((op & 0xFF00) == 0x4000 || (op & 0xFF00) == 0x4400 || (op & 0xFF00) == 0x4600 ||
+        (op & 0xFF00) == 0x4A00) {
+        // NEGX, NEG, NOT, TST; size 3 is MOVE from SR / to CCR / to SR (Task 6).
         if (((op >> 6) & 3) == 3 || !eaIn(ea, kEaDataAlterable)) return Op::Illegal;
-        const Op base = (op & 0xFF00) == 0x4000 ? Op::NegxB : (op & 0xFF00) == 0x4400 ? Op::NegB : Op::TstB;
+        const Op base = (op & 0xFF00) == 0x4000   ? Op::NegxB
+                        : (op & 0xFF00) == 0x4400 ? Op::NegB
+                        : (op & 0xFF00) == 0x4600 ? Op::NotB
+                                                  : Op::TstB;
         return sized(base, op);
     }
     if ((op & 0xFFC0) == 0x4800) return eaIn(ea, kEaDataAlterable) ? Op::Nbcd : Op::Illegal;
@@ -152,8 +177,20 @@ Op decodeLineC(uint16_t op) {
     case 0xC148:  // EXG Ax,Ay
     case 0xC188:  // EXG Dx,Ay
         return Op::Exg;
-    default: return Op::Illegal;
+    default: break;
     }
+    if ((op & 0x0100) == 0) {  // AND <ea>,Dn
+        return eaIn(ea, kEaData) ? sized(Op::AndB, op) : Op::Illegal;
+    }
+    return eaIn(ea, kEaMemoryAlterable) ? sized(Op::AndToMemB, op) : Op::Illegal;
+}
+
+// Line E: shifts and rotates. Register forms have size 0..2 in bits 7..6; size 3 is the
+// memory form, which needs a memory alterable operand and has bit 11 clear.
+Op decodeLineE(uint16_t op) {
+    if (((op >> 6) & 3) != 3) return sized(Op::ShiftRegB, op);
+    if ((op & 0x0800) != 0) return Op::Illegal;  // bit field instructions: 68020
+    return eaIn(op & 0x3F, kEaMemoryAlterable) ? Op::ShiftMem : Op::Illegal;
 }
 
 }  // namespace
@@ -173,6 +210,7 @@ Op decodeOp(uint16_t opcode) {
     case 0xB: return decodeLineB(opcode);
     case 0xC: return decodeLineC(opcode);
     case 0xD: return decodeAddSub(opcode, Op::AddB);
+    case 0xE: return decodeLineE(opcode);
     case 0xF: return Op::LineF;
     default: return Op::Illegal;
     }
