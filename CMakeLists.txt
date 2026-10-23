@@ -34,7 +34,8 @@ add_library(ens_esp STATIC src/esp/esp_alu.cpp src/esp/esp_mac.cpp src/esp/esp_a
 target_link_libraries(ens_esp PUBLIC ens_common)
 
 # Motorola 68000 core (Plan 5). Later tasks add the instruction-family sources to this list.
-add_library(ens_m68k STATIC src/m68k/m68k_decode.cpp src/m68k/m68k_cpu.cpp)
+add_library(ens_m68k STATIC src/m68k/m68k_decode.cpp src/m68k/m68k_cpu.cpp src/m68k/m68k_ea.cpp
+  src/m68k/m68k_ops_data.cpp)
 target_link_libraries(ens_m68k PUBLIC ens_common)
 
 # Tom Harte's per-instruction tests (.m68t reader and runner); the data itself is not in the repo.
