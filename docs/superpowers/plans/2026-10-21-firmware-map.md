@@ -1,5 +1,9 @@
 # Firmware Map Implementation Plan (Plan 4)
 
+> **Superseded 2026-10-23, not executed.** The user ruled that the firmware is run from the ROM and not
+> decompiled, so Plan 4 is dropped (design §9, revised). Its hardware questions move to Plan 6, where they
+> are answered by running the firmware. Kept for the record only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Map KS-32 OS v3.01 so that Plan 6 can build the machine from evidence. That means three things:

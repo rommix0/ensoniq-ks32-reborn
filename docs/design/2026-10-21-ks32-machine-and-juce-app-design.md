@@ -1,18 +1,20 @@
 # KS-32 Machine Emulation and JUCE App: Design
 
 Date: 2026-10-21
-Status: approved by the user, 2026-10-21
+Status: approved by the user, 2026-10-21. Revised 2026-10-23 at the user's request: the firmware is run
+from the ROM and not decompiled, and Plan 4 (firmware map) is dropped. The revision awaits approval.
 Follows: `docs/design/2026-10-19-otis-esp-emulator-design.md` (the chip cores and the MIDI test player, done)
 
 ## 1. Intent
 
 Run the real KS-32 operating system (OS v3.01) on an emulated KS-32 inside a typical JUCE synthesizer app.
-The user plays the KS-32's own factory sounds from a MIDI keyboard. The real front panel is on screen:
-the firmware draws the display and lights the LEDs, and reads the panel buttons and sliders. The app is
-standalone first, and it is built so that it can become a VST3 plugin later.
+The user plays the KS-32's own factory sounds from a MIDI keyboard, like playing the real instrument.
+The front panel is on screen, laid out close to the real KS-32 panel with the service manual as the
+guide: the firmware draws the display and lights the LEDs, and reads the panel buttons and sliders. The
+app is standalone first, and it is the basis for a later VST3 port.
 
-The firmware is also disassembled and annotated, the same way the project already treats the ESP
-programs: a reproducible listing, with every hardware-facing routine named and explained.
+The firmware runs as it is, straight from the user's ROM. It is **not decompiled**: no disassembly
+listing, annotation or study of its code (the user's ruling, 2026-10-23).
 
 **Why.** The test player proved the chips and the ROM samples. Everything that makes a KS-32 sound like
 a KS-32 lives in the firmware: presets, layering, envelopes, LFOs, modulation, effect parameters, the
@@ -21,21 +23,18 @@ decisions P5–P8 and P11.
 
 ## 2. Goals
 
-1. **An annotated firmware disassembly.** Code and data separated for the whole of OS v3.01. Every
-   routine that touches hardware (vectors, interrupts, DUART, OTIS, ESP, front panel, keyboard,
-   MIDI, battery RAM, memory card, self-tests) is named and commented. A document describes the
-   hardware interface the firmware expects.
-2. **A 68000 CPU core**, written from Motorola's M68000 manuals like the chip cores were written from
+1. **A 68000 CPU core**, written from Motorola's M68000 manuals like the chip cores were written from
    their datasheets: every instruction and addressing mode, exceptions and interrupts, and cycle
    timing accurate enough for the firmware's timing loops.
-3. **A KS-32 machine.** It joins the 68000, the existing OTIS and ESP cores, an MC68681 DUART, RAM,
+2. **A KS-32 machine.** It joins the 68000, the existing OTIS and ESP cores, an MC68681 DUART, RAM,
    ROM, the front panel, the keyboard and its controllers, MIDI in/out and the memory card slot, as
    wired on the real board. The firmware boots to its play screen and plays its factory sounds from
-   MIDI.
-4. **A JUCE app** (standalone), playable from the user's MIDI keyboard. It shows the KS-32 front panel
-   with the firmware-driven display, buttons, LEDs and sliders, plus the pitch and mod wheels. It is
-   built on JUCE's plugin architecture, so a VST3 build is a later configuration change rather than
-   a rewrite.
+   MIDI. A document records the hardware interface the machine provides and how each fact was found
+   (§8).
+3. **A JUCE app** (standalone), playable from the user's MIDI keyboard. Its front panel is laid out
+   close to the real KS-32 panel, following the service manual's Figure 2, with the firmware-driven
+   display, buttons, LEDs and sliders, plus the pitch and mod wheels. It is built on JUCE's plugin
+   architecture, so a VST3 build is a later configuration change rather than a rewrite.
 
 ## 3. What "passed" means (the user's bar)
 
@@ -62,13 +61,15 @@ front panel the way they would use a real KS-32. Supporting evidence a builder m
 - **Copying MAME's machine behaviour to match it.** As before, MAME is a comparison point. The
   firmware, the service manual and the chip datasheets are the references.
 - **A front panel taken from a photo.** The user's ruling: the layout comes from the service manual
-  (Figure 2, page 1) and from the firmware code that reads the panel. The top-view photo is
-  orientation only. `docs/reference/ks32-front-panel.md` must be revised to say so.
+  (Figure 2, page 1) and from how the running firmware responds to each control. The top-view photo
+  is orientation only. `docs/reference/ks32-front-panel.md` must be revised to say so.
 - **JUCE inside the emulation.** The CPU, DUART, panel, machine and chip code stay plain C++17,
   JUCE-free and OS-free, building on both toolchains. Only the app layer uses JUCE.
-- **A firmware listing committed to the repository.** The ROMs are Ensoniq's. The repository holds
-  only our annotations (labels, comments, data types) and the tools that apply them to the user's own
-  ROM. That is how the ESP program data is already handled, as small extracted facts.
+- **Decompiling the firmware** (the user's ruling, 2026-10-23). No disassembly listing, annotation
+  or code study is a deliverable or a design input. The ROMs are Ensoniq's, and nothing taken from
+  them is committed. *My call:* the 68000 core keeps a small disassembler for the emulator's debug
+  trace, so that when the emulated machine hangs or loops a builder can see which instruction it is
+  on. That is debugging our emulator, not studying the firmware.
 - **Silent guesses**, as before: every judgment call is marked in the code and logged.
 
 ## 6. Constraints
@@ -96,7 +97,7 @@ front panel the way they would use a real KS-32. Supporting evidence a builder m
 
 New layers sit next to the existing ones. Only the top layer touches the OS or JUCE.
 
-1. **`m68k` library.** The CPU core and a disassembler. A bus interface supplies reads, writes and
+1. **`m68k` library.** The CPU core, plus a disassembler used only by the debug trace (§5). A bus interface supplies reads, writes and
    interrupt acknowledge, the same pattern as `WaveMemory` and `EspBus`. It runs for N cycles at a time
    and reports cycles used.
 2. **`duart` library.** An MC68681 model covering what the firmware uses: two serial channels with
@@ -124,23 +125,39 @@ New layers sit next to the existing ones. Only the top layer touches the OS or J
    two-button combinations work. The app also has a settings page for choosing the ROM folder and the
    MIDI device.
 
-## 8. Reverse-engineering inputs the machine needs (from Plan 4)
+## 8. Hardware facts the machine needs, and where they come from
 
-The firmware has to tell us the following. Each is answered with evidence in the firmware notes:
+Without decompiling, the facts come from four sources:
 
-- **The interrupt map.** Which device sits on which 68000 interrupt level, and what each handler does.
-- **The front-panel interface.** The service manual says the KS-32 has a separate keypad/display board.
-  MAME models the SQ-1 family's panel as a device that talks to the 68000 over DUART channel B, with
-  button codes in and display, LED and cursor commands out. *To confirm or refute from the firmware.*
-  We need the button codes for every Figure 2 button, the LED bits, the display commands, the
-  character set and geometry (it looks like 2 × 16 characters), and how the sliders and analog
-  controls arrive.
+- the service manual;
+- the chip datasheets;
+- the existing ROM findings from Plan 2 (`docs/rom-investigation/findings.md`), which stay valid;
+- **running the firmware on the emulated machine.** Every device access is logged (a bus trace of
+  address, value, direction and time), and the logs show what the firmware expects.
+
+MAME stays a comparison point for checking a guess, never the source. Each fact is recorded with how
+it was found in `docs/ks32-hardware-interface.md`.
+
+- **The interrupt map.** Which device sits on which 68000 interrupt level. Found from the interrupt
+  vector and mask registers the firmware programs in the DUART (and OTIS), and from which interrupts
+  the firmware needs before it gets past start-up.
+- **The front-panel interface.** The service manual says the KS-32 has a separate keypad/display board
+  on a 6-pin cable, with its own self-test mode. MAME models the SQ-1 family's panel as a device that
+  talks to the 68000 over DUART channel B, with button codes in and display, LED and cursor commands
+  out. *To confirm or refute from the bus trace.* The display text the firmware sends is readable in
+  the trace, which shows the display commands, character set and geometry (it looks like 2 × 16
+  characters) and the LED commands. Button codes are found by sending candidate codes and watching
+  what the display does. They are checked against the service manual's procedures: the version screen
+  (page 2), reinitialize (page 1), and the Analog Tests page (page 17), which shows every slider and
+  analog reading.
 - **The keyboard path.** How key velocity, release and mono pressure reach the 68000.
-- **MIDI.** Which DUART channel carries MIDI, and its baud setup.
-- **Battery RAM and card.** The address ranges, and how the "low battery" check works (service manual,
-  page 9).
-- **Timing dependencies.** The boot clock self-test (findings B), the DUART timer use, and any delay
-  loops the CPU timing has to satisfy.
+- **MIDI.** Which DUART channel carries MIDI, and its baud setup (from the DUART registers the
+  firmware writes).
+- **Battery RAM and card.** The address ranges, and how the "low battery" check behaves (service
+  manual, pages 9–10).
+- **Timing dependencies.** The boot clock self-test (findings B), the DUART timer use, and any waits
+  that fail if the CPU runs at the wrong speed. They show up as the firmware hanging, looping or
+  reporting an error.
 
 The panel hardware's own microcontroller (if there is one) has no dumped firmware. So the panel is
 emulated from the 68000 side of its protocol, plus the service manual's keypad and display self-tests.
@@ -151,19 +168,20 @@ Each plan ends in something runnable and is planned, approved and built separate
 
 | Plan | Delivers | Needs |
 |---|---|---|
-| **4. Firmware map** | The annotation format and listing generator (using the Plan 5 disassembler, or a stand-alone first version); the annotated OS v3.01 hardware-facing code; `docs/firmware/ks32-hardware-interface.md` answering §8 | Ghidra for analysis (as in Plan 2) |
-| **5. 68000 core** | The `m68k` library and disassembler, passing the per-instruction test suite with cycle counts | the Motorola manuals, the test data |
-| **6. KS-32 machine** | The DUART and panel models, the machine and `ks32emu`: the firmware boots to its play screen and plays factory sounds from a MIDI file and from live MIDI | Plans 4 and 5 |
-| **7. JUCE app** | Standalone app: MIDI in, audio out, the front-panel editor, ROM and MIDI settings; VST3 target configured but not released | Plan 6 (a shell using the existing test-player engine can start earlier) |
+| **~~4. Firmware map~~** | Dropped 2026-10-23 (the user's ruling: no decompiling). Its §8 questions move to Plan 6. | — |
+| **5. 68000 core** | The `m68k` library and its debug-trace disassembler, passing the per-instruction test suite with cycle counts | the Motorola manuals, the test data |
+| **6. KS-32 machine** | The DUART and panel models, the machine with its bus trace, and `ks32emu`. The §8 facts are found by running the firmware and recorded in `docs/ks32-hardware-interface.md`. The firmware boots to its play screen and plays factory sounds from a MIDI file and from live MIDI | Plan 5 |
+| **7. JUCE app** | Standalone app: MIDI in, audio out, the front-panel editor laid out from Figure 2, ROM and MIDI settings; VST3 target configured but not released. It also revises `docs/reference/ks32-front-panel.md` (Figure 2 plus the observed button codes; photo for orientation only) | Plan 6 (a shell using the existing test-player engine can start earlier) |
 
-*My call on parallelism:* Plans 4 and 5 are independent and can run at the same time. The JUCE shell
-(app skeleton, MIDI, audio, resampling, using the current test-player engine) can also start early,
-so the app side is proven before the machine exists. The panel editor waits for Plan 4's panel map.
+*My call on order:* Plan 5 comes first, because everything that runs the firmware needs the CPU. The
+JUCE shell (app skeleton, MIDI, audio, resampling, using the current test-player engine) can run at
+the same time, so the app side is proven before the machine exists. The panel editor waits for
+Plan 6's panel map.
 
 ## 10. Open items, decided by evidence during the build and logged
 
-- **A. CPU and DUART clocks.** Confirm 15.238 MHz and 4 MHz from the firmware's timing code
-  (the boot clock test, MIDI baud setup).
+- **A. CPU and DUART clocks.** Confirm 15.238 MHz and 4 MHz from the running firmware: the boot
+  clock test picks 32 voices, and MIDI runs at 31 250 baud with the DUART settings it writes.
 - **B. The front-panel protocol** (§8), including the display geometry and character set.
 - **C. The interrupt map** and the timing precision the firmware needs.
 - **D. Battery RAM.** Its range and initial contents (the service manual's reinitialization path
@@ -174,7 +192,7 @@ so the app side is proven before the machine exists. The panel editor waits for 
 ## 11. Left to the builder
 
 - Internal structure, class names and file layout within each layer.
-- The annotation file format (*suggested:* plain text or JSON of address → label, comment, type).
+- The bus-trace format and how `ks32emu` filters it.
 - The panel's visual style (vector-drawn from Figure 2's arrangement, not photo-real), as long as
   every control and its label match the service manual and the firmware.
 - How save states and battery RAM files are stored.
