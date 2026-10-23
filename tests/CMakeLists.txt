@@ -22,6 +22,7 @@ set(ENS_TEST_SOURCES
   test_player_smf.cpp
   test_m68k_cpu.cpp
   test_m68k_harte_format.cpp
+  test_m68k_alu.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})

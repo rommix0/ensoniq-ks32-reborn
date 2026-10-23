@@ -31,6 +31,31 @@ enum class Op : uint16_t {
     MovemToRegW, MovemToRegL,  // 0100 1100 1s <ea>: memory to registers
     MovepToRegW, MovepToRegL,  // 0000 DDD1 0s00 1AAA, #d16
     MovepToMemW, MovepToMemL,  // 0000 DDD1 1s00 1AAA, #d16
+    // Arithmetic (Task 4). B/W/L is the operand size.
+    AddB, AddW, AddL,           // 1101 DDD0ss <ea>: <ea> + Dn -> Dn
+    AddToMemB, AddToMemW, AddToMemL,  // 1101 DDD1ss <memory alterable ea>: Dn + <ea> -> <ea>
+    AddaW, AddaL,               // 1101 AAAs11 <ea>
+    AddxB, AddxW, AddxL,        // 1101 xxx1ss 00ryyy: Dy,Dx or -(Ay),-(Ax)
+    SubB, SubW, SubL,           // 1001 ... as ADD
+    SubToMemB, SubToMemW, SubToMemL,
+    SubaW, SubaL,
+    SubxB, SubxW, SubxL,
+    AddiB, AddiW, AddiL,        // 0000 0110 ss <data alterable ea>, #imm
+    SubiB, SubiW, SubiL,        // 0000 0100 ss <data alterable ea>, #imm
+    CmpiB, CmpiW, CmpiL,        // 0000 1100 ss <data alterable ea>, #imm
+    AddqB, AddqW, AddqL,        // 0101 ddd0 ss <alterable ea> (An: word and long only)
+    SubqB, SubqW, SubqL,        // 0101 ddd1 ss <alterable ea>
+    CmpB, CmpW, CmpL,           // 1011 DDD0ss <ea>
+    CmpaW, CmpaL,               // 1011 AAAs11 <ea>
+    CmpmB, CmpmW, CmpmL,        // 1011 xxx1ss 001yyy: (Ay)+,(Ax)+
+    NegB, NegW, NegL,           // 0100 0100 ss <data alterable ea>
+    NegxB, NegxW, NegxL,        // 0100 0000 ss <data alterable ea>
+    TstB, TstW, TstL,           // 0100 1010 ss <data alterable ea>
+    Mulu, Muls,                 // 1100 DDDs11 <data ea>
+    Divu, Divs,                 // 1000 DDDs11 <data ea>
+    Abcd, Sbcd,                 // 1100 / 1000 xxx1 0000 ryyy: Dy,Dx or -(Ay),-(Ax)
+    Nbcd,                       // 0100 1000 00 <data alterable ea>
+    Chk,                        // 0100 DDD1 10 <data ea> (word)
 };
 
 Op decodeOp(uint16_t opcode);

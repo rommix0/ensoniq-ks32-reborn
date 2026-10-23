@@ -466,3 +466,118 @@ TEST(m68k_move_usp_privilege_violation) {
     CHECK_EQ(cpu2.step(), 4);
     CHECK_EQ(cpu2.regs().a[1], 0x1234u);
 }
+
+TEST(m68k_alu_divs_overflow_leaves_operand) {
+    // divs.w d1,d0: 0x80000000 / -1 = +2^31 does not fit in 16 bits. V = 1, C = 0, N and Z
+    // unchanged (DECISION M2), d0 unchanged. Well-defined arithmetic on both builds.
+    RamBus bus;
+    bus.load16(kCode, {0x81C1, 0x4E71, 0x4E71});
+    Cpu cpu(bus);
+    Registers r = stateAt(bus, kCode, 0x271D);  // X N Z C set
+    r.d[0] = 0x80000000;
+    r.d[1] = 0x0000FFFF;
+    cpu.setRegs(r);
+    CHECK_EQ(cpu.step(), 18);  // M10: overflow found early, negative dividend
+    const Registers s = cpu.regs();
+    CHECK_EQ(s.d[0], 0x80000000u);
+    CHECK_EQ(s.sr & 0x1F, 0x1E);  // X N Z kept, V set, C cleared
+    CHECK_EQ(s.pc, kCode + 2);
+}
+
+TEST(m68k_divu_by_zero_traps) {
+    // divu.w d1,d0 with d1 = 0: vector 5, the next instruction's address stacked (UM 6.3.5),
+    // 38 cycles (UM table 8-14), N Z V C cleared (DECISION M2), d0 unchanged.
+    RamBus bus;
+    bus.load32(5 * 4, 0x700);
+    bus.load16(kCode, {0x80C1, 0x4E71});
+    bus.load16(0x700, {0x4E71, 0x4E71});
+    Cpu cpu(bus);
+    Registers r = stateAt(bus, kCode, 0x271F);
+    r.d[0] = 0x12345678;
+    r.d[1] = 0xFFFF0000;
+    cpu.setRegs(r);
+    CHECK_EQ(cpu.step(), 38);
+    const Registers s = cpu.regs();
+    CHECK_EQ(s.pc, 0x700u);
+    CHECK_EQ(s.d[0], 0x12345678u);
+    CHECK_EQ(s.ssp, kSsp - 6);
+    CHECK_EQ(bus.peek16(kSsp - 6), 0x2710);  // the stacked SR has the cleared flags
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode + 2);
+    CHECK_EQ(cpu.exceptionCount(5), 1u);
+}
+
+TEST(m68k_add_reg_long_cycles) {
+    RamBus bus;
+    bus.load16(kCode, {0xD280, 0x4E71, 0x4E71});  // add.l d0,d1
+    Cpu cpu(bus);
+    Registers r = stateAt(bus, kCode, 0x2700);
+    r.d[0] = 0x80000000;
+    r.d[1] = 0x80000000;
+    cpu.setRegs(r);
+    CHECK_EQ(cpu.step(), 8);
+    CHECK_EQ(cpu.regs().d[1], 0u);
+    CHECK_EQ(cpu.regs().sr & 0x1F, 0x17);  // X Z V C
+}
+
+TEST(m68k_chk_traps_with_next_pc) {
+    // chk.w d1,d0 with d0 = 5 > d1 = 3: vector 6, next instruction stacked, N = 0, 38 cycles
+    // (suite: Dn above the bound traps 2 clocks earlier than a negative Dn, 40).
+    RamBus bus;
+    bus.load32(6 * 4, 0x700);
+    bus.load16(kCode, {0x4181, 0x4181, 0x4E71});
+    bus.load16(0x700, {0x4E71, 0x4E71});
+    Cpu cpu(bus);
+    Registers r = stateAt(bus, kCode, 0x2708);
+    r.d[0] = 5;
+    r.d[1] = 3;
+    cpu.setRegs(r);
+    CHECK_EQ(cpu.step(), 38);
+    CHECK_EQ(cpu.regs().pc, 0x700u);
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode + 2);
+    CHECK_EQ(bus.peek16(kSsp - 6) & 0x1F, 0);
+    // In range: 10 cycles, no trap.
+    Registers q = stateAt(bus, kCode + 2, 0x2700);
+    q.d[0] = 3;
+    q.d[1] = 3;
+    cpu.setRegs(q);
+    CHECK_EQ(cpu.step(), 10);
+    CHECK_EQ(cpu.regs().pc, kCode + 4);
+    // Negative: 40 cycles, N = 1.
+    Registers n = stateAt(bus, kCode + 2, 0x2700);
+    n.d[0] = 0xFFFF;
+    n.d[1] = 3;
+    cpu.setRegs(n);
+    CHECK_EQ(cpu.step(), 40);
+    CHECK_EQ(cpu.regs().sr & 0x1F, 0x08);
+}
+
+TEST(m68k_addx_long_predecrement_order) {
+    // addx.l -(a1),-(a2): one 2-clock predecrement, both operands read low word first, the
+    // result's low word written before the closing fetch, then its high word (suite ADDX.l).
+    LogBus bus;
+    bus.load16(kCode, {0xD589, 0x4E71, 0x4E71});
+    bus.load32(0x2000, 0x00000001);
+    bus.load32(0x3000, 0xFFFFFFFF);
+    Cpu cpu(bus);
+    Registers r = stateAt(bus, kCode, 0x2714);  // X and Z set
+    r.a[1] = 0x2004;
+    r.a[2] = 0x3004;
+    cpu.setRegs(r);
+    bus.log.clear();
+    CHECK_EQ(cpu.step(), 30);
+    CHECK_EQ(cpu.regs().a[1], 0x2000u);
+    CHECK_EQ(cpu.regs().a[2], 0x3000u);
+    CHECK_EQ(cpu.regs().sr & 0x1F, 0x11);  // X C, Z cleared by the non-zero result
+    CHECK_EQ(bus.log.size(), 7u);
+    if (bus.log.size() == 7) {
+        CHECK_EQ(bus.log[0].addr, 0x2002u);
+        CHECK_EQ(bus.log[1].addr, 0x2000u);
+        CHECK_EQ(bus.log[2].addr, 0x3002u);
+        CHECK_EQ(bus.log[3].addr, 0x3000u);
+        CHECK_EQ(bus.log[4].kind, 'w');
+        CHECK_EQ(bus.log[4].addr, 0x3002u);
+        CHECK_EQ(bus.log[5].addr, kCode + 4);
+        CHECK_EQ(bus.log[6].addr, 0x3000u);
+    }
+    CHECK_EQ(bus.peek32(0x3000), 1u);  // 0xFFFFFFFF + 1 + X
+}

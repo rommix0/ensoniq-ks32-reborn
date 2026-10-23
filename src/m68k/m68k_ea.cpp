@@ -127,7 +127,7 @@ uint32_t Cpu::load(const Loc& l, int size) {
     return read32(l.addr, program);
 }
 
-void Cpu::store(const Loc& l, int size, uint32_t v) {
+void Cpu::storeRmw(const Loc& l, int size, uint32_t v) {
     switch (l.mode) {
     case 0: setDreg(l.reg, size, v); return;
     case 1: a_[l.reg] = v; return;  // whole register: the caller has sign-extended

@@ -16,9 +16,10 @@ constexpr int kSpurious = -2;    // ... use vector 24
 // The machine side of the CPU: byte and word accesses, interrupt acknowledge and RESET.
 // Addresses passed by the core are 24-bit (A23..A1 plus the byte select). Word accesses are
 // always at even addresses: an odd word or long access is an address error (vector 3) and
-// never reaches the bus. Long accesses are two word accesses. Reads go high word first;
-// writes go high word first, except predecrement and read-modify-write stores, which go low
-// word first (DECISION M13: the suite's bus order; the UM is silent).
+// never reaches the bus. Long accesses are two word accesses. Reads go high word first,
+// except the -(An) operands of ADDX.l/SUBX.l; writes go high word first, except predecrement
+// and read-modify-write stores, which go low word first (DECISION M13: the suite's bus
+// order; the UM is silent).
 // DECISION M5: no bus-error return and no function codes on this interface; vector 2 is never taken.
 struct Bus {
     virtual ~Bus() = default;
@@ -133,7 +134,10 @@ private:
     // the index modes; #imm fetches the immediate.
     Loc locate(uint16_t field, int size);
     uint32_t load(const Loc& l, int size);              // read the operand (memory: high word first)
-    void store(const Loc& l, int size, uint32_t v);     // write it back (memory long: low word first)
+    // Write a read-modify-write result back to an operand just loaded (Dn: low `size`
+    // bytes, An: whole register; memory long: low word first, M13). Not for plain stores,
+    // whose longs go high word first.
+    void storeRmw(const Loc& l, int size, uint32_t v);
     uint32_t readEa(uint16_t field, int size) { return load(locate(field, size), size); }
     // Address of a control operand (LEA, PEA, JMP, JSR, MOVEM): extension words only, and
     // `indexClocks` internal clocks for the index modes. No register is changed.
@@ -168,6 +172,30 @@ private:
     void opMovemToReg(int size);
     void opMovepToReg(int size);
     void opMovepToMem(int size);
+
+    // ---- arithmetic (m68k_ops_arith.cpp) -------------------------------------------------
+    // `isSub` selects SUB/SUBA/SUBI/SUBQ/SUBX over the ADD forms.
+    void opAddSub(int size, bool isSub);       // <ea>,Dn
+    void opAddSubToMem(int size, bool isSub);  // Dn,<ea>
+    void opAddaSuba(int size, bool isSub);
+    void opAddSubImm(int size, bool isSub);    // ADDI, SUBI
+    void opAddSubQuick(int size, bool isSub);  // ADDQ, SUBQ
+    void opAddxSubx(int size, bool isSub);
+    void opCmp(int size);
+    void opCmpa(int size);
+    void opCmpi(int size);
+    void opCmpm(int size);
+    void opNeg(int size, bool negx);
+    void opTst(int size);
+    void opMul(bool isSigned);
+    void opDiv(bool isSigned);
+    void opAbcdSbcd(bool isSub);
+    void opNbcd();
+    void opChk();
+    // Shared tails: the flags of a compare (X unchanged), and the -(Ay),-(Ax) operand pair
+    // of ADDX/SUBX/ABCD/SBCD (one 2-clock predecrement, longs read low word first).
+    void setCmpFlags(uint32_t a, uint32_t b, int size);
+    uint32_t readPredec(int r, int size, uint32_t& addr);
 
     Bus& bus_;
     std::vector<Op> table_;  // decodeOp of every opcode word, filled by the constructor

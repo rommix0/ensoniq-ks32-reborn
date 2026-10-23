@@ -125,7 +125,7 @@ void Cpu::opClr(int size) {
     (void)load(l, size);
     setLogicFlags(0, size);
     prefetch();
-    store(l, size, 0);
+    storeRmw(l, size, 0);
 }
 
 void Cpu::opExg() {

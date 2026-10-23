@@ -19,6 +19,12 @@ Op decodeMove(uint16_t op) {
     return line == 3 ? Op::MoveW : Op::MoveL;
 }
 
+// Size field ss in bits 7..6 (0 byte, 1 word, 2 long; 3 is another instruction): one of
+// three consecutive Op enumerators B, W, L.
+Op sized(Op byteOp, uint16_t op) {
+    return static_cast<Op>(static_cast<uint16_t>(byteOp) + ((op >> 6) & 3));
+}
+
 Op decodeLine0(uint16_t op) {
     if ((op & 0xF138) == 0x0108) {  // MOVEP (BTST..BSET Dn,An would be an invalid mode)
         switch ((op >> 6) & 3) {
@@ -28,7 +34,66 @@ Op decodeLine0(uint16_t op) {
         default: return Op::MovepToMemL;
         }
     }
-    return Op::Illegal;
+    // ADDI, SUBI, CMPI (the 68000's CMPI has no PC-relative destination).
+    if (((op >> 6) & 3) == 3 || !eaIn(op & 0x3F, kEaDataAlterable)) return Op::Illegal;
+    switch (op & 0xFF00) {
+    case 0x0600: return sized(Op::AddiB, op);
+    case 0x0400: return sized(Op::SubiB, op);
+    case 0x0C00: return sized(Op::CmpiB, op);
+    default: return Op::Illegal;
+    }
+}
+
+// ADD/SUB family (lines 9 and D). `base` is AddB or SubB; the enumerators keep the same order.
+Op decodeAddSub(uint16_t op, Op base) {
+    const uint16_t ea = op & 0x3F;
+    const int opmode = (op >> 6) & 7;
+    const auto at = [base](Op addOp) {
+        return static_cast<Op>(static_cast<uint16_t>(base) +
+                               (static_cast<uint16_t>(addOp) - static_cast<uint16_t>(Op::AddB)));
+    };
+    switch (opmode) {
+    case 3: return eaIn(ea, kEaAll) ? at(Op::AddaW) : Op::Illegal;
+    case 7: return eaIn(ea, kEaAll) ? at(Op::AddaL) : Op::Illegal;
+    case 0:  // byte: no An source
+        return eaIn(ea, kEaData) ? at(Op::AddB) : Op::Illegal;
+    case 1:
+    case 2: return eaIn(ea, kEaAll) ? sized(at(Op::AddB), op) : Op::Illegal;
+    default:  // 4..6: Dn,<ea>; register modes 0/1 are ADDX/SUBX
+        if (((ea >> 3) & 7) <= 1) return sized(at(Op::AddxB), op);
+        return eaIn(ea, kEaMemoryAlterable) ? sized(at(Op::AddToMemB), op) : Op::Illegal;
+    }
+}
+
+// ADDQ/SUBQ (line 5, size 0..2). Scc and DBcc (size 3) are Task 5/6.
+Op decodeLine5(uint16_t op) {
+    const uint16_t ea = op & 0x3F;
+    if (((op >> 6) & 3) == 3) return Op::Illegal;
+    if (!eaIn(ea, kEaDataAlterable | (1u << 1))) return Op::Illegal;
+    if (eaIndex(ea) == 1 && ((op >> 6) & 3) == 0) return Op::Illegal;  // no byte to An
+    return sized((op & 0x0100) != 0 ? Op::SubqB : Op::AddqB, op);
+}
+
+Op decodeLine8(uint16_t op) {
+    const uint16_t ea = op & 0x3F;
+    if ((op & 0x01C0) == 0x00C0) return eaIn(ea, kEaData) ? Op::Divu : Op::Illegal;
+    if ((op & 0x01C0) == 0x01C0) return eaIn(ea, kEaData) ? Op::Divs : Op::Illegal;
+    if ((op & 0x01F0) == 0x0100) return Op::Sbcd;
+    return Op::Illegal;  // OR: Task 5
+}
+
+Op decodeLineB(uint16_t op) {
+    const uint16_t ea = op & 0x3F;
+    const int opmode = (op >> 6) & 7;
+    switch (opmode) {
+    case 3: return eaIn(ea, kEaAll) ? Op::CmpaW : Op::Illegal;
+    case 7: return eaIn(ea, kEaAll) ? Op::CmpaL : Op::Illegal;
+    case 0: return eaIn(ea, kEaData) ? Op::CmpB : Op::Illegal;
+    case 1:
+    case 2: return eaIn(ea, kEaAll) ? sized(Op::CmpB, op) : Op::Illegal;
+    default:  // 4..6: CMPM for mode 1; EOR otherwise (Task 5)
+        return ((ea >> 3) & 7) == 1 ? sized(Op::CmpmB, op) : Op::Illegal;
+    }
 }
 
 Op decodeLine4(uint16_t op) {
@@ -44,6 +109,14 @@ Op decodeLine4(uint16_t op) {
         }
     }
     if ((op & 0xF1C0) == 0x41C0) return eaIn(ea, kEaControl) ? Op::Lea : Op::Illegal;
+    if ((op & 0xF1C0) == 0x4180) return eaIn(ea, kEaData) ? Op::Chk : Op::Illegal;
+    if ((op & 0xFF00) == 0x4000 || (op & 0xFF00) == 0x4400 || (op & 0xFF00) == 0x4A00) {
+        // NEGX, NEG, TST; size 3 is MOVE from SR / MOVE to CCR / TAS (Tasks 5, 6).
+        if (((op >> 6) & 3) == 3 || !eaIn(ea, kEaDataAlterable)) return Op::Illegal;
+        const Op base = (op & 0xFF00) == 0x4000 ? Op::NegxB : (op & 0xFF00) == 0x4400 ? Op::NegB : Op::TstB;
+        return sized(base, op);
+    }
+    if ((op & 0xFFC0) == 0x4800) return eaIn(ea, kEaDataAlterable) ? Op::Nbcd : Op::Illegal;
     if ((op & 0xFFF8) == 0x4840) return Op::Swap;
     if ((op & 0xFFC0) == 0x4840) return eaIn(ea, kEaControl) ? Op::Pea : Op::Illegal;
     if ((op & 0xFFF8) == 0x4880) return Op::ExtW;
@@ -70,6 +143,10 @@ Op decodeLine4(uint16_t op) {
 }
 
 Op decodeLineC(uint16_t op) {
+    const uint16_t ea = op & 0x3F;
+    if ((op & 0x01C0) == 0x00C0) return eaIn(ea, kEaData) ? Op::Mulu : Op::Illegal;
+    if ((op & 0x01C0) == 0x01C0) return eaIn(ea, kEaData) ? Op::Muls : Op::Illegal;
+    if ((op & 0x01F0) == 0x0100) return Op::Abcd;
     switch (op & 0xF1F8) {
     case 0xC140:  // EXG Dx,Dy
     case 0xC148:  // EXG Ax,Ay
@@ -88,9 +165,14 @@ Op decodeOp(uint16_t opcode) {
     case 0x2:
     case 0x3: return decodeMove(opcode);
     case 0x4: return decodeLine4(opcode);
+    case 0x5: return decodeLine5(opcode);
     case 0x7: return (opcode & 0x0100) == 0 ? Op::Moveq : Op::Illegal;
+    case 0x8: return decodeLine8(opcode);
+    case 0x9: return decodeAddSub(opcode, Op::SubB);
     case 0xA: return Op::LineA;  // PRM/UM 6.3.6: unimplemented, own vectors
+    case 0xB: return decodeLineB(opcode);
     case 0xC: return decodeLineC(opcode);
+    case 0xD: return decodeAddSub(opcode, Op::AddB);
     case 0xF: return Op::LineF;
     default: return Op::Illegal;
     }
