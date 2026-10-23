@@ -24,6 +24,7 @@ set(ENS_TEST_SOURCES
   test_m68k_harte_format.cpp
   test_m68k_alu.cpp
   test_m68k_irq.cpp
+  test_m68k_dis.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})
