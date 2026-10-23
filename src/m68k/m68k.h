@@ -54,7 +54,10 @@ public:
     // other register changes. Not counted in exceptionCount().
     void reset();
     // Exactly one instruction or one exception; returns its cycles. A halted or stopped CPU
-    // idles 4 cycles (DECISION M6).
+    // idles 4 cycles (DECISION M6). An exception an instruction causes (TRAP, CHK, privilege
+    // violation, address error, ...) belongs to that instruction's step; the trace exception
+    // after an instruction that started with T = 1 is a step of its own (UM 6.3.8), and it
+    // also ends a STOP.
     int step();
     // DECISION M6: whole instructions until >= cycles have passed; returns cycles used.
     int run(int cycles);
@@ -106,6 +109,7 @@ private:
     // is an address error on the first fetch (pc_ = addr - 2 then, so the frame's PC is
     // addr - 4 as in the suite, DECISION M11).
     void fillPrefetch(uint32_t addr, int between = 0);
+    void fetchJumpIr(uint32_t addr);  // the first half of fillPrefetch: IR <- (addr), pc_ = addr
 
     // ---- status register -----------------------------------------------------------------
     bool supervisor() const { return (sr_ & kSrS) != 0; }
@@ -143,11 +147,13 @@ private:
     // `indexClocks` internal clocks for the index modes. No register is changed.
     uint32_t controlAddress(uint16_t field, int indexClocks);
     uint32_t indexWord(uint32_t base);  // (d8,base,Xn) from the brief extension word in IRC
+    uint32_t indexValue(uint32_t base, uint16_t ext) const;  // the same from a given word
 
     // ---- exceptions ----------------------------------------------------------------------
     // Group 1/2 entry shared by every exception: copy SR, S = 1, T = 0, push the 6-byte
-    // frame (PC, SR) on the SSP, fetch the vector and refill the prefetch queue. 34 cycles.
-    void exception(int vector, uint32_t stackedPc);
+    // frame (PC, SR) on the SSP, fetch the vector and refill the prefetch queue. 34 cycles,
+    // of which `leadIdle` (4) are internal clocks before the frame (TRAPV has none).
+    void exception(int vector, uint32_t stackedPc, int leadIdle = 4);
     void privilegeViolation() { exception(8, instrAddr_); }  // vector 8, the instruction's address
     // Group 0: the 14-byte address-error frame for the fault in fault*_. 50 cycles. A fault
     // inside it is a double fault and halts (DECISION M9).
@@ -210,6 +216,25 @@ private:
     void opTas();
     bool condition(int cc) const;              // the 16 condition codes of Scc, DBcc and Bcc
 
+    // ---- program control and system (m68k_ops_flow.cpp) ---------------------------------
+    void opBcc();
+    void opBsr();
+    void opDbcc();
+    void opJmp();
+    void opJsr();
+    void opRts();
+    void opReturnFrame(bool rte);       // RTE (whole SR) and RTR (CCR only)
+    void opTrap();
+    void opTrapv();
+    void opReset();
+    void opStop();
+    void opMoveFromSr();
+    void opMoveToSr(bool ccrOnly);      // MOVE to SR, MOVE to CCR
+    void opSrImm(int kind, bool toSr);  // ANDI/ORI/EORI (kind 0/1/2) to CCR or SR
+    // Target of JMP/JSR: the extension words are read without the refill a data operand
+    // would run, since the jump refills the queue (suite JMP/JSR transactions).
+    uint32_t jumpAddress(uint16_t field);
+
     Bus& bus_;
     std::vector<Op> table_;  // decodeOp of every opcode word, filled by the constructor
 
@@ -222,6 +247,10 @@ private:
     uint16_t opcode_ = 0;  // ir_ when the instruction started (ir_ moves on at its closing fetch)
     int ipl_ = 0;
     bool halted_ = false, stopped_ = false;
+    // Trace (UM 6.3.8): pending after an instruction that started with T = 1 and was executed;
+    // traceBlocked_ is set when the instruction instead took an illegal, line A/F or
+    // privilege-violation exception (it was not executed, so it is not traced).
+    bool tracePending_ = false, traceBlocked_ = false;
 
     int cycles_ = 0;  // clocks of the step in progress
     uint64_t total_ = 0;

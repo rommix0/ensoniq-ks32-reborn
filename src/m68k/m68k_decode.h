@@ -72,6 +72,24 @@ enum class Op : uint16_t {
     BtstImm, BchgImm, BclrImm, BsetImm,  // 0000 1000 oo <ea>, #bit
     Scc,                        // 0101 cccc 11 <data alterable ea>
     Tas,                        // 0100 1010 11 <data alterable ea>
+    // Program control and system instructions (Task 6).
+    Bcc,                        // 0110 cccc dddddddd (cc 0 is BRA); d = 0: a 16-bit displacement follows
+    Bsr,                        // 0110 0001 dddddddd
+    Dbcc,                       // 0101 cccc 1100 1rrr, #d16
+    Jmp,                        // 0100 1110 11 <control ea>
+    Jsr,                        // 0100 1110 10 <control ea>
+    Rts,                        // 4E75
+    Rtr,                        // 4E77
+    Rte,                        // 4E73 (privileged)
+    Trap,                       // 4E40 + n
+    Trapv,                      // 4E76
+    Reset,                      // 4E70 (privileged)
+    Stop,                       // 4E72, #imm (privileged)
+    MoveFromSr,                 // 0100 0000 11 <data alterable ea> (not privileged on the 68000)
+    MoveToCcr,                  // 0100 0100 11 <data ea>
+    MoveToSr,                   // 0100 0110 11 <data ea> (privileged)
+    AndiToCcr, OriToCcr, EoriToCcr,  // 023C / 003C / 0A3C, #imm
+    AndiToSr, OriToSr, EoriToSr,     // 027C / 007C / 0A7C, #imm (privileged)
 };
 
 Op decodeOp(uint16_t opcode);

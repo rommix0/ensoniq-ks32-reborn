@@ -9,6 +9,7 @@ constexpr int kVectorAddressError = 3;
 constexpr int kVectorIllegal = 4;
 constexpr int kVectorLineA = 10;
 constexpr int kVectorLineF = 11;
+constexpr int kVectorTrace = 9;
 
 // Group 2 exceptions are caused by an instruction (CHK, divide by zero, TRAPV, TRAP #n);
 // while one is processed the processor still counts as processing an instruction (UM 6.3.9.1).
@@ -87,13 +88,19 @@ void Cpu::prefetch() {
     irc_ = read16(pc_, true);
 }
 
-void Cpu::fillPrefetch(uint32_t addr, int between) {
+void Cpu::fetchJumpIr(uint32_t addr) {
     if ((addr & 1) != 0) {
-        pc_ = addr - 2;  // DECISION M11: the frame then stacks addr - 4 (suite JMP, RTS)
+        // DECISION M11: the frame then stacks addr - 4 (suite Bcc, BSR, DBcc, JMP, JSR, RTS,
+        // RTR, RTE: every odd jump target).
+        pc_ = addr - 2;
         addressFault(addr, true, true);
     }
     pc_ = addr;
     ir_ = read16(pc_, true);
+}
+
+void Cpu::fillPrefetch(uint32_t addr, int between) {
+    fetchJumpIr(addr);
     idle(between);
     pc_ += 2;
     irc_ = read16(pc_, true);
@@ -117,6 +124,7 @@ void Cpu::reset() {
     cycles_ = 0;
     halted_ = false;
     stopped_ = false;
+    tracePending_ = false;
     notInstruction_ = true;
     setSr(0x2700);  // S = 1 (the USP is kept in otherSp_), T = 0, mask 7
     // UM table 8-14: 40(6/0). The six reads are the vector longs and the two prefetch words;
@@ -136,15 +144,27 @@ void Cpu::reset() {
 
 int Cpu::step() {
     cycles_ = 0;
-    if (halted_ || stopped_) {
+    if (halted_ || (stopped_ && !tracePending_)) {
         idle(4);  // DECISION M6: a halted or stopped CPU idles one bus-cycle time per step()
     } else {
-        instrAddr_ = pc_ - 2;
-        opcode_ = ir_;
-        notInstruction_ = false;
-        if (onInstruction) onInstruction(instrAddr_);
         try {
-            execute(table_[ir_]);
+            if (tracePending_) {
+                // UM 6.3.8: after the instruction, a group-1 exception stacking the address of
+                // the next instruction (34 cycles, table 8-14). It ends a STOP (PRM STOP).
+                tracePending_ = false;
+                stopped_ = false;
+                exception(kVectorTrace, pc_ - 2);
+            } else {
+                instrAddr_ = pc_ - 2;
+                opcode_ = ir_;
+                notInstruction_ = false;
+                traceBlocked_ = false;
+                if (onInstruction) onInstruction(instrAddr_);
+                const bool tracing = (sr_ & kSrT) != 0;  // T at the start of the instruction
+                execute(table_[ir_]);
+                // Not reached after an address error: an aborted instruction is not traced.
+                tracePending_ = tracing && !traceBlocked_;
+            }
         } catch (const AddressFault&) {
             try {
                 addressError();
@@ -162,7 +182,7 @@ int Cpu::run(int cycles) {
     // or stopped CPU consumes exactly the rest of the slice.
     int done = 0;
     while (done < cycles) {
-        if (halted_ || stopped_) {
+        if (halted_ || (stopped_ && !tracePending_)) {
             total_ += static_cast<uint64_t>(cycles - done);
             done = cycles;
             break;
@@ -202,6 +222,7 @@ void Cpu::setRegs(const Registers& r) {
     irc_ = r.prefetch[1];
     opcode_ = ir_;
     instrAddr_ = r.pc;
+    tracePending_ = false;  // r is an instruction boundary with nothing pending
 }
 
 uint32_t Cpu::exceptionCount(int vector) const {
@@ -210,15 +231,21 @@ uint32_t Cpu::exceptionCount(int vector) const {
 
 // ---- exceptions ---------------------------------------------------------------------------
 
-void Cpu::exception(int vector, uint32_t stackedPc) {
+void Cpu::exception(int vector, uint32_t stackedPc, int leadIdle) {
     // UM 6.2.5: copy the SR, then S = 1 and T = 0 (setSr switches A7 to the SSP).
     const uint16_t oldSr = sr_;
     setSr(static_cast<uint16_t>((sr_ | kSrS) & ~kSrT));
     ++exceptions_[vector & 0xFF];
-    if (!isGroup2(vector)) notInstruction_ = true;  // UM 6.3.9.1: the frame's I/N bit
+    if (!isGroup2(vector)) {
+        notInstruction_ = true;  // UM 6.3.9.1: the frame's I/N bit
+        // UM 6.3.8: an illegal or privileged instruction is not executed, so not traced. A
+        // group-2 exception (TRAP, TRAPV, CHK, divide by zero) is followed by the trace.
+        traceBlocked_ = true;
+    }
     // UM table 8-14: 34(4/3) for illegal, line A/F, privilege, trace and TRAP: three frame
-    // writes, two vector reads and two prefetch reads (28 clocks) plus 6 internal clocks.
-    idle(4);
+    // writes, two vector reads and two prefetch reads (28 clocks) plus 6 internal clocks;
+    // TRAPV runs its closing fetch in place of the 4 leading ones (suite TRAPV, 34(5/3)).
+    idle(leadIdle);
     // Short (6-byte) frame: SR at SSP, PC high at SSP + 2, PC low at SSP + 4. Bus order and
     // idle placement follow the suite's transaction log (TRAP.json "4e44 [TRAP Q] 1"):
     // n4, PC low, SR, PC high, vector high, vector low, prefetch, n2, prefetch.
@@ -396,6 +423,27 @@ void Cpu::execute(Op op) {
     case Op::BsetImm: opBit(3, true); return;
     case Op::Scc: opScc(); return;
     case Op::Tas: opTas(); return;
+    case Op::Bcc: opBcc(); return;
+    case Op::Bsr: opBsr(); return;
+    case Op::Dbcc: opDbcc(); return;
+    case Op::Jmp: opJmp(); return;
+    case Op::Jsr: opJsr(); return;
+    case Op::Rts: opRts(); return;
+    case Op::Rtr: opReturnFrame(false); return;
+    case Op::Rte: opReturnFrame(true); return;
+    case Op::Trap: opTrap(); return;
+    case Op::Trapv: opTrapv(); return;
+    case Op::Reset: opReset(); return;
+    case Op::Stop: opStop(); return;
+    case Op::MoveFromSr: opMoveFromSr(); return;
+    case Op::MoveToCcr: opMoveToSr(true); return;
+    case Op::MoveToSr: opMoveToSr(false); return;
+    case Op::AndiToCcr: opSrImm(0, false); return;
+    case Op::OriToCcr: opSrImm(1, false); return;
+    case Op::EoriToCcr: opSrImm(2, false); return;
+    case Op::AndiToSr: opSrImm(0, true); return;
+    case Op::OriToSr: opSrImm(1, true); return;
+    case Op::EoriToSr: opSrImm(2, true); return;
     }
 }
 

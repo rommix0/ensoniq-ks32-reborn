@@ -29,10 +29,11 @@ void Cpu::setLogicFlags(uint32_t v, int size) {
 
 // ---- address calculation ------------------------------------------------------------------
 
-uint32_t Cpu::indexWord(uint32_t base) {
+uint32_t Cpu::indexWord(uint32_t base) { return indexValue(base, nextWord()); }
+
+uint32_t Cpu::indexValue(uint32_t base, uint16_t ext) const {
     // Brief extension word (PRM 2.1): D/A, register, W/L, 8-bit displacement; bits 10..8
     // are ignored by the 68000.
-    const uint16_t ext = nextWord();
     const int r = (ext >> 12) & 7;
     uint32_t x = (ext & 0x8000) != 0 ? a_[r] : d_[r];
     if ((ext & 0x0800) == 0) x = signExtend(x, kWord);

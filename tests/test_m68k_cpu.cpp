@@ -581,3 +581,301 @@ TEST(m68k_addx_long_predecrement_order) {
     }
     CHECK_EQ(bus.peek32(0x3000), 1u);  // 0xFFFFFFFF + 1 + X
 }
+
+// ---- Task 6: program control, traps, SR access, STOP/RESET, trace and privilege -----------
+
+TEST(m68k_decode_flow_and_system) {
+    using ens::m68k::decodeOp;
+    using ens::m68k::Op;
+    CHECK(decodeOp(0x6000) == Op::Bcc);       // bra.w
+    CHECK(decodeOp(0x67FF) == Op::Bcc);       // beq.s with displacement -1 (68020: .l)
+    CHECK(decodeOp(0x6100) == Op::Bsr);
+    CHECK(decodeOp(0x51CF) == Op::Dbcc);      // dbf d7
+    CHECK(decodeOp(0x51D7) == Op::Scc);       // sf (a7), not dbcc
+    CHECK(decodeOp(0x4ED0) == Op::Jmp);
+    CHECK(decodeOp(0x4EFB) == Op::Jmp);       // jmp (d8,pc,xn)
+    CHECK(decodeOp(0x4ED8) == Op::Illegal);   // jmp (a0)+: not a control mode
+    CHECK(decodeOp(0x4EBA) == Op::Jsr);
+    CHECK(decodeOp(0x4EA0) == Op::Illegal);   // jsr -(a0)
+    CHECK(decodeOp(0x4E75) == Op::Rts);
+    CHECK(decodeOp(0x4E77) == Op::Rtr);
+    CHECK(decodeOp(0x4E73) == Op::Rte);
+    CHECK(decodeOp(0x4E74) == Op::Illegal);   // rtd: 68010
+    CHECK(decodeOp(0x4E40) == Op::Trap);
+    CHECK(decodeOp(0x4E4F) == Op::Trap);
+    CHECK(decodeOp(0x4E76) == Op::Trapv);
+    CHECK(decodeOp(0x4E70) == Op::Reset);
+    CHECK(decodeOp(0x4E72) == Op::Stop);
+    CHECK(decodeOp(0x40C0) == Op::MoveFromSr);
+    CHECK(decodeOp(0x40FA) == Op::Illegal);   // move sr,(d16,pc): not alterable
+    CHECK(decodeOp(0x40C8) == Op::Illegal);   // move sr,a0
+    CHECK(decodeOp(0x44FC) == Op::MoveToCcr); // move #imm,ccr
+    CHECK(decodeOp(0x44C8) == Op::Illegal);   // move a0,ccr
+    CHECK(decodeOp(0x46FB) == Op::MoveToSr);  // move (d8,pc,xn),sr
+    CHECK(decodeOp(0x007C) == Op::OriToSr);
+    CHECK(decodeOp(0x023C) == Op::AndiToCcr);
+    CHECK(decodeOp(0x027C) == Op::AndiToSr);
+    CHECK(decodeOp(0x0A3C) == Op::EoriToCcr);
+    CHECK(decodeOp(0x0A7C) == Op::EoriToSr);
+    CHECK(decodeOp(0x0C3C) == Op::Illegal);   // cmpi to ccr does not exist
+    CHECK(decodeOp(0x00BC) == Op::Illegal);   // ori.l #,#
+}
+
+TEST(m68k_branch_cycles) {
+    RamBus bus;
+    bus.load16(kCode, {0x6004});  // bra.s *+6
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode));
+    CHECK_EQ(cpu.step(), 10);
+    CHECK_EQ(cpu.regs().pc, kCode + 6);
+    // bne.s: Z = 1 not taken (8), Z = 0 taken (10).
+    RamBus bus2;
+    bus2.load16(kCode, {0x6610, 0x4E71});
+    Cpu cpu2(bus2);
+    cpu2.setRegs(stateAt(bus2, kCode, 0x2704));
+    CHECK_EQ(cpu2.step(), 8);
+    CHECK_EQ(cpu2.regs().pc, kCode + 2);
+    CHECK_EQ(cpu2.regs().prefetch[0], 0x4E71);
+    cpu2.setRegs(stateAt(bus2, kCode, 0x2700));
+    CHECK_EQ(cpu2.step(), 10);
+    CHECK_EQ(cpu2.regs().pc, kCode + 2 + 0x10);
+    // dbf d0,*: 10 while looping, 14 when the count expires.
+    RamBus bus3;
+    bus3.load16(kCode, {0x51C8, 0xFFFE, 0x4E71});
+    Cpu cpu3(bus3);
+    Registers r = stateAt(bus3, kCode);
+    r.d[0] = 0xABCD0001;
+    cpu3.setRegs(r);
+    CHECK_EQ(cpu3.step(), 10);
+    CHECK_EQ(cpu3.regs().pc, kCode);
+    CHECK_EQ(cpu3.regs().d[0], 0xABCD0000u);
+    CHECK_EQ(cpu3.step(), 14);
+    CHECK_EQ(cpu3.regs().pc, kCode + 4);
+    CHECK_EQ(cpu3.regs().d[0], 0xABCDFFFFu);
+    CHECK_EQ(cpu3.regs().prefetch[0], 0x4E71);
+}
+
+TEST(m68k_bsr_rts_round_trip) {
+    RamBus bus;
+    bus.load16(kCode, {0x6100, 0x0010, 0x4E71});  // bsr.w *+0x12
+    bus.load16(kCode + 0x12, {0x4E75});           // rts
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode));
+    CHECK_EQ(cpu.step(), 18);
+    CHECK_EQ(cpu.regs().pc, kCode + 0x12);
+    CHECK_EQ(cpu.regs().ssp, kSsp - 4);
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode + 4);
+    CHECK_EQ(cpu.step(), 16);
+    CHECK_EQ(cpu.regs().pc, kCode + 4);
+    CHECK_EQ(cpu.regs().ssp, kSsp);
+    CHECK_EQ(cpu.regs().prefetch[0], 0x4E71);
+}
+
+TEST(m68k_trap_vector_and_rte) {
+    // From user mode: TRAP #1 -> vector 33 (handler 0x500: rte), back to 0x402 in user mode.
+    RamBus bus;
+    bus.load32(33 * 4, 0x500);
+    bus.load16(kCode, {0x4E41, 0x4E71});
+    bus.load16(0x500, {0x4E73});
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode, 0x0015));
+    CHECK_EQ(cpu.step(), 34);
+    Registers s = cpu.regs();
+    CHECK_EQ(s.pc, 0x500u);
+    CHECK_EQ(s.sr, 0x2015);
+    CHECK_EQ(s.ssp, kSsp - 6);
+    CHECK_EQ(bus.peek16(kSsp - 6), 0x0015);
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode + 2);
+    CHECK_EQ(cpu.exceptionCount(33), 1u);
+    CHECK_EQ(cpu.step(), 20);
+    s = cpu.regs();
+    CHECK_EQ(s.pc, kCode + 2);
+    CHECK_EQ(s.sr, 0x0015);
+    CHECK_EQ(s.ssp, kSsp);
+    CHECK_EQ(s.usp, 0x3000u);
+    CHECK_EQ(s.prefetch[0], 0x4E71);
+}
+
+TEST(m68k_privilege_violation) {
+    RamBus bus;
+    bus.load32(8 * 4, 0x700);
+    bus.load16(kCode, {0x46FC, 0x2700});  // move #$2700,sr in user mode
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode, 0x0000));
+    CHECK_EQ(cpu.step(), 34);
+    const Registers s = cpu.regs();
+    CHECK_EQ(s.pc, 0x700u);
+    CHECK_EQ(s.sr, 0x2000);
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode);  // the instruction's own address
+    CHECK_EQ(cpu.exceptionCount(8), 1u);
+    // The other privileged instructions of this task do the same in user mode.
+    for (uint16_t op : {uint16_t(0x027C), uint16_t(0x007C), uint16_t(0x0A7C), uint16_t(0x4E70),
+                        uint16_t(0x4E72), uint16_t(0x4E73), uint16_t(0x46C0)}) {
+        RamBus b;
+        b.load32(8 * 4, 0x700);
+        b.load16(kCode, {op, 0x0000});
+        Cpu c(b);
+        c.setRegs(stateAt(b, kCode, 0x0000));
+        CHECK_EQ(c.step(), 34);
+        CHECK_EQ(c.regs().pc, 0x700u);
+        CHECK_EQ(b.peek32(kSsp - 4), kCode);
+        CHECK_EQ(c.exceptionCount(8), 1u);
+        CHECK_EQ(b.resets, 0);
+        CHECK(!c.stopped());
+    }
+}
+
+TEST(m68k_reset_instruction_calls_bus) {
+    RamBus bus;
+    bus.load16(kCode, {0x4E70, 0x4E71, 0x4E71});
+    Cpu cpu(bus);
+    Registers r = stateAt(bus, kCode, 0x271F);
+    for (int i = 0; i < 8; ++i) r.d[i] = 0x11111111u * static_cast<uint32_t>(i);
+    for (int i = 0; i < 7; ++i) r.a[i] = 0x01010101u * static_cast<uint32_t>(i + 1);
+    cpu.setRegs(r);
+    CHECK_EQ(cpu.step(), 132);
+    CHECK_EQ(bus.resets, 1);
+    const Registers s = cpu.regs();
+    for (int i = 0; i < 8; ++i) CHECK_EQ(s.d[i], r.d[i]);
+    for (int i = 0; i < 7; ++i) CHECK_EQ(s.a[i], r.a[i]);
+    CHECK_EQ(s.usp, r.usp);
+    CHECK_EQ(s.ssp, r.ssp);
+    CHECK_EQ(s.sr, r.sr);
+    CHECK_EQ(s.pc, kCode + 2);
+    CHECK(!cpu.halted());
+}
+
+TEST(m68k_trace_after_each_instruction) {
+    // T = 1: nop, trace (handler: rte back with T = 1), nop, trace.
+    RamBus bus;
+    bus.load32(9 * 4, 0x600);
+    bus.load16(kCode, {0x4E71, 0x4E71, 0x4E71});
+    bus.load16(0x600, {0x4E73});
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode, 0xA700));
+    CHECK_EQ(cpu.step(), 4);  // nop
+    CHECK_EQ(cpu.exceptionCount(9), 0u);
+    CHECK_EQ(cpu.step(), 34);  // trace
+    CHECK_EQ(cpu.exceptionCount(9), 1u);
+    CHECK_EQ(cpu.regs().pc, 0x600u);
+    CHECK_EQ(cpu.regs().sr, 0x2700);  // T cleared in the handler
+    CHECK_EQ(bus.peek16(kSsp - 6), 0xA700);
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode + 2);  // the next instruction
+    CHECK_EQ(cpu.step(), 20);  // rte (T = 0 at its start: not traced)
+    CHECK_EQ(cpu.regs().sr, 0xA700);
+    CHECK_EQ(cpu.regs().pc, kCode + 2);
+    CHECK_EQ(cpu.step(), 4);   // second nop
+    CHECK_EQ(cpu.step(), 34);  // second trace
+    CHECK_EQ(cpu.exceptionCount(9), 2u);
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode + 4);
+}
+
+TEST(m68k_trace_after_trap_and_not_after_illegal) {
+    // UM 6.3.8: TRAP with T = 1 takes the trap, then the trace (whose frame holds the trap
+    // handler's address and the SR with T = 0); an illegal instruction is not traced.
+    RamBus bus;
+    bus.load32(9 * 4, 0x600);
+    bus.load32(32 * 4, 0x500);
+    bus.load32(4 * 4, 0x700);
+    bus.load16(kCode, {0x4E40, 0x4AFC});
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode, 0xA700));
+    CHECK_EQ(cpu.step(), 34);  // trap #0
+    CHECK_EQ(cpu.regs().pc, 0x500u);
+    CHECK_EQ(cpu.step(), 34);  // trace
+    CHECK_EQ(cpu.regs().pc, 0x600u);
+    CHECK_EQ(cpu.exceptionCount(9), 1u);
+    CHECK_EQ(bus.peek16(kSsp - 12), 0x2700);
+    CHECK_EQ(bus.peek32(kSsp - 10), 0x500u);
+    // An illegal instruction with T = 1: vector 4 and no trace after it.
+    bus.load16(0x700, {0x4E71, 0x4E71});
+    cpu.setRegs(stateAt(bus, kCode + 2, 0xA700));
+    CHECK_EQ(cpu.step(), 34);
+    CHECK_EQ(cpu.regs().pc, 0x700u);
+    CHECK_EQ(cpu.exceptionCount(4), 1u);
+    CHECK_EQ(cpu.step(), 4);  // the handler's nop, not a trace
+    CHECK_EQ(cpu.exceptionCount(9), 1u);
+}
+
+TEST(m68k_stop_loads_sr_and_stops) {
+    RamBus bus;
+    bus.load16(kCode, {0x4E72, 0x2015, 0x4E71});  // stop #$2015
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode));
+    CHECK_EQ(cpu.step(), 4);
+    CHECK(cpu.stopped());
+    CHECK_EQ(cpu.regs().sr, 0x2015);
+    CHECK_EQ(cpu.regs().pc, kCode + 4);
+    CHECK_EQ(cpu.run(1000), 1000);  // M6: a stopped CPU consumes the slice
+    CHECK_EQ(cpu.step(), 4);
+    CHECK(cpu.stopped());
+    // With T = 1 at its start the trace exception follows and resumes execution (PRM STOP).
+    RamBus bus2;
+    bus2.load32(9 * 4, 0x600);
+    bus2.load16(kCode, {0x4E72, 0x2700});
+    Cpu cpu2(bus2);
+    cpu2.setRegs(stateAt(bus2, kCode, 0xA700));
+    CHECK_EQ(cpu2.step(), 4);
+    CHECK_EQ(cpu2.step(), 34);
+    CHECK(!cpu2.stopped());
+    CHECK_EQ(cpu2.regs().pc, 0x600u);
+    CHECK_EQ(bus2.peek32(kSsp - 4), kCode + 4);
+}
+
+TEST(m68k_sr_immediate_ops_switch_stack) {
+    // andi #$dfff,sr: to user mode, A7 becomes the USP; 20 cycles, the queue refetched.
+    RamBus bus;
+    bus.load16(kCode, {0x027C, 0xDFFF, 0x4E71, 0x4E71});
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode, 0x271F));
+    CHECK_EQ(cpu.step(), 20);
+    const Registers s = cpu.regs();
+    CHECK_EQ(s.sr, 0x071F);
+    CHECK_EQ(s.pc, kCode + 4);
+    CHECK_EQ(s.prefetch[0], 0x4E71);
+    CHECK_EQ(s.usp, 0x3000u);
+    CHECK_EQ(s.ssp, kSsp);
+    // move #$1f,ccr; eori #$11,ccr; ori #$02,ccr; move sr,d0 (user mode: none is privileged).
+    RamBus bus2;
+    bus2.load16(kCode, {0x44FC, 0x001F, 0x0A3C, 0x0011, 0x003C, 0x0002, 0x40C0});
+    Cpu cpu2(bus2);
+    cpu2.setRegs(stateAt(bus2, kCode, 0x0000));
+    CHECK_EQ(cpu2.step(), 16);
+    CHECK_EQ(cpu2.regs().sr, 0x001F);
+    CHECK_EQ(cpu2.step(), 20);
+    CHECK_EQ(cpu2.regs().sr, 0x000E);
+    CHECK_EQ(cpu2.step(), 20);
+    CHECK_EQ(cpu2.regs().sr, 0x000E);
+    CHECK_EQ(cpu2.step(), 6);  // move sr,d0 is not privileged on the 68000
+    CHECK_EQ(cpu2.regs().d[0] & 0xFFFF, 0x000Eu);
+    CHECK_EQ(cpu2.exceptionCount(8), 0u);
+}
+
+TEST(m68k_jsr_jmp) {
+    RamBus bus;
+    bus.load16(kCode, {0x4EB9, 0x0000, 0x0800});  // jsr ($800).l
+    bus.load16(0x800, {0x4EE8, 0x0010});          // jmp ($10,a0)
+    Cpu cpu(bus);
+    Registers r = stateAt(bus, kCode);
+    r.a[0] = 0x900;
+    cpu.setRegs(r);
+    CHECK_EQ(cpu.step(), 20);
+    CHECK_EQ(cpu.regs().pc, 0x800u);
+    CHECK_EQ(bus.peek32(kSsp - 4), kCode + 6);
+    CHECK_EQ(cpu.step(), 10);
+    CHECK_EQ(cpu.regs().pc, 0x910u);
+}
+
+TEST(m68k_runaway_into_fill_halts_cleanly) {
+    // 0xFFFF fill: line F with vector 11 = 0xFFFFFFFF (odd) -> address error, whose vector is
+    // odd too -> double fault -> halt (M9). run() still returns the whole slice.
+    RamBus bus;
+    for (uint32_t a = 8; a < (1u << 24); ++a) bus.mem[a] = 0xFF;
+    vectors(bus);
+    Cpu cpu(bus);
+    cpu.reset();
+    CHECK_EQ(cpu.regs().pc, kCode);
+    CHECK_EQ(cpu.run(10000), 10000);
+    CHECK(cpu.halted());
+    CHECK(cpu.exceptionCount(11) >= 1u);
+}

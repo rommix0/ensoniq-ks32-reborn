@@ -115,11 +115,11 @@ TEST(m68k_decode_arith_modes) {
     CHECK(m68k::decodeOp(0x5048) == Op::AddqW);      // addq.w #8,a0
     CHECK(m68k::decodeOp(0x5148) == Op::SubqW);      // subq.w #8,a0
     CHECK(m68k::decodeOp(0x50C0) == Op::Scc);        // st d0
-    CHECK(m68k::decodeOp(0x50C8) == Op::Illegal);    // dbt d0 (Task 6)
+    CHECK(m68k::decodeOp(0x50C8) == Op::Dbcc);       // dbt d0
     CHECK(m68k::decodeOp(0x0C3A) == Op::Illegal);    // cmpi.b #,(d16,pc): not on the 68000
     CHECK(m68k::decodeOp(0x0680) == Op::AddiL);      // addi.l #,d0
     CHECK(m68k::decodeOp(0x0000) == Op::OriB);       // ori.b #,d0
-    CHECK(m68k::decodeOp(0x003C) == Op::Illegal);    // ori to ccr (Task 6)
+    CHECK(m68k::decodeOp(0x003C) == Op::OriToCcr);   // ori to ccr
     CHECK(m68k::decodeOp(0xB308) == Op::CmpmB);      // cmpm.b (a0)+,(a1)+
     CHECK(m68k::decodeOp(0xB300) == Op::EorB);       // eor.b d1,d0
     CHECK(m68k::decodeOp(0xB1C8) == Op::CmpaL);      // cmpa.l a0,a0
@@ -153,9 +153,9 @@ TEST(m68k_decode_logic_modes) {
     CHECK(m68k::decodeOp(0xB37A) == Op::Illegal);      // eor.w d1,(d16,pc)
     CHECK(m68k::decodeOp(0x0200) == Op::AndiB);
     CHECK(m68k::decodeOp(0x0A80) == Op::EoriL);
-    CHECK(m68k::decodeOp(0x023C) == Op::Illegal);      // andi to ccr (Task 6)
+    CHECK(m68k::decodeOp(0x023C) == Op::AndiToCcr);    // andi to ccr
     CHECK(m68k::decodeOp(0x4640) == Op::NotW);
-    CHECK(m68k::decodeOp(0x46C0) == Op::Illegal);      // move to sr (Task 6)
+    CHECK(m68k::decodeOp(0x46C0) == Op::MoveToSr);     // move d0,sr
     CHECK(m68k::decodeOp(0xE300) == Op::ShiftRegB);
     CHECK(m68k::decodeOp(0xE3A8) == Op::ShiftRegL);
     CHECK(m68k::decodeOp(0xE2D0) == Op::ShiftMem);     // lsr.w (a0)

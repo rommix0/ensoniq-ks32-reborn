@@ -46,8 +46,17 @@ Op decodeLine0(uint16_t op) {
         const uint16_t allowed = bitOp == 0 ? static_cast<uint16_t>(kEaData & ~(1u << 11)) : kEaDataAlterable;
         return eaIn(ea, allowed) ? bitAt(Op::BtstImm) : Op::Illegal;
     }
+    // ORI, ANDI and EORI to CCR (byte) and to SR (word): the "#imm destination" encodings.
+    switch (op) {
+    case 0x003C: return Op::OriToCcr;
+    case 0x007C: return Op::OriToSr;
+    case 0x023C: return Op::AndiToCcr;
+    case 0x027C: return Op::AndiToSr;
+    case 0x0A3C: return Op::EoriToCcr;
+    case 0x0A7C: return Op::EoriToSr;
+    default: break;
+    }
     // ORI, ANDI, SUBI, ADDI, EORI, CMPI (the 68000's CMPI has no PC-relative destination).
-    // The immediate forms to CCR and SR have an immediate "destination": Task 6.
     if (bitOp == 3 || !eaIn(ea, kEaDataAlterable)) return Op::Illegal;
     switch (op & 0xFF00) {
     case 0x0000: return sized(Op::OriB, op);
@@ -81,10 +90,13 @@ Op decodeAddSub(uint16_t op, Op base) {
     }
 }
 
-// ADDQ/SUBQ (line 5, size 0..2) and Scc (size 3; DBcc, mode 1, is Task 6).
+// ADDQ/SUBQ (line 5, size 0..2), and Scc and DBcc (size 3; DBcc is Scc's An mode).
 Op decodeLine5(uint16_t op) {
     const uint16_t ea = op & 0x3F;
-    if (((op >> 6) & 3) == 3) return eaIn(ea, kEaDataAlterable) ? Op::Scc : Op::Illegal;
+    if (((op >> 6) & 3) == 3) {
+        if (eaIndex(ea) == 1) return Op::Dbcc;
+        return eaIn(ea, kEaDataAlterable) ? Op::Scc : Op::Illegal;
+    }
     if (!eaIn(ea, kEaDataAlterable | (1u << 1))) return Op::Illegal;
     if (eaIndex(ea) == 1 && ((op >> 6) & 3) == 0) return Op::Illegal;  // no byte to An
     return sized((op & 0x0100) != 0 ? Op::SubqB : Op::AddqB, op);
@@ -118,7 +130,23 @@ Op decodeLineB(uint16_t op) {
 
 Op decodeLine4(uint16_t op) {
     const uint16_t ea = op & 0x3F;
-    if (op == 0x4E71) return Op::Nop;
+    switch (op) {
+    case 0x4E70: return Op::Reset;
+    case 0x4E71: return Op::Nop;
+    case 0x4E72: return Op::Stop;
+    case 0x4E73: return Op::Rte;
+    case 0x4E75: return Op::Rts;
+    case 0x4E76: return Op::Trapv;
+    case 0x4E77: return Op::Rtr;
+    default: break;  // 4E74 (RTD) is a 68010 instruction
+    }
+    if ((op & 0xFFF0) == 0x4E40) return Op::Trap;
+    if ((op & 0xFFC0) == 0x4E80) return eaIn(ea, kEaControl) ? Op::Jsr : Op::Illegal;
+    if ((op & 0xFFC0) == 0x4EC0) return eaIn(ea, kEaControl) ? Op::Jmp : Op::Illegal;
+    // MOVE from SR, to CCR, to SR: the size-3 forms of NEGX, NEG and NOT.
+    if ((op & 0xFFC0) == 0x40C0) return eaIn(ea, kEaDataAlterable) ? Op::MoveFromSr : Op::Illegal;
+    if ((op & 0xFFC0) == 0x44C0) return eaIn(ea, kEaData) ? Op::MoveToCcr : Op::Illegal;
+    if ((op & 0xFFC0) == 0x46C0) return eaIn(ea, kEaData) ? Op::MoveToSr : Op::Illegal;
     if ((op & 0xFF00) == 0x4200) {  // CLR (size 3 is not an instruction on the 68000)
         if (!eaIn(ea, kEaDataAlterable)) return Op::Illegal;
         switch ((op >> 6) & 3) {
@@ -133,7 +161,7 @@ Op decodeLine4(uint16_t op) {
     if ((op & 0xFFC0) == 0x4AC0) return eaIn(ea, kEaDataAlterable) ? Op::Tas : Op::Illegal;  // incl. 4AFC
     if ((op & 0xFF00) == 0x4000 || (op & 0xFF00) == 0x4400 || (op & 0xFF00) == 0x4600 ||
         (op & 0xFF00) == 0x4A00) {
-        // NEGX, NEG, NOT, TST; size 3 is MOVE from SR / to CCR / to SR (Task 6).
+        // NEGX, NEG, NOT, TST; size 3 is MOVE from SR / to CCR / to SR (above) or TAS.
         if (((op >> 6) & 3) == 3 || !eaIn(ea, kEaDataAlterable)) return Op::Illegal;
         const Op base = (op & 0xFF00) == 0x4000   ? Op::NegxB
                         : (op & 0xFF00) == 0x4400 ? Op::NegB
@@ -203,6 +231,7 @@ Op decodeOp(uint16_t opcode) {
     case 0x3: return decodeMove(opcode);
     case 0x4: return decodeLine4(opcode);
     case 0x5: return decodeLine5(opcode);
+    case 0x6: return (opcode & 0x0F00) == 0x0100 ? Op::Bsr : Op::Bcc;  // cc 1 (false) is BSR
     case 0x7: return (opcode & 0x0100) == 0 ? Op::Moveq : Op::Illegal;
     case 0x8: return decodeLine8(opcode);
     case 0x9: return decodeAddSub(opcode, Op::SubB);
