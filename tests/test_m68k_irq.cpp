@@ -183,7 +183,8 @@ TEST(m68k_level7_is_edge_triggered) {
     cpu2.setIpl(0);
     CHECK_EQ(cpu2.step(), 4);
     CHECK_EQ(cpu2.exceptionCount(31), 0u);
-    // Level 7 against a lower mask is also the level comparison of UM 6.3.2.
+    // A fresh rise at a mask below 7 is delivered too (here by the edge latch; the level
+    // comparison is pinned by m68k_level7_held_retaken_when_mask_drops).
     RamBus bus3;
     fillNops(bus3);
     bus3.load32(31 * 4, kHandler);
@@ -192,6 +193,54 @@ TEST(m68k_level7_is_edge_triggered) {
     cpu3.setIpl(7);
     CHECK_EQ(cpu3.step(), 44);
     CHECK_EQ(cpu3.regs().sr, 0x2700);
+}
+
+TEST(m68k_level7_held_retaken_when_mask_drops) {
+    // R13 / UM 6.3.2: a request that stays at 7 is taken again by the level comparison once an
+    // instruction lowers the mask below 7. Under an edge-only reading none of these retakes.
+    // (a) The handler lowers the mask itself: move #$2000,sr.
+    RamBus bus;
+    fillNops(bus);
+    bus.load32(31 * 4, kHandler);
+    bus.load16(kHandler, {0x46FC, 0x2000});
+    Cpu cpu(bus);
+    cpu.setRegs(stateAt(bus, kCode, 0x2700));
+    cpu.setIpl(7);
+    CHECK_EQ(cpu.step(), 44);  // the rise, taken at mask 7
+    CHECK_EQ(cpu.exceptionCount(31), 1u);
+    CHECK_EQ(cpu.step(), 16);  // move #$2000,sr: the mask drops to 0, the line is still 7
+    CHECK_EQ(cpu.regs().sr, 0x2000);
+    CHECK_EQ(cpu.step(), 44);  // retaken by the level comparison, no new rise
+    CHECK_EQ(cpu.exceptionCount(31), 2u);
+    CHECK_EQ(bus.peek16(kSsp - 12), 0x2000);  // the second frame stacks the lowered SR
+    // (b) The handler rewrites the stacked SR to mask 0 (move.w #$2000,(a7)) and returns.
+    RamBus bus2;
+    fillNops(bus2);
+    bus2.load32(31 * 4, kHandler);
+    bus2.load16(kHandler, {0x3EBC, 0x2000, kRte});
+    Cpu cpu2(bus2);
+    cpu2.setRegs(stateAt(bus2, kCode, 0x2700));
+    cpu2.setIpl(7);
+    CHECK_EQ(cpu2.step(), 44);
+    CHECK_EQ(cpu2.step(), 12);  // move.w #imm,(a7)
+    CHECK_EQ(cpu2.step(), 20);  // rte to mask 0
+    CHECK_EQ(cpu2.regs().sr, 0x2000);
+    CHECK_EQ(cpu2.regs().pc, kCode);
+    CHECK_EQ(cpu2.step(), 44);  // the line is still 7: taken again
+    CHECK_EQ(cpu2.exceptionCount(31), 2u);
+    CHECK_EQ(bus2.peek32(kSsp - 4), kCode);  // no instruction ran in between
+    // (c) A held 7 at mask 7 (the handler returns to mask 7) is not retaken.
+    RamBus bus3;
+    fillNops(bus3);
+    bus3.load32(31 * 4, kHandler);
+    bus3.write16(kHandler, kRte);
+    Cpu cpu3(bus3);
+    cpu3.setRegs(stateAt(bus3, kCode, 0x2700));
+    cpu3.setIpl(7);
+    CHECK_EQ(cpu3.step(), 44);
+    CHECK_EQ(cpu3.step(), 20);
+    for (int i = 0; i < 4; ++i) CHECK_EQ(cpu3.step(), 4);
+    CHECK_EQ(cpu3.exceptionCount(31), 1u);
 }
 
 TEST(m68k_stop_wakes_on_unmasked_interrupt_only) {
