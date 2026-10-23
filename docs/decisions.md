@@ -509,3 +509,26 @@ Entry template:
 - Evidence: the final review's finding; test synth_ready_after_boot_and_load (ready after 2122 frames, a note started then is at its sustained level once its 5 ms attack is over).
 - Confidence: High.
 - Status: `// DECISION P18` at `warmUp` in `tools/ks32play/main.cpp`, called by `renderEvents`. The cross-toolchain identity hash in `docs/verification-plan3.md` was re-taken after this change.
+
+## 68000 core
+
+## M3: PC and prefetch convention
+- Options: (a) `Registers::pc` is the address of the next instruction and `prefetch` = {word at pc, word at pc + 2}, the suite's convention; (b) `pc` is the internal address register of the last prefetch (pc + 2 under (a)), as the hardware's address bus shows it; (c) do not expose the prefetch queue and refill it from memory in `setRegs`.
+- Choice: (a). The core models the two-word queue as the UM describes: IR holds the opcode, IRC the next word, and the internal `pc_` is the address of the word in IRC, so `regs().pc = pc_ - 2` and `regs().prefetch = {IR, IRC}`. `setRegs` loads IR/IRC from `r.prefetch` without touching memory and sets `pc_ = r.pc + 2`. An instruction's closing fetch moves IRC to IR and reads the word at `pc_ + 2`; an extension word is taken from IRC and refilled the same way; a jump (reset, exception) reads IR and IRC from the target. (c) would hide the self-modifying-prefetch effect that M1 has to classify.
+- Evidence: the suite's README defines `pc` as "the formal program counter" (the location of the next instruction) and `prefetch` as the 2-word queue, first item fetched first. NOP.json "4e71 [NOP] 1": initial pc 3072, prefetch [0x4E71, 0x2A53]; final pc 3074, prefetch [0x2A53, 0x0679], with one read at 3076 = pc + 4. That is exactly (a) with the closing fetch at `pc_ + 2`.
+- Confidence: High.
+- Status: Implemented in `Cpu::regs`, `Cpu::setRegs`, `Cpu::prefetch`, `Cpu::nextWord`, `Cpu::fillPrefetch` (Task 1). Tests: m68k_reset_loads_ssp_and_pc, m68k_nop_takes_4_cycles, m68k_set_regs_round_trips.
+
+## M5: Bus errors and function codes
+- Options: (a) no bus-error return and no function-code lines on `Bus`, so vector 2 is never taken; (b) a bus-error return on every access with the 14-byte group-0 frame; (c) pass FC2..FC0 with each access.
+- Choice: (a). No KS-32 source of BERR is known and no KS-32 decoding of the function codes is known; Plan 6 may add either. The 24-bit address the core passes and the access width are all a device sees.
+- Evidence: UM 3.8 and table 3-3 (function codes), UM 5.4.1 (bus error operation). The KS-32 board's BERR and FC wiring is not documented in this repository.
+- Confidence: Medium (it holds until a KS-32 source of BERR is found).
+- Status: `// DECISION M5` on `struct Bus` (`src/m68k/m68k.h`, Task 1).
+
+## M6: Run slices
+- Options: (a) `run(n)` executes whole instructions and exceptions until at least n cycles have passed and returns the cycles used (overshoot less than one instruction); a halted or stopped CPU consumes exactly the rest of the slice; (b) stop before an instruction that would cross n (undershoot), which makes the result depend on how the caller slices time; (c) split instructions at bus-cycle granularity.
+- Choice: (a). `run(n)` with n <= 0 returns 0 and runs nothing. If the CPU halts or stops in the middle of a slice, the rest of the slice is consumed as idle time (added to `totalCycles()`). `step()` on a halted or stopped CPU idles 4 cycles (one bus-cycle time) and returns 4, so a loop of `step()` calls still advances time. A caller that loops `run(1)` until `totalCycles()` reaches T ends at the same instruction boundary as one `run(T - start)`, so results do not depend on slicing (Task 7 adds interrupts and checks this).
+- Evidence: none in the manuals (an emulator interface choice). (c) costs speed and nothing in Plan 5 needs it; Plan 6 can revisit it if a device needs bus-cycle timing.
+- Confidence: High.
+- Status: `// DECISION M6` at `Cpu::step` and `Cpu::run` (`src/m68k/m68k_cpu.cpp`, Task 1). Tests: m68k_run_returns_whole_instructions; the halted and stopped cases are tested in Tasks 3, 6 and 7 (m68k_double_fault_halts, m68k_stop_wakes_on_unmasked_interrupt_only, m68k_slicing_is_invisible).
