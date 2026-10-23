@@ -122,10 +122,11 @@ HarteResult classify(const HarteTest& t, const Registers& got, const RamList& go
     d.hexField("ssp", exp.ssp, got.ssp);
     d.hexField("pc", exp.pc, got.pc);
     d.hexField("sr", exp.sr, got.sr);
+    if (t.cycles != gotCycles) d.add("cycles", std::to_string(t.cycles), std::to_string(gotCycles));
+    const bool coreEqual = !d.any;  // d, a, usp, ssp, pc, sr and cycles
     d.hexField("prefetch0", exp.prefetch[0], got.prefetch[0]);
     d.hexField("prefetch1", exp.prefetch[1], got.prefetch[1]);
-    if (t.cycles != gotCycles) d.add("cycles", std::to_string(t.cycles), std::to_string(gotCycles));
-    const bool regsAndCyclesEqual = !d.any;
+    const bool prefetchEqual = exp.prefetch[0] == got.prefetch[0] && exp.prefetch[1] == got.prefetch[1];
 
     // RAM: every byte the CPU wrote or the test names. An address missing from gotRam reads 0.
     std::vector<uint32_t> addrs;
@@ -144,24 +145,28 @@ HarteResult classify(const HarteTest& t, const Registers& got, const RamList& go
         }
     }
     if (!d.any) return HarteResult::Pass;
-    if (!regsAndCyclesEqual) return HarteResult::Fail;
+    if (!coreEqual) return HarteResult::Fail;
 
-    // DECISION M1: registers and cycles are exact. Only RAM may differ, and only in two ways:
-    // (1) the byte(s) at instrAddr + 4, the word the closing prefetch of a one-word instruction
-    // reads, when the test itself writes there (self-modifying code: the suite records the
-    // hardware's order of write and prefetch); (2) the first 8 bytes (status word, access
-    // address, IR) of the 14-byte group-0 frame of an address error (vector 3).
-    const uint32_t smp = instrAddr + 4;
-    bool allSmp = true, allFrame = vectorTaken == 3;
-    for (uint32_t a : ramDiffs) {
+    // DECISION M1: d, a, usp, ssp, pc, sr and cycles are always exact. Two classes may absorb the
+    // rest. (1) SelfModifyingPrefetch: the test's own final RAM shows a write inside the
+    // instruction's prefetch window [instrAddr, instrAddr + 6), and every difference is a RAM byte
+    // inside that window or one/both prefetch words (the closing fetch reads the old or the new
+    // value depending on the order of write and fetch, which the suite records from the hardware).
+    // (2) AddressErrorFrame: vector 3 and prefetch words equal, every RAM difference in the
+    // first 8 bytes (status word, access address, IR) of the 14-byte frame at the final SSP.
+    auto inWindow = [instrAddr](uint32_t a) { return a >= instrAddr && a - instrAddr < 6; };
+    bool wroteInWindow = false;
+    for (const auto& e : t.final.ram) {
         bool found = false;
-        const uint8_t finalV = lookup(t.final.ram, a, found);
-        const bool written = found && finalV != lookup(t.initial.ram, a, found);
-        if (!((a == smp || a == smp + 1) && written)) allSmp = false;
-        if (!(a >= got.ssp && a - got.ssp < 8)) allFrame = false;
+        if (inWindow(e.first) && e.second != lookup(t.initial.ram, e.first, found)) wroteInWindow = true;
     }
-    if (allSmp) return HarteResult::SelfModifyingPrefetch;
-    if (allFrame) return HarteResult::AddressErrorFrame;
+    bool ramInWindow = true, ramInFrame = true;
+    for (uint32_t a : ramDiffs) {
+        if (!inWindow(a)) ramInWindow = false;
+        if (!(a >= got.ssp && a - got.ssp < 8)) ramInFrame = false;
+    }
+    if (wroteInWindow && ramInWindow) return HarteResult::SelfModifyingPrefetch;
+    if (vectorTaken == 3 && prefetchEqual && ramInFrame) return HarteResult::AddressErrorFrame;
     return HarteResult::Fail;
 }
 

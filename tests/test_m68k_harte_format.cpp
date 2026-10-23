@@ -106,6 +106,47 @@ TEST(harte_failure_classes) {
         t.final.ram = {B(0x404, 0xAB), B(0x500, 0)};
         CHECK(classifyHarteFailure(t, t.final.regs, got2, 4, 0x400, -1) == HarteResult::Fail);
     }
+    // Self-modifying prefetch window [instrAddr, instrAddr + 6): the test writes inside it and the
+    // only differences are RAM bytes in the window or prefetch words.
+    {
+        HarteTest t = baseTest();
+        t.final.ram = {B(0x402, 0xAB)};  // (a) a write at instrAddr + 2
+        const RamList same = {B(0x402, 0xAB)};
+        Registers r = t.final.regs;
+        r.prefetch[1] ^= 0x0100;
+        CHECK(classifyHarteFailure(t, r, same, 4, 0x400, -1) == HarteResult::SelfModifyingPrefetch);
+        r.prefetch[0] ^= 1;  // both prefetch words
+        CHECK(classifyHarteFailure(t, r, same, 4, 0x400, -1) == HarteResult::SelfModifyingPrefetch);
+        // (b) the same prefetch mismatch with no write in the window
+        HarteTest u = baseTest();
+        r = u.final.regs;
+        r.prefetch[1] ^= 0x0100;
+        CHECK(classifyHarteFailure(u, r, none, 4, 0x400, -1) == HarteResult::Fail);
+        // a write only outside the window does not count either
+        u.final.ram = {B(0x406, 0xAB)};
+        const RamList outside = {B(0x406, 0xAB)};
+        CHECK(classifyHarteFailure(u, r, outside, 4, 0x400, -1) == HarteResult::Fail);
+        // (c) a register difference plus an in-window RAM difference
+        r = t.final.regs;
+        r.d[0] ^= 1;
+        CHECK(classifyHarteFailure(t, r, none, 4, 0x400, -1) == HarteResult::Fail);
+        r = t.final.regs;
+        r.pc += 2;
+        r.prefetch[0] ^= 1;
+        CHECK(classifyHarteFailure(t, r, same, 4, 0x400, -1) == HarteResult::Fail);
+        // the cycle count must still match
+        CHECK(classifyHarteFailure(t, t.final.regs, same, 6, 0x400, -1) == HarteResult::Fail);
+        // (d) a RAM difference at instrAddr + 5, (e) at instrAddr + 6
+        HarteTest w = baseTest();
+        w.final.ram = {B(0x405, 0xAB)};
+        CHECK(classifyHarteFailure(w, w.final.regs, none, 4, 0x400, -1) ==
+              HarteResult::SelfModifyingPrefetch);
+        w.final.ram = {B(0x406, 0xAB)};
+        CHECK(classifyHarteFailure(w, w.final.regs, none, 4, 0x400, -1) == HarteResult::Fail);
+        // a difference in the window together with one outside it is a failure
+        w.final.ram = {B(0x405, 0xAB), B(0x500, 0xCD)};
+        CHECK(classifyHarteFailure(w, w.final.regs, none, 4, 0x400, -1) == HarteResult::Fail);
+    }
     // Address error: vector 3, registers equal, the difference lies in the first 8 frame bytes.
     {
         HarteTest t = baseTest();
