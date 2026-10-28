@@ -1,0 +1,507 @@
+// 68000 run loop, bus cycles, prefetch queue, status register and exception entry.
+#include "m68k/m68k.h"
+
+#include <cstdint>
+
+namespace ens::m68k {
+
+namespace {
+
+constexpr int kVectorAddressError = 3;
+constexpr int kVectorIllegal = 4;
+constexpr int kVectorLineA = 10;
+constexpr int kVectorLineF = 11;
+constexpr int kVectorTrace = 9;
+
+// Group 2 exceptions are caused by an instruction (CHK, divide by zero, TRAPV, TRAP #n);
+// while one is processed the processor still counts as processing an instruction (UM 6.3.9.1).
+bool isGroup2(int vector) {
+    return (vector >= 5 && vector <= 7) || (vector >= 32 && vector <= 47);
+}
+
+}  // namespace
+
+Cpu::Cpu(Bus& bus) : bus_(bus), table_(0x10000) {
+    for (uint32_t w = 0; w < 0x10000; ++w) table_[w] = decodeOp(static_cast<uint16_t>(w));
+}
+
+// ---- bus cycles ---------------------------------------------------------------------------
+
+void Cpu::addressFault(uint32_t addr, bool read, bool program) {
+    faultAddr_ = addr;
+    faultPc_ = pc_ - 2;  // DECISION M11: the suite stacks the address of the word before IRC
+    const uint16_t fc = static_cast<uint16_t>((supervisor() ? 4 : 0) | (program ? 2 : 1));
+    // DECISION M12: I/N = 0 for a fault while an instruction runs (UM 6.3.9.1), also on the first
+    // fetch at an odd jump target; the suite sets 1 there (27970 cases, reported as aef).
+    faultStatus_ = static_cast<uint16_t>((read ? 0x10 : 0) | (notInstruction_ ? 0x08 : 0) | fc);
+    throw AddressFault{};
+}
+
+uint8_t Cpu::read8(uint32_t addr) {
+    cycles_ += 4;
+    return bus_.read8(addr & kAddrMask);
+}
+
+uint16_t Cpu::read16(uint32_t addr, bool program) {
+    if ((addr & 1) != 0) addressFault(addr, true, program);
+    cycles_ += 4;
+    return bus_.read16(addr & kAddrMask);
+}
+
+uint32_t Cpu::read32(uint32_t addr, bool program) {
+    const uint32_t hi = read16(addr, program);
+    return (hi << 16) | read16(addr + 2, program);
+}
+
+void Cpu::write8(uint32_t addr, uint8_t v) {
+    cycles_ += 4;
+    bus_.write8(addr & kAddrMask, v);
+}
+
+void Cpu::write16(uint32_t addr, uint16_t v) {
+    if ((addr & 1) != 0) addressFault(addr, false, false);
+    cycles_ += 4;
+    bus_.write16(addr & kAddrMask, v);
+}
+
+void Cpu::write32(uint32_t addr, uint32_t v) {
+    write16(addr, static_cast<uint16_t>(v >> 16));
+    write16(addr + 2, static_cast<uint16_t>(v));
+}
+
+void Cpu::write32Desc(uint32_t addr, uint32_t v) {
+    // DECISION M13: predecrement and read-modify-write long stores go low word first (suite
+    // MOVE.l "2100 [MOVE.l D0, -(A0)]", CLR.l "42a0 [CLR.l -(A0)]"). An odd addr faults on
+    // the first word, so the frame's access address is addr + 2, as the suite stacks it.
+    write16(addr + 2, static_cast<uint16_t>(v));
+    write16(addr, static_cast<uint16_t>(v >> 16));
+}
+
+// ---- prefetch queue -----------------------------------------------------------------------
+
+uint16_t Cpu::nextWord() {
+    const uint16_t w = irc_;
+    pc_ += 2;
+    irc_ = read16(pc_, true);
+    return w;
+}
+
+void Cpu::prefetch() {
+    ir_ = irc_;
+    pc_ += 2;
+    irc_ = read16(pc_, true);
+}
+
+void Cpu::fetchJumpIr(uint32_t addr) {
+    if ((addr & 1) != 0) {
+        // DECISION M11: the frame then stacks addr - 4 (suite Bcc, BSR, DBcc, JMP, JSR, RTS,
+        // RTR, RTE: every odd jump target).
+        pc_ = addr - 2;
+        addressFault(addr, true, true);
+    }
+    pc_ = addr;
+    ir_ = read16(pc_, true);
+}
+
+void Cpu::fillPrefetch(uint32_t addr, int between) {
+    fetchJumpIr(addr);
+    idle(between);
+    pc_ += 2;
+    irc_ = read16(pc_, true);
+}
+
+// ---- status register and register helpers -------------------------------------------------
+
+void Cpu::setSr(uint16_t v) {
+    v &= kSrMask;
+    if (((v ^ sr_) & kSrS) != 0) {
+        const uint32_t sp = a_[7];
+        a_[7] = otherSp_;
+        otherSp_ = sp;
+    }
+    sr_ = v;
+}
+
+// ---- reset, step, run ---------------------------------------------------------------------
+
+void Cpu::reset() {
+    cycles_ = 0;
+    halted_ = false;
+    stopped_ = false;
+    tracePending_ = false;
+    irq7Pending_ = false;  // DECISION M7: a level 7 held through the reset is not a rise
+    notInstruction_ = true;
+    setSr(0x2700);  // S = 1 (the USP is kept in otherSp_), T = 0, mask 7
+    // UM table 8-14: 40(6/0). The six reads are the vector longs and the two prefetch words;
+    // the other 16 clocks are internal (placed first: nothing can observe where).
+    idle(16);
+    try {
+        a_[7] = read32(0, true);
+        fillPrefetch(read32(4, true));
+    } catch (const AddressFault&) {
+        halted_ = true;  // DECISION M9: an address error during reset is a double fault
+    }
+    notInstruction_ = false;
+    instrAddr_ = pc_ - 2;
+    opcode_ = ir_;
+    total_ += static_cast<uint64_t>(cycles_);
+}
+
+int Cpu::step() {
+    cycles_ = 0;
+    if (halted_) {
+        idle(4);  // DECISION M6: a halted or stopped CPU idles one bus-cycle time per step()
+    } else {
+        try {
+            if (tracePending_) {
+                // UM 6.3.8: after the instruction, a group-1 exception stacking the address of
+                // the next instruction (34 cycles, table 8-14). It ends a STOP (PRM STOP). It
+                // comes before an interrupt (UM 6.3.9: trace, then interrupt).
+                tracePending_ = false;
+                stopped_ = false;
+                exception(kVectorTrace, pc_ - 2);
+            } else if (const int level = pendingInterrupt(); level != 0) {
+                // DECISION M7: pending interrupts are looked at between instructions, also
+                // while stopped. The interrupt ends a STOP.
+                stopped_ = false;
+                interrupt(level);
+            } else if (stopped_) {
+                idle(4);  // DECISION M6
+            } else {
+                instrAddr_ = pc_ - 2;
+                opcode_ = ir_;
+                notInstruction_ = false;
+                traceBlocked_ = false;
+                if (onInstruction) onInstruction(instrAddr_);
+                const bool tracing = (sr_ & kSrT) != 0;  // T at the start of the instruction
+                execute(table_[ir_]);
+                // Not reached after an address error: an aborted instruction is not traced.
+                tracePending_ = tracing && !traceBlocked_;
+            }
+        } catch (const AddressFault&) {
+            try {
+                addressError();
+            } catch (const AddressFault&) {
+                halted_ = true;  // DECISION M9: an address error inside group-0 processing halts
+            }
+        }
+    }
+    total_ += static_cast<uint64_t>(cycles_);
+    return cycles_;
+}
+
+int Cpu::run(int cycles) {
+    // DECISION M6: whole instructions until >= cycles (overshoot < one instruction); a halted
+    // or stopped CPU that has nothing to take consumes exactly the rest of the slice. The
+    // slice is counted in 64 bits, so no sum of step() results can overflow, and the result
+    // is clamped to int.
+    int64_t done = 0;
+    while (done < cycles) {
+        // DECISION M7: a stopped CPU with an interrupt to take (pendingInterrupt) is stepped,
+        // not idled; step() takes it.
+        if (halted_ || (stopped_ && !tracePending_ && pendingInterrupt() == 0)) {
+            total_ += static_cast<uint64_t>(cycles - done);
+            done = cycles;
+            break;
+        }
+        done += step();
+    }
+    return done > INT32_MAX ? INT32_MAX : static_cast<int>(done);
+}
+
+void Cpu::setIpl(int level) {
+    const int l = level < 0 ? 0 : (level > 7 ? 7 : level);
+    // DECISION M7: a rise to level 7 arms the edge latch; any other level disarms it, since a
+    // level that is gone before the next instruction boundary is never sampled.
+    if (l == 7 && ipl_ != 7) irq7Pending_ = true;
+    if (l != 7) irq7Pending_ = false;
+    ipl_ = l;
+}
+
+int Cpu::pendingInterrupt() const {
+    // DECISION M7: the level latched by setIpl() is compared with the SR mask at each
+    // instruction boundary (UM 6.3.2: taken when higher than the mask, so levels 1..6 are
+    // level-sensitive and a held request is taken again whenever the mask drops below it).
+    // Level 7 is also taken once for each rise to 7, whatever the mask.
+    const int mask = (sr_ >> 8) & 7;
+    if (ipl_ > mask || (ipl_ == 7 && irq7Pending_)) return ipl_;
+    return 0;
+}
+
+void Cpu::interrupt(int level) {
+    // DECISION M4: 44 clocks, UM table 8-14 interrupt 44(5/3) with a 4-clock acknowledge cycle
+    // and no E-clock/VMA synchronisation jitter (a cycle count must not depend on the phase of
+    // a clock the bus does not model). Order (the UM gives the totals, not the order): 6
+    // internal clocks, the acknowledge cycle (4), 4 internal clocks, the frame (PC low, SR, PC
+    // high), the vector read, the first prefetch, 2 internal clocks, the second prefetch: 12
+    // internal clocks and 8 bus cycles. The acknowledge counts as the table's fifth read.
+    if (level == 7) irq7Pending_ = false;
+    idle(6);
+    const int ack = bus_.interruptAcknowledge(level);
+    idle(4);
+    // DECISION M24: an answer outside 0..255 that is not kAutovector is taken as spurious.
+    const int vector = ack >= 0 && ack <= 255 ? ack : (ack == kAutovector ? 24 + level : 24);
+    enterException(vector, pc_ - 2, 4, false, level);
+}
+
+// ---- register access ----------------------------------------------------------------------
+
+Registers Cpu::regs() const {
+    Registers r{};
+    for (int i = 0; i < 8; ++i) r.d[i] = d_[i];
+    for (int i = 0; i < 7; ++i) r.a[i] = a_[i];
+    r.ssp = supervisor() ? a_[7] : otherSp_;
+    r.usp = supervisor() ? otherSp_ : a_[7];
+    r.pc = pc_ - 2;  // DECISION M3: the formal PC is the address of the word in IR
+    r.sr = sr_;
+    r.prefetch[0] = ir_;
+    r.prefetch[1] = irc_;
+    return r;
+}
+
+void Cpu::setRegs(const Registers& r) {
+    for (int i = 0; i < 8; ++i) d_[i] = r.d[i];
+    for (int i = 0; i < 7; ++i) a_[i] = r.a[i];
+    sr_ = static_cast<uint16_t>(r.sr & kSrMask);
+    a_[7] = supervisor() ? r.ssp : r.usp;
+    otherSp_ = supervisor() ? r.usp : r.ssp;
+    pc_ = r.pc + 2;  // DECISION M3: IR holds the word at r.pc, IRC the word at r.pc + 2
+    ir_ = r.prefetch[0];
+    irc_ = r.prefetch[1];
+    opcode_ = ir_;
+    instrAddr_ = r.pc;
+    tracePending_ = false;  // r is an instruction boundary with nothing pending
+}
+
+uint32_t Cpu::exceptionCount(int vector) const {
+    return vector >= 0 && vector < 256 ? exceptions_[vector] : 0;
+}
+
+// ---- exceptions ---------------------------------------------------------------------------
+
+void Cpu::exception(int vector, uint32_t stackedPc, int leadIdle) {
+    enterException(vector, stackedPc, leadIdle, isGroup2(vector), -1);
+}
+
+void Cpu::enterException(int vector, uint32_t stackedPc, int leadIdle, bool group2, int newMask) {
+    // UM 6.2.5: copy the SR, then S = 1 and T = 0 (setSr switches A7 to the SSP); an
+    // interrupt also loads the mask with its level.
+    // DECISION M4: an interrupt (newMask >= 0) loads the mask with its level here; the 44
+    // clocks are laid out in Cpu::interrupt.
+    const uint16_t oldSr = sr_;
+    uint16_t newSr = static_cast<uint16_t>((sr_ | kSrS) & ~kSrT);
+    if (newMask >= 0) newSr = static_cast<uint16_t>((newSr & ~0x0700) | (newMask << 8));
+    setSr(newSr);
+    ++exceptions_[vector & 0xFF];
+    if (!group2) {
+        notInstruction_ = true;  // UM 6.3.9.1: the frame's I/N bit
+        // UM 6.3.8: an illegal or privileged instruction is not executed, so not traced. A
+        // group-2 exception (TRAP, TRAPV, CHK, divide by zero) is followed by the trace.
+        traceBlocked_ = true;
+    }
+    // UM table 8-14: 34(4/3) for illegal, line A/F, privilege, trace and TRAP: three frame
+    // writes, two vector reads and two prefetch reads (28 clocks) plus 6 internal clocks;
+    // TRAPV runs its closing fetch in place of the 4 leading ones (suite TRAPV, 34(5/3)).
+    idle(leadIdle);
+    // Short (6-byte) frame: SR at SSP, PC high at SSP + 2, PC low at SSP + 4. Bus order and
+    // idle placement follow the suite's transaction log (TRAP.json "4e44 [TRAP Q] 1"):
+    // n4, PC low, SR, PC high, vector high, vector low, prefetch, n2, prefetch.
+    a_[7] -= 6;
+    const uint32_t sp = a_[7];
+    write16(sp + 4, static_cast<uint16_t>(stackedPc));
+    write16(sp, oldSr);
+    write16(sp + 2, static_cast<uint16_t>(stackedPc >> 16));
+    const uint32_t target = read32(static_cast<uint32_t>(vector & 0xFF) * 4);
+    fillPrefetch(target, 2);
+    notInstruction_ = false;
+}
+
+void Cpu::addressError() {
+    // UM 6.3.10 / figure 6-7: the 14-byte group-0 frame. Bits 4..0 of the status word are
+    // R/W, I/N and FC2..FC0 of the faulting access.
+    // DECISION M11: the UM leaves bits 15..5 undefined; the suite stores IR bits 15..5 there.
+    const uint16_t status = static_cast<uint16_t>((opcode_ & 0xFFE0) | faultStatus_);
+    const uint16_t oldSr = sr_;
+    notInstruction_ = true;
+    setSr(static_cast<uint16_t>((sr_ | kSrS) & ~kSrT));
+    ++exceptions_[kVectorAddressError];
+    // UM table 8-14: 50(4/7). The faulting access itself is not run. Bus order as in the
+    // suite (MOVE.w "3010 [MOVE.w (A0), D0] 4754"): n4, PC low, SR, PC high, IR, address
+    // low, status, address high, vector high, vector low, prefetch, n2, prefetch.
+    idle(4);
+    a_[7] -= 14;
+    const uint32_t sp = a_[7];
+    write16(sp + 12, static_cast<uint16_t>(faultPc_));
+    write16(sp + 8, oldSr);
+    write16(sp + 10, static_cast<uint16_t>(faultPc_ >> 16));
+    write16(sp + 6, opcode_);
+    write16(sp + 4, static_cast<uint16_t>(faultAddr_));
+    write16(sp, status);
+    write16(sp + 2, static_cast<uint16_t>(faultAddr_ >> 16));
+    fillPrefetch(read32(kVectorAddressError * 4), 2);
+    notInstruction_ = false;
+}
+
+// ---- dispatch -----------------------------------------------------------------------------
+
+void Cpu::execute(Op op) {
+    switch (op) {
+    case Op::Nop: prefetch(); return;  // 4(1/0)
+    case Op::Illegal: exception(kVectorIllegal, instrAddr_); return;
+    case Op::LineA: exception(kVectorLineA, instrAddr_); return;
+    case Op::LineF: exception(kVectorLineF, instrAddr_); return;
+    case Op::MoveB: opMove(kByte); return;
+    case Op::MoveW: opMove(kWord); return;
+    case Op::MoveL: opMove(kLong); return;
+    case Op::MoveaW: opMovea(kWord); return;
+    case Op::MoveaL: opMovea(kLong); return;
+    case Op::Moveq: opMoveq(); return;
+    case Op::Lea: opLea(); return;
+    case Op::Pea: opPea(); return;
+    case Op::ClrB: opClr(kByte); return;
+    case Op::ClrW: opClr(kWord); return;
+    case Op::ClrL: opClr(kLong); return;
+    case Op::Exg: opExg(); return;
+    case Op::Swap: opSwap(); return;
+    case Op::ExtW: opExt(kWord); return;
+    case Op::ExtL: opExt(kLong); return;
+    case Op::Link: opLink(); return;
+    case Op::Unlk: opUnlk(); return;
+    case Op::MoveToUsp: opMoveUsp(true); return;
+    case Op::MoveFromUsp: opMoveUsp(false); return;
+    case Op::MovemToMemW: opMovemToMem(kWord); return;
+    case Op::MovemToMemL: opMovemToMem(kLong); return;
+    case Op::MovemToRegW: opMovemToReg(kWord); return;
+    case Op::MovemToRegL: opMovemToReg(kLong); return;
+    case Op::MovepToRegW: opMovepToReg(kWord); return;
+    case Op::MovepToRegL: opMovepToReg(kLong); return;
+    case Op::MovepToMemW: opMovepToMem(kWord); return;
+    case Op::MovepToMemL: opMovepToMem(kLong); return;
+    case Op::AddB: opAddSub(kByte, false); return;
+    case Op::AddW: opAddSub(kWord, false); return;
+    case Op::AddL: opAddSub(kLong, false); return;
+    case Op::AddToMemB: opAddSubToMem(kByte, false); return;
+    case Op::AddToMemW: opAddSubToMem(kWord, false); return;
+    case Op::AddToMemL: opAddSubToMem(kLong, false); return;
+    case Op::AddaW: opAddaSuba(kWord, false); return;
+    case Op::AddaL: opAddaSuba(kLong, false); return;
+    case Op::AddxB: opAddxSubx(kByte, false); return;
+    case Op::AddxW: opAddxSubx(kWord, false); return;
+    case Op::AddxL: opAddxSubx(kLong, false); return;
+    case Op::SubB: opAddSub(kByte, true); return;
+    case Op::SubW: opAddSub(kWord, true); return;
+    case Op::SubL: opAddSub(kLong, true); return;
+    case Op::SubToMemB: opAddSubToMem(kByte, true); return;
+    case Op::SubToMemW: opAddSubToMem(kWord, true); return;
+    case Op::SubToMemL: opAddSubToMem(kLong, true); return;
+    case Op::SubaW: opAddaSuba(kWord, true); return;
+    case Op::SubaL: opAddaSuba(kLong, true); return;
+    case Op::SubxB: opAddxSubx(kByte, true); return;
+    case Op::SubxW: opAddxSubx(kWord, true); return;
+    case Op::SubxL: opAddxSubx(kLong, true); return;
+    case Op::AddiB: opAddSubImm(kByte, false); return;
+    case Op::AddiW: opAddSubImm(kWord, false); return;
+    case Op::AddiL: opAddSubImm(kLong, false); return;
+    case Op::SubiB: opAddSubImm(kByte, true); return;
+    case Op::SubiW: opAddSubImm(kWord, true); return;
+    case Op::SubiL: opAddSubImm(kLong, true); return;
+    case Op::CmpiB: opCmpi(kByte); return;
+    case Op::CmpiW: opCmpi(kWord); return;
+    case Op::CmpiL: opCmpi(kLong); return;
+    case Op::AddqB: opAddSubQuick(kByte, false); return;
+    case Op::AddqW: opAddSubQuick(kWord, false); return;
+    case Op::AddqL: opAddSubQuick(kLong, false); return;
+    case Op::SubqB: opAddSubQuick(kByte, true); return;
+    case Op::SubqW: opAddSubQuick(kWord, true); return;
+    case Op::SubqL: opAddSubQuick(kLong, true); return;
+    case Op::CmpB: opCmp(kByte); return;
+    case Op::CmpW: opCmp(kWord); return;
+    case Op::CmpL: opCmp(kLong); return;
+    case Op::CmpaW: opCmpa(kWord); return;
+    case Op::CmpaL: opCmpa(kLong); return;
+    case Op::CmpmB: opCmpm(kByte); return;
+    case Op::CmpmW: opCmpm(kWord); return;
+    case Op::CmpmL: opCmpm(kLong); return;
+    case Op::NegB: opNeg(kByte, false); return;
+    case Op::NegW: opNeg(kWord, false); return;
+    case Op::NegL: opNeg(kLong, false); return;
+    case Op::NegxB: opNeg(kByte, true); return;
+    case Op::NegxW: opNeg(kWord, true); return;
+    case Op::NegxL: opNeg(kLong, true); return;
+    case Op::TstB: opTst(kByte); return;
+    case Op::TstW: opTst(kWord); return;
+    case Op::TstL: opTst(kLong); return;
+    case Op::Mulu: opMul(false); return;
+    case Op::Muls: opMul(true); return;
+    case Op::Divu: opDiv(false); return;
+    case Op::Divs: opDiv(true); return;
+    case Op::Abcd: opAbcdSbcd(false); return;
+    case Op::Sbcd: opAbcdSbcd(true); return;
+    case Op::Nbcd: opNbcd(); return;
+    case Op::Chk: opChk(); return;
+    case Op::AndB: opLogic(kByte, 0); return;
+    case Op::AndW: opLogic(kWord, 0); return;
+    case Op::AndL: opLogic(kLong, 0); return;
+    case Op::OrB: opLogic(kByte, 1); return;
+    case Op::OrW: opLogic(kWord, 1); return;
+    case Op::OrL: opLogic(kLong, 1); return;
+    case Op::AndToMemB: opLogicToMem(kByte, 0); return;
+    case Op::AndToMemW: opLogicToMem(kWord, 0); return;
+    case Op::AndToMemL: opLogicToMem(kLong, 0); return;
+    case Op::OrToMemB: opLogicToMem(kByte, 1); return;
+    case Op::OrToMemW: opLogicToMem(kWord, 1); return;
+    case Op::OrToMemL: opLogicToMem(kLong, 1); return;
+    case Op::EorB: opLogicToMem(kByte, 2); return;
+    case Op::EorW: opLogicToMem(kWord, 2); return;
+    case Op::EorL: opLogicToMem(kLong, 2); return;
+    case Op::AndiB: opLogicImm(kByte, 0); return;
+    case Op::AndiW: opLogicImm(kWord, 0); return;
+    case Op::AndiL: opLogicImm(kLong, 0); return;
+    case Op::OriB: opLogicImm(kByte, 1); return;
+    case Op::OriW: opLogicImm(kWord, 1); return;
+    case Op::OriL: opLogicImm(kLong, 1); return;
+    case Op::EoriB: opLogicImm(kByte, 2); return;
+    case Op::EoriW: opLogicImm(kWord, 2); return;
+    case Op::EoriL: opLogicImm(kLong, 2); return;
+    case Op::NotB: opNot(kByte); return;
+    case Op::NotW: opNot(kWord); return;
+    case Op::NotL: opNot(kLong); return;
+    case Op::ShiftRegB: opShiftReg(kByte); return;
+    case Op::ShiftRegW: opShiftReg(kWord); return;
+    case Op::ShiftRegL: opShiftReg(kLong); return;
+    case Op::ShiftMem: opShiftMem(); return;
+    case Op::BtstDyn: opBit(0, false); return;
+    case Op::BchgDyn: opBit(1, false); return;
+    case Op::BclrDyn: opBit(2, false); return;
+    case Op::BsetDyn: opBit(3, false); return;
+    case Op::BtstImm: opBit(0, true); return;
+    case Op::BchgImm: opBit(1, true); return;
+    case Op::BclrImm: opBit(2, true); return;
+    case Op::BsetImm: opBit(3, true); return;
+    case Op::Scc: opScc(); return;
+    case Op::Tas: opTas(); return;
+    case Op::Bcc: opBcc(); return;
+    case Op::Bsr: opBsr(); return;
+    case Op::Dbcc: opDbcc(); return;
+    case Op::Jmp: opJmp(); return;
+    case Op::Jsr: opJsr(); return;
+    case Op::Rts: opRts(); return;
+    case Op::Rtr: opReturnFrame(false); return;
+    case Op::Rte: opReturnFrame(true); return;
+    case Op::Trap: opTrap(); return;
+    case Op::Trapv: opTrapv(); return;
+    case Op::Reset: opReset(); return;
+    case Op::Stop: opStop(); return;
+    case Op::MoveFromSr: opMoveFromSr(); return;
+    case Op::MoveToCcr: opMoveToSr(true); return;
+    case Op::MoveToSr: opMoveToSr(false); return;
+    case Op::AndiToCcr: opSrImm(0, false); return;
+    case Op::OriToCcr: opSrImm(1, false); return;
+    case Op::EoriToCcr: opSrImm(2, false); return;
+    case Op::AndiToSr: opSrImm(0, true); return;
+    case Op::OriToSr: opSrImm(1, true); return;
+    case Op::EoriToSr: opSrImm(2, true); return;
+    }
+}
+
+}  // namespace ens::m68k

@@ -20,10 +20,16 @@ set(ENS_TEST_SOURCES
   test_player_esp_loader.cpp
   test_player_synth.cpp
   test_player_smf.cpp
+  test_m68k_cpu.cpp
+  test_m68k_harte_format.cpp
+  test_m68k_alu.cpp
+  test_m68k_irq.cpp
+  test_m68k_dis.cpp
+  test_m68k_ks32_smoke.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})
-target_link_libraries(ens_tests PRIVATE ens_player ens_ks32 ens_trace ens_otis ens_esp ens_common)
+target_link_libraries(ens_tests PRIVATE ens_player ens_ks32 ens_trace ens_otis ens_esp ens_m68k_harte ens_m68k ens_common)
 target_compile_definitions(ens_tests PRIVATE ENS_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
   ENS_DATA_DIR="${CMAKE_SOURCE_DIR}/docs/rom-investigation/data" ENS_ROM_DIR="${ENS_ROM_DIR}"
   _CRT_SECURE_NO_WARNINGS)
