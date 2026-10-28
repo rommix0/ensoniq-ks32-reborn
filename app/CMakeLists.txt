@@ -20,10 +20,19 @@ juce_add_plugin(KS32
   NEEDS_MIDI_INPUT TRUE
   NEEDS_MIDI_OUTPUT FALSE)
 
-target_sources(KS32 PRIVATE source/Processor.cpp source/Editor.cpp)
-target_compile_definitions(KS32
-  PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0
-  PRIVATE ENS_ROM_DIR="${ENS_ROM_DIR}")  # the default ROM folder until Task 5's settings
+target_sources(KS32 PRIVATE
+  source/Processor.cpp source/Editor.cpp source/AppSettings.cpp source/RomFolder.cpp source/MemoryFile.cpp
+  source/SettingsPage.cpp)
+target_compile_definitions(KS32 PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 target_link_libraries(KS32
   PRIVATE ens_app juce::juce_audio_utils
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# The checks that need JUCE but no window: the ROM folder and the memory file. Dummy files only.
+juce_add_console_app(KS32_AppTests PRODUCT_NAME "KS32_AppTests" VERSION 0.7.0)
+target_sources(KS32_AppTests PRIVATE tests/app_tests.cpp source/RomFolder.cpp source/MemoryFile.cpp)
+target_compile_definitions(KS32_AppTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(KS32_AppTests
+  PRIVATE ens_app juce::juce_core
+  PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+add_test(NAME app_tests COMMAND KS32_AppTests)

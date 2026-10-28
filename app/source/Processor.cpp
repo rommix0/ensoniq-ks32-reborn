@@ -1,48 +1,104 @@
 #include "Processor.h"
 
 #include "Editor.h"
+#include "MemoryFile.h"
+#include "RomFolder.h"
 
 namespace {
 
-// The OS and wave ROM files in dir, unchecked (Machine::create checks the sizes).
-bool readRoms(const juce::File& dir, ens::ks32::RomSet& r, juce::String& err) {
-    const auto read = [&](const char* name, std::vector<uint8_t>& out) {
-        juce::MemoryBlock mb;
-        if (!dir.getChildFile(name).loadFileAsData(mb)) {
-            err = "ROM not found: " + dir.getChildFile(name).getFullPathName();
-            return false;
-        }
-        const auto* p = static_cast<const uint8_t*>(mb.getData());
-        out.assign(p, p + mb.getSize());
-        return true;
-    };
-    return read("ks32/ks32v301upper.bin", r.osUpper) && read("ks32/ks32v301lower.bin", r.osLower) &&
-           read("sq1-u25.bin", r.u25) && read("sq1-u26.bin", r.u26) && read("rom2.u39", r.rom2) &&
-           read("rom3.u38", r.rom3);
+// The first file that is not good, as two display rows; empty when all six are good.
+juce::String romProblem(const std::vector<RomFileStatus>& list) {
+    for (const auto& s : list)
+        if (s.state != RomFileStatus::Found)
+            return juce::String(s.state == RomFileStatus::Missing ? "ROM missing:\n" : "ROM wrong size:\n") + s.file;
+    return {};
 }
 
 }  // namespace
 
 Ks32Processor::Ks32Processor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)) {
-    ens::ks32::RomSet roms;
-    juce::String err;
-    if (readRoms(juce::File(ENS_ROM_DIR), roms, err))
-        setRomSet(roms, err);
+    // No compiled-in default: the first start, with no settings, opens with no ROMs.
+    if (const auto dir = settings_.romFolder(); dir != juce::File())
+        setRomFolder(dir);
     else
-        romError_ = err;
+        romError_ = "No ROM folder:\nopen Settings";
+    startTimer(1000);
 }
 
-bool Ks32Processor::setRomSet(const ens::ks32::RomSet& roms, juce::String& err) {
-    std::string e;
-    engine_ = ens::app::Engine::create(roms, e);
-    if (!engine_) {
-        romError_ = err = juce::String(e);
-        return false;
+Ks32Processor::~Ks32Processor() {
+    stopTimer();
+    // DECISION A11: saved on close only once booted; audio has stopped, so the machine is read directly.
+    if (engine_ && engine_->snapshot().booted) saveMemoryFile(settings_.memoryFile(), engine_->machine().ramImage());
+}
+
+bool Ks32Processor::setRomFolder(const juce::File& dir) {
+    settings_.setRomFolder(dir);
+    ens::ks32::RomSet roms;
+    const auto problem = romProblem(checkRomFolder(dir, &roms));
+    if (problem.isNotEmpty()) {
+        if (!engine_) romError_ = problem;
+        return false;  // a running machine keeps running
     }
-    romError_ = {};
-    if (rate_ > 0) engine_->prepare(rate_, block_);
+    roms_ = std::move(roms);
+    return restart(Ram::Keep);
+}
+
+bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
+    if (file.existsAsFile()) {
+        loadMemoryFile(file, err);
+        if (err.isNotEmpty()) return false;
+    }
+    settings_.setMemoryFile(file);
+    memoryError_ = {};
+    if (file.existsAsFile() && engine_) restart(Ram::File);
     return true;
+}
+
+// DECISION A11: erase gives a fresh machine, whose 64 KB RAM is all zeros, so the firmware rebuilds
+// its memory as it boots.
+void Ks32Processor::eraseMemory() {
+    if (engine_) restart(Ram::Cold);
+}
+
+bool Ks32Processor::restart(Ram ram) {
+    suspendProcessing(true);  // from here the audio thread is out of processBlock, and stays out
+    std::vector<uint8_t> img;
+    if (ram == Ram::Keep && engine_ && engine_->snapshot().booted)
+        img = engine_->machine().ramImage();  // audio stopped: the machine is ours to read
+    else if (ram != Ram::Cold)
+        img = loadMemoryFile(settings_.memoryFile(), memoryError_);  // wrong size: reported, cold boot
+    std::string e;
+    auto fresh = ens::app::Engine::create(roms_, e);
+    if (fresh && !img.empty() && !fresh->loadRam(img, e)) fresh.reset();
+    const bool ok = fresh != nullptr;
+    if (ok) {
+        if (rate_ > 0) fresh->prepare(rate_, block_);
+        engine_.swap(fresh);  // fresh now holds the old engine, freed below after the resume
+        ramPending_ = false;
+        ticks_ = 0;
+        romError_ = {};
+    } else if (!engine_) {
+        romError_ = juce::String(e);
+    }
+    suspendProcessing(false);
+    return ok;
+}
+
+// DECISION A11: every 60 s, once booted, the audio thread copies the RAM (requestRam) and the next
+// tick that finds the copy (takeRam) saves it.
+void Ks32Processor::timerCallback() {
+    if (!engine_) return;
+    if (ramPending_) {
+        if (engine_->takeRam(ramBuf_)) {
+            ramPending_ = false;
+            saveMemoryFile(settings_.memoryFile(), ramBuf_);
+        }
+    } else if (++ticks_ >= 60 && engine_->snapshot().booted) {
+        ticks_ = 0;
+        engine_->requestRam();
+        ramPending_ = true;
+    }
 }
 
 void Ks32Processor::prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock) {

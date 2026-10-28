@@ -1,20 +1,32 @@
 #pragma once
-// The plugin's AudioProcessor: owns the engine and plays it, stereo out, MIDI in.
+// The plugin's AudioProcessor: owns the settings and the engine and plays it, stereo out, MIDI in.
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <memory>
+#include <vector>
 
+#include "AppSettings.h"
 #include "app/engine.h"
 
-class Ks32Processor : public juce::AudioProcessor {
+class Ks32Processor : public juce::AudioProcessor, private juce::Timer {
 public:
     Ks32Processor();
+    ~Ks32Processor() override;  // saves the memory (A11)
 
-    ens::app::Engine* engine() { return engine_.get(); }  // null until ROMs are loaded
-    // Message thread, with processing suspended by the caller. On failure the engine is dropped
-    // and err (also romError()) says why.
-    bool setRomSet(const ens::ks32::RomSet& roms, juce::String& err);
+    ens::app::Engine* engine() { return engine_.get(); }  // null until the ROMs are good
+    // Why there is no engine, two display rows separated by '\n' (design section 6.3).
     juce::String romError() const { return romError_; }
+    // Why the memory file was not loaded, or empty.
+    juce::String memoryError() const { return memoryError_; }
+    const AppSettings& settings() const { return settings_; }
+
+    // Message thread. Each suspends processing around the engine swap itself.
+    // Stores dir and, when all six ROMs are good, re-creates the machine keeping its memory.
+    bool setRomFolder(const juce::File& dir);
+    // Stores file and, when it holds an image, restarts the machine from it. A file of the wrong
+    // size is refused (err) and the setting stays.
+    bool setMemoryFile(const juce::File& file, juce::String& err);
+    void eraseMemory();  // a cold machine (A11); the caller has confirmed
 
     void prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock) override;
     void releaseResources() override {}
@@ -42,10 +54,19 @@ public:
     void setStateInformation(const void*, int) override {}
 
 private:
+    enum class Ram { Keep, File, Cold };
+    bool restart(Ram ram);  // a new engine from roms_; the old one stays if that fails
+    void timerCallback() override;  // the 60 s save (A11)
+
+    AppSettings settings_;
+    ens::ks32::RomSet roms_;  // the last good set; empty until then
     std::unique_ptr<ens::app::Engine> engine_;
-    juce::String romError_;
+    juce::String romError_, memoryError_;
     double rate_ = 0;  // 0 until prepareToPlay
     int block_ = 0;
+    int ticks_ = 0;            // timer seconds since the last save request
+    bool ramPending_ = false;  // a requestRam is waiting for takeRam
+    std::vector<uint8_t> ramBuf_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Ks32Processor)
 };

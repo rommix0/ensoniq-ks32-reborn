@@ -915,6 +915,13 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Confidence: High.
 - Status: settled, Plan 7 Task 2. `// DECISION A6` at `kBootFrames` (`src/app/engine.cpp`). Test: engine_boot_snapshot.
 
+## A11: Memory saving
+- Options: when to write the battery memory file: (a) on close only; (b) on close and every 60 s while running, never before the machine has booted; and for Erase, (c) delete the file, or (d) load 64 KB of zeros after a confirmation.
+- Choice: (b) and (d). The memory (`ks32-memory.bin` in `%APPDATA%\KS-32` unless changed) is loaded at start; a file of the wrong size is reported on the settings page and ignored, and the machine boots cold. It is saved on close from `machine().ramImage()` (audio stopped) and every 60 s through `requestRam`/`takeRam`, each time only when `Snapshot::booted` (A6). Each save writes `<file>.tmp` and then replaces the file (`File::replaceFileIn`). Erase asks first, then restarts the machine fresh, its 64 KB RAM all zeros, so the firmware rebuilds its memory as it boots.
+- Evidence: design sections 6.4-6.5. Six or so start-ups of under about 2 s make OS v3.01 reinitialize its memory (Plan 6), so a save before the play screen could store a half-booted image; with the A6 gate a quick open and close leaves the file untouched. The temporary file means a crash mid-write keeps the previous image whole; the 60 s save bounds what a crash loses. Checked on the Standalone with a temporary settings folder (`KS32_SETTINGS_DIR`): closed 0.5 s after the window appeared, the file kept its time stamp; after 6 s it was written on close; after 63 s running it had been rewritten by the timer; Erase followed by a close 0.8 s later left the file untouched, and the image saved after Erase plus 6 s differs from a true cold boot's in 17 bytes and from the warm image in 120. `app_tests` covers load, save over an existing file, no `.tmp` left, and the wrong size.
+- Confidence: High.
+- Status: settled, Plan 7 Task 5. `// DECISION A11` at `Ks32Processor::~Ks32Processor`, `eraseMemory` and `timerCallback` (`app/source/Processor.cpp`), `saveMemoryFile` (`app/source/MemoryFile.cpp`) and the memory note (`app/source/SettingsPage.cpp`). Erase then Master Tune reading 00 on System/MIDI is left to the user's acceptance pass (ruling R1).
+
 ## A12: MIDI bytes passed
 - Options: (a) only channel messages (note, controller, pitch bend and the like), filtering out sysex and real-time; (b) every byte of every `MidiBuffer` message, sysex and real-time included.
 - Choice: (b). `Ks32Processor::processBlock` hands each message's bytes to `Engine::midi(samplePosition, data, numBytes)` unchanged, before `render`.
