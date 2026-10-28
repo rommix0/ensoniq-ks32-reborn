@@ -83,6 +83,7 @@ uint32_t Duart::charTicks(const Channel& c) const {
 bool Duart::runShifter(Shifter& s, uint32_t k, uint32_t& n) {
     // Spend up to n X1 clocks on a character at k clocks per tick; true when it finishes (n
     // keeps what is left).
+    if (s.phase >= k) s.phase = k - 1;  // the rate changed to a shorter tick mid-character
     const uint64_t needed = static_cast<uint64_t>(s.ticksLeft) * k - s.phase;
     if (n >= needed) {
         n -= static_cast<uint32_t>(needed);
@@ -347,11 +348,11 @@ void Duart::command(int ch, uint8_t v) {
     Channel& c = ch_[ch];
     switch ((v >> 4) & 7) {
         case 1: c.mr2Next = false; break;
-        case 2:  // reset receiver: disabled, FIFO and status cleared, character in progress lost
+        case 2:  // reset receiver: disabled, FIFO emptied, character in progress lost; OE is
+                 // left alone (4.2.7.2: "All other registers are unaltered"), command 100 clears it
             c.rxEnabled = false;
             c.fifoCount = 0;
             c.held = false;
-            c.overrun = false;
             c.rx.busy = false;
             c.pending.clear();
             break;
@@ -370,7 +371,9 @@ void Duart::command(int ch, uint8_t v) {
         c.txEnabled = true;
         c.txReady = true;
         c.txEmpty = !c.tx.busy;
-    } else if (txCmd == 2) {  // a character in the shift register still finishes
+    } else if (txCmd == 2) {
+        // DECISION D7: disabling the transmitter lets the character in the shift register finish
+        // and drops one waiting in THR (the CR text says only "a character being transmitted").
         c.txEnabled = false;
         c.txReady = c.txEmpty = c.thrFull = false;
     }

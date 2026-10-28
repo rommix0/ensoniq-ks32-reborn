@@ -7,10 +7,12 @@
 #include <string>
 #include <vector>
 
+#include "check.h"
 #include "ks32/machine.h"
 
 // The OS and wave ROMs from ENS_ROM_DIR; nullptr when a file is missing (the caller prints
-// "  skip: ROMs not found").
+// "  skip: ROMs not found"). Files that exist but are rejected (a wrong size) print the error
+// and fail the running test, so a bad ROM set never passes as a skip.
 inline std::unique_ptr<ens::ks32::Machine> loadKs32() {
     const std::string dir = ENS_ROM_DIR;
     const auto read = [](const std::string& path, std::vector<uint8_t>& out) {
@@ -25,7 +27,12 @@ inline std::unique_ptr<ens::ks32::Machine> loadKs32() {
         !read(dir + "/rom2.u39", r.rom2) || !read(dir + "/rom3.u38", r.rom3))
         return nullptr;
     std::string err;
-    return ens::ks32::Machine::create(r, err);
+    auto m = ens::ks32::Machine::create(r, err);
+    if (!m) {
+        std::printf("  FAIL: ROMs present but rejected: %s\n", err.c_str());
+        ++ens_test::failures();
+    }
+    return m;
 }
 
 // Runs 29 762 frames per 1000 ms of emulated time; the audio is discarded.

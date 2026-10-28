@@ -152,6 +152,31 @@ TEST(duart_rx_fifo_and_overrun) {
     CHECK_EQ(d.overruns(0), 1u);  // the count is not cleared by the command
 }
 
+TEST(duart_reset_receiver_keeps_overrun) {
+    Duart d(kX1);
+    setupA(d);
+    for (uint8_t b = 1; b <= 5; ++b) d.receive(0, b);
+    d.advance(5 * kChar9600);
+    CHECK_EQ(d.read(kSR) & 0x10, 0x10);
+    d.write(kCR, 0x20);  // reset receiver: 4.2.7.2 "All other registers are unaltered"
+    CHECK_EQ(d.read(kSR) & 0x10, 0x10);
+    CHECK_EQ(d.read(kSR) & 0x01, 0);  // FIFO emptied
+    d.write(kCR, 0x40);  // reset error status clears it
+    CHECK_EQ(d.read(kSR) & 0x10, 0);
+}
+
+TEST(duart_tx_rate_change_mid_character_finishes) {
+    Duart d(kX1);
+    setupA(d);
+    d.write(kHR, 0x55);
+    d.advance(kChar9600 - 1);  // one 16x tick left, 23 of its 24 clocks spent
+    d.write(kCSR, 0xCC);       // 38400 baud: a 6-clock tick, shorter than the spent phase
+    d.advance(6);
+    const std::vector<uint8_t> out = d.takeTransmitted(0);
+    CHECK_EQ(out.size(), 1u);
+    CHECK_EQ(out[0], 0x55);
+}
+
 TEST(duart_rx_one_char_per_char_time) {
     Duart d(kX1);
     setupA(d);
