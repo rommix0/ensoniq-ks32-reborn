@@ -915,6 +915,13 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Confidence: High.
 - Status: settled, Plan 7 Task 2. `// DECISION A6` at `kBootFrames` (`src/app/engine.cpp`). Test: engine_boot_snapshot.
 
+## A12: MIDI bytes passed
+- Options: (a) only channel messages (note, controller, pitch bend and the like), filtering out sysex and real-time; (b) every byte of every `MidiBuffer` message, sysex and real-time included.
+- Choice: (b). `Ks32Processor::processBlock` hands each message's bytes to `Engine::midi(samplePosition, data, numBytes)` unchanged, before `render`.
+- Evidence: the MIDI IN jack receives the whole stream, and the firmware decides what to read (sysex dumps, MIDI clock and the like are its business, not the host's). The engine bounds a block's bytes (A3) and the DUART its queue (A1), so a sysex flood is dropped and counted, not allocated (engine_midi_overflow_is_counted).
+- Confidence: High.
+- Status: settled, Plan 7 Task 4. `// DECISION A12` at `Ks32Processor::processBlock` (`app/source/Processor.cpp`). Verified by the build and a 12 s launch of the Standalone; playing from a MIDI keyboard is left to the user's acceptance pass (ruling R1).
+
 ## A14: Transport buttons
 - Options: for Record, Stop and Play, (a) a code the running firmware answers, found by one bounded hunt that watches MIDI out as well as the display and LEDs; (b) no code, and the app shows the button disabled.
 - Choice: (a) for Play (`Button::Play`, code 09, `PLAY`) and Stop/Continue (`Button::StopContinue`, code 29, `STOP_CONTINUE`); (b) for Record, which stays out of `Button`.
