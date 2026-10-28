@@ -12,7 +12,8 @@ int paramCount(uint8_t cmd) {
     switch (cmd) {
         case 0x80: case 0x81: case 0x83: case 0x8C: case 0x90: case 0x91: case 0x92: case 0x98:
             return 0;
-        case 0x86: case 0x87: case 0x88: case 0x89: case 0x8D: case 0x8E: case 0x8F: case 0x94: case 0x95:
+        case 0x85: case 0x86: case 0x87: case 0x88: case 0x89: case 0x8D: case 0x8E: case 0x8F: case 0x94:
+        case 0x95:
             return 1;
         case 0x93:
             return 9;
@@ -27,6 +28,8 @@ void Panel::reset() {
     s_ = PanelState{};
     s_.rows.assign(kPanelRows, std::string(kPanelCols, ' '));
     cursor_ = 0;
+    saved_ = {};
+    toCpu_.clear();
     blinkOn_ = false;
     cmd_ = 0;
     got_ = need_ = 0;
@@ -62,12 +65,34 @@ void Panel::fromCpu(uint8_t b) {
     }
 }
 
+// DECISION K7: a press is code | 0x80 then 0x00, a release code then 0x00 (the Down arrow repeats
+// until 0C 00 comes; Bank 9 + Screen 1 needs Bank 9 held). The DUART paces them at the line rate.
+void Panel::button(Button b, bool down) {
+    const auto code = static_cast<uint8_t>(b);
+    toCpu_.push_back(down ? static_cast<uint8_t>(code | 0x80) : code);
+    toCpu_.push_back(0x00);
+}
+
+std::vector<uint8_t> Panel::takeToCpu() {
+    std::vector<uint8_t> out;
+    out.swap(toCpu_);
+    return out;
+}
+
 // The commands with a known effect; the others in paramCount change nothing that is modelled.
+// DECISION K7: an out-of-range parameter (87 >= 0x20, LED >= 0x0F, 88/89 slot >= 2) is counted
+// in unknown and ignored.
 void Panel::run(uint8_t cmd, uint8_t param) {
     switch (cmd) {
         case 0x87:  // cursor to position param
             if (param < kPositions) cursor_ = param;
             else ++s_.unknown;
+            break;
+        case 0x88:  // save the cursor in slot param ...
+        case 0x89:  // ... and move it back there
+            if (param >= saved_.size()) ++s_.unknown;
+            else if (cmd == 0x88) saved_[param] = cursor_;
+            else cursor_ = saved_[param];
             break;
         case 0x8C:  // blank the display, cursor to 0
             for (std::string& r : s_.rows) r.assign(kPanelCols, ' ');

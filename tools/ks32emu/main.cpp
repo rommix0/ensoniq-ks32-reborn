@@ -1,6 +1,8 @@
 // ks32emu: runs the emulated KS-32 (its OS ROM on the 68000 with the DUART and the OTIS/ESP board).
 //   ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] [--count <n>] [--last <n>]
-//                [--display-only]
+//                [--display-only] [--press <ms>:<name>[+<name>...]]...
+// --press presses the named buttons (kButtons names, e.g. EDIT_SEQ_PRESET, BANK9) in order at
+// <ms>, holds them 100 ms and releases them in reverse order; it may be repeated.
 // The panel display is printed as "<ms> |<row>|" lines each time it changes (bytes outside
 // 0x20-0x7E as \xNN), the LEDs as "<ms> LEDs ..." each time they change; --display-only leaves
 // out the summary.
@@ -12,6 +14,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../ks32play/files.h"
@@ -34,6 +37,7 @@ struct Options {
     uint64_t from = 0, count = UINT64_MAX;
     uint32_t last = 0;
     bool displayOnly = false;
+    std::vector<std::pair<uint64_t, std::vector<Button>>> presses;  // --press: ms, buttons
 };
 
 uint64_t parseNum(const std::string& opt, const std::string& v) {
@@ -41,6 +45,24 @@ uint64_t parseNum(const std::string& opt, const std::string& v) {
     const unsigned long long n = std::strtoull(v.c_str(), &end, 10);
     if (v.empty() || *end != '\0') fail("bad value '" + v + "' for " + opt);
     return n;
+}
+
+// "<ms>:<name>[+<name>...]"
+std::pair<uint64_t, std::vector<Button>> parsePress(const std::string& v) {
+    const size_t colon = v.find(':');
+    if (colon == std::string::npos) fail("bad value '" + v + "' for --press (<ms>:<name>[+<name>...])");
+    std::pair<uint64_t, std::vector<Button>> p{parseNum("--press", v.substr(0, colon)), {}};
+    for (size_t q = colon; q != std::string::npos;) {
+        const size_t next = v.find('+', q + 1);
+        const std::string name = v.substr(q + 1, next == std::string::npos ? std::string::npos : next - q - 1);
+        const ButtonName* hit = nullptr;
+        for (const ButtonName& b : kButtons)
+            if (name == b.name) hit = &b;
+        if (!hit) fail("unknown button '" + name + "' for --press");
+        p.second.push_back(hit->button);
+        q = next;
+    }
+    return p;
 }
 
 Options parseOptions(int argc, char** argv) {
@@ -60,6 +82,7 @@ Options parseOptions(int argc, char** argv) {
         else if (a == "--from") o.from = parseNum(a, v);
         else if (a == "--count") o.count = parseNum(a, v);
         else if (a == "--last") o.last = static_cast<uint32_t>(parseNum(a, v));
+        else if (a == "--press") o.presses.push_back(parsePress(v));
         else fail("unknown option " + a);
     }
     return o;
@@ -171,11 +194,22 @@ int boot(const Options& o) {
             if (ring.size() > o.last) ring.pop_front();
         };
 
+    // ms -> (button, down), in option order for equal times (multimap keeps insertion order).
+    std::multimap<uint64_t, std::pair<Button, bool>> events;
+    for (const auto& [at, buttons] : o.presses) {
+        for (const Button b : buttons) events.emplace(at, std::make_pair(b, true));
+        for (auto it = buttons.rbegin(); it != buttons.rend(); ++it) events.emplace(at + 100, std::make_pair(*it, false));
+    }
+
     const uint64_t frames = o.ms * kWavRate / 1000;
     int16_t l, r;
     std::vector<std::string> rows = m->panel().rows;
     std::string leds = ledText(m->panel());
     for (uint64_t f = 0; f < frames; ++f) {
+        for (const uint64_t now = f * 1000 / kWavRate; !events.empty() && events.begin()->first <= now;) {
+            m->button(events.begin()->second.first, events.begin()->second.second);
+            events.erase(events.begin());
+        }
         m->runFrame(l, r);
         const PanelState& p = m->panel();
         const auto ms = static_cast<unsigned long long>((f + 1) * 1000 / kWavRate);
@@ -242,7 +276,7 @@ int main(int argc, char** argv) {
     try {
         if (argc < 2 || std::string(argv[1]) != "boot")
             fail("usage: ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] "
-                 "[--count <n>] [--last <n>] [--display-only]");
+                 "[--count <n>] [--last <n>] [--display-only] [--press <ms>:<name>[+<name>...]]...");
         return boot(parseOptions(argc, argv));
     } catch (const Failure& f) {
         std::fprintf(stderr, "error: %s\n", f.msg.c_str());

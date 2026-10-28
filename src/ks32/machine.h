@@ -37,7 +37,7 @@ constexpr uint32_t kSerialClockHz = 500'000;
 constexpr int kSlotClocks = 16;  // DECISION K3, K4
 // The emulated time the OS v3.01 takes from power-on to its steady state, about 1917 ms (the
 // last display byte sent; docs/ks32-hardware-interface.md), plus 50 %. Until Task 6 adds the
-// analog inputs the steady state is the low-battery warning, waiting for a button (Task 5).
+// analog inputs the steady state is the low-battery warning, waiting for a button.
 constexpr uint32_t kBootMs = 2900;
 // DECISION K7: the front panel is on DUART channel B (0 = A, 1 = B).
 constexpr int kPanelChannel = 1;
@@ -60,6 +60,7 @@ public:
     Board& board() { return board_; }
     duart::Duart& duart() { return duart_; }
     const PanelState& panel() const { return panel_.state(); }
+    void button(Button b, bool down) { panel_.button(b, down); }  // reaches RxDB from the next slot
 
     // m68k::Bus
     uint8_t read8(uint32_t addr) override;

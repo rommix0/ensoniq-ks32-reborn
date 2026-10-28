@@ -200,8 +200,8 @@ never applies.
   character is 11 bits.
 - The display is 2 rows of 16 characters, addressed as positions 0x00–0x1F: row = position / 16,
   column = position % 16.
-- There are 15 LEDs, numbered 0x00–0x0E. Which LED is which control is Task 5's, since it needs
-  the button codes.
+- There are 15 LEDs, numbered 0x00–0x0E. Which LED is which control is in "Front panel:
+  buttons".
 - There is no start-up handshake. The firmware never waits for or reads a reply from the panel
   at start-up.
 - Bytes 0x00–0x7F are characters. Bytes 0x80 and up are commands, some with parameter bytes
@@ -218,7 +218,7 @@ bytes and changes nothing it models.
 | Bytes | Effect | Evidence | Confidence |
 |---|---|---|---|
 | 0x00–0x7F | A character at the cursor; the cursor moves on, from column 15 of row 0 to row 1 | The boot sends " ENSONIQ KS-32  " (16 bytes) and the warning (32 bytes, breaking between "Battery" and "low" exactly at 16). Codes below 0x20 come as characters too: the first play-screen draw sends 16 bytes, mostly 0x00, after `87 10`, and a later draw sends the sound name in their place | High for 0x20–0x7E. Medium that 0x00–0x1F are characters (custom glyphs?) and not commands |
-| `87 pp` | Cursor to position pp | `87 10` is always followed by 16 characters that read as row 1 (" KS Grand Piano ", "STRING ENSEMBLE "). `87 00` "INT   " `87 06` "00" builds row 0. The parameters seen are 0x00–0x1D, never 0x20 or more | High |
+| `87 pp` | Cursor to position pp | `87 10` is always followed by 16 characters that read as row 1 (" KS Grand Piano ", "STRING ENSEMBLE "). `87 00` "INT   " `87 06` "00" builds row 0. The boot sends 0x00–0x1D only. After button presses (Task 5) the firmware also sends `87 20` with no text after it (`87 00 92 98 87 20`, around the "Store Sequences" and "Analog Tests" pages): it reads as parking the cursor off the display. It is counted in `unknown` | High for 0x00–0x1F; Low for 0x20 |
 | `8C` | Blank the display; cursor to 0 | Text follows with no `87`: the 32-character warning, and "Replace edit" (then `87 10` "sound?"). The play screen drawn after `8C` writes only columns 0–7 of row 0. Without the blanking, columns 8–15 would still read "Battery" | High for the cursor; Medium for the blanking |
 | `8D nn` / `8E nn` | LED nn on / off | After a button event the firmware sends `8E nn` for every nn from 0x00 to 0x0E but one, and `8D` for that one: a full refresh with one LED lit. The parameters are only 0x00–0x0E. That is 15 LEDs, the count of LED controls in `docs/reference/ks32-front-panel.md` (Edit Sound, Select Sound, Edit Seq/Preset, Edit Track, Select Seq/Preset, Track 1–8, Replace Track Sound, System/MIDI) | High for 15 LEDs. Medium for which of the two is "on" (one `8D` against fourteen `8E` reads as one LED lit) |
 | `8F nn` | LED nn blinks | Seen in two screens, on LEDs 0x0A and 0x00, mostly a few commands after `8D` on the same LED (`8D 0A` ... `8F 0A`): a third LED state. Blinking is a reading, not a proof | Low |
@@ -228,14 +228,15 @@ bytes and changes nothing it models.
 | `93` + 9 bytes | None | Sent once in the boot. The last 8 bytes read as a 5-column bitmap of a note glyph (a stem in one column, the head at the bottom left), so it is likely a custom-character definition. Which code it defines is unknown. The bytes are taken as parameters | Low |
 | `81`, `83` | None | In the boot only: `81 83` before the start-up logo, `83` after it | Unknown effect |
 | `92`, `98` | None | Always the pair `92 98`, after `8C` or `87 00`, before a screen is drawn or redrawn | Unknown effect |
-| `88 00` | None | Always with 00. It is a command with a parameter, not text: the redraw `87 06 88 00 "00"` writes the field the first draw wrote as `87 06 "00"`. If the 00 were a character, the two draws would differ | Medium |
-| `86 00`, `89 00` | None | Always with 00; taken as parameters by analogy with `88` | Low |
+| `88 nn` / `89 nn` | Save the cursor in slot nn / move it back there (Task 5) | Seen with nn = 00 and 01. A value redrawn after Up/Yes comes as `89 00 88 00 90 "02" 91`, with no `87`: "Location = " `87 1B 88 00 90 "01" 91`, then `89 00 88 00 90 "02" 91`; "Time Signature =" ... `87 10 88 00 90 "04" 91`, then `89 00 88 00 90 "05" 91`. Without the restore "02" lands after "01" ("Location = 0102") and the Transpose page writes "+0" over "PRESET" in row 0. The name page uses slot 01: `87 10 88 01` "Sequence-01     " `89 01` "S" | Medium. Slots 02 and up are not seen and are counted in `unknown` |
+| `85 pp` | None (Task 5) | Seen once, as `89 01 "S" 85 10 86 01` on the "New name =" page, where the first letter of the name is being edited: pp = 0x10 is that letter's position. Read as a one-parameter command (a cursor or underline at pp?). If 0x10 were text, a character 0x10 would land in row 0 | Low |
+| `86 nn` | None | `86 00` and `86 01` (after `85 10` on the name page): an on/off parameter? | Low |
 | `95 03` | None | Seen twice, in "Global Bend= " `95 03` "02". Taken as a one-parameter command like `94`. If `95` took no parameter, 0x03 would be a character in column 13 of row 1 | Low |
 | other 0x80–0xFF | Counted in `PanelState::unknown` | None seen | — |
 
 Two choices are not settled by evidence and are marked `// DECISION K7`. Past position 0x1F the
 cursor wraps to 0 (the firmware never writes there). Out-of-range parameters (`87` ≥ 0x20, LED
-≥ 0x0F) are counted in `unknown` and ignored.
+≥ 0x0F, `88`/`89` slot ≥ 2) are counted in `unknown` and ignored.
 
 **How it was found.** Scratch runs printed channel B's bytes with their times and the
 channel-B DUART accesses. The firmware was run, never studied.
@@ -260,8 +261,8 @@ channel-B DUART accesses. The firmware was run, never studied.
 - **Screens for the command table.** The boot alone uses only `80`, `94`, `93`, `81`, `83`,
   `8C` and text. The other commands were seen in scratch runs that dismissed the warning with a
   two-byte event: one of most bytes from 0x84 to 0xFF, then 0x00, on RxB. Single bytes and
-  the 0x80–0x83 starts do nothing. These events are evidence for Task 5. The button codes are
-  not decoded here.
+  the 0x80–0x83 starts do nothing. Task 5 decodes these events as button presses ("Front panel:
+  buttons").
 - **The `ks32emu boot --display-only` view of the boot** (rows printed on each change, trimmed):
 
   ```
@@ -281,6 +282,127 @@ channel-B DUART accesses. The firmware was run, never studied.
 **Confidence.** High for the channel, the 2 x 16 geometry, positioning, text and the 15 LED
 numbers. High that there is no handshake. Medium to Low for the rest, per row above.
 **MAME.** Not compared.
+
+## Front panel: buttons (K7)
+
+**Fact.**
+- **Byte forms.** The panel sends a button event as two bytes on RxDB (channel B):
+  - a press is `code | 0x80`, then `00`;
+  - a release is `code`, then `00`.
+
+  The controls found have codes 0x04–0x39. A single byte does nothing; the `00` completes the
+  event.
+- **Held.** A button is held from its press to its release, and the firmware tracks it:
+  - Holding Down/No repeats it: ROM 55 goes to 52 in 1 s and to 47 in 2 s. `0C 00` stops the
+    repeat, but `0C` alone does not, and a second `8C 00` counts as a new press.
+  - Holding Bank 9 and pressing Screen 1, 9 or 0 opens the service screens: the version, the
+    reinitialize prompt and Analog Tests (service manual PDF p4, p5 and p13). If Bank 9 is
+    pressed and released first, Screen 1 does nothing on the "Store Sequences" page.
+  - The firmware sees both bytes of a quick tap. A press and a release queued in the same slot
+    reach it at the line rate. They dismiss the battery warning to the same screen and LEDs as a
+    100 ms press.
+- **The mode button is released first.** The manual says "Press Edit Seq/Preset. While holding
+  down Bank 9, press Screen 1".
+  - The combination works only when Edit Seq/Preset is released before Bank 9 is pressed.
+  - Holding Edit Seq/Preset through the combination gives the Locate page, at every spacing
+    tried (100–500 ms).
+  - So `ks32emu boot --press 3000:SELECT_SOUND --press 3500:EDIT_SEQ_PRESET --press
+    3900:BANK9+SCREEN1` shows "ENSONIQ KS-32 / OS Version 3.01", and
+    `--press 3500:EDIT_SEQ_PRESET+BANK9+SCREEN1` does not.
+- **Event 133** ("unknown button event", PDF p11) was never raised by any byte form tried.
+
+**Codes.** `Button` (`src/ks32/panel.h`) has these 43 codes.
+- "Code" is the 7-bit code; the press byte is code | 0x80.
+- Each name follows the function the firmware shows for that code, checked against service
+  manual Figure 2 (PDF p4) and `docs/reference/ks32-front-panel.md`.
+
+| Control | Code | Evidence | Confidence |
+|---|---|---|---|
+| Bank 0–9 | 25 15 05 37 07 0F 17 27 1F 2F | In Select Sound, from ROM 55, Bank n gives ROM n5 (DRUM for 8 and 9). In Edit Sound mode Bank 0–9 open the lower label row: wave, Oct/Semi/Fine, Env1 levels, LFO, filters, Env2, a Levl/Time page (Amp), Vol/Boost (Output), effect and "Store Sounds". In Edit Seq/Preset mode they open the upper row: Locate, Loop/Countoff (Control), Click, Song, "Create SEQ/Pset", "Event Edit Track", "Quantize Track", the Mute status, effect and "Store Sequences" | High |
+| Screen 0–9 | 24 14 04 36 06 0E 16 26 1E 2E | From ROM 55, Screen n gives ROM 5n. In Edit Track mode they open the pages named under the buttons: Vol/Pan, Output, KeyRange, Transpose, Chan/Prog, Status (MIDI), Pressure, SustainPedal, Timbre and Release | High |
+| Track 1–8 | 10 20 18 28 11 21 08 30 | "Trk01" … "Trk08" over the track's sound. LED 1 lights, with one track LED: 2, 3, 4, 5, 10, 11, 12, 13 in track order. In Edit Track mode Track 2 switches the page to "Trk2" and lights LED 3 | High |
+| Up/Yes | 0D | ROM 55 → 56; "Location = 01" → 02; time signature 04 → 05 | High |
+| Down/No | 0C | ROM 55 → 54, repeating while held. It leaves the reinitialize prompt without erasing, to "Store Sequences" | High |
+| Left / Right | 1C / 1D | On Edit Sound and Edit Seq/Preset pages they move the edit field (the `90`…`91` mark) in opposite directions and run on into the next pages. 1D goes Oct/Semi/Fine → Glide → Keyboard Pitch Tracking, and Locate → Auto Punch/Tempo. 1C, pressed three times from Oct/Semi/Fine, ends on the Env1/LFO/Mod page. In Select Sound mode each switches between INT and ROM. Calling 1C Left rests only on 1D stepping forward through the pages | Medium |
+| Compare | 2D | On an Edit Sound page the values change (Fine "+00" → "00") and the Edit Sound LED blinks. It reaches the edit pages as Edit Sound does | Medium |
+| Enter/Save | 2C | "Replace edit / sound?", as in the manual's write test (PDF p20); "Command successful!" after creating a sequence | High |
+| Edit Sound | 35 | LED 0; the Bank buttons open the lower label row (above) | High |
+| BankSet | 39 | In Select Sound it switches between ROM and INT (there is no card). On edit pages it does nothing, whereas 1C and 1D move the field there | Medium |
+| Select Sound | 34 | From edit pages, back to the sound screen ("ROM 00 KS Grand Piano") with LED 8 | High |
+| Edit Seq/Preset | 38 | LED 9; the Locate page ("SEQ 00 STOP / Bar=001 Beat=01"). The Bank buttons open the upper label row, and Bank 9 held with a Screen button opens the service screens | High |
+| Edit Track | 1A | LEDs 6 and 9; "PRESET 00 Trk1 - / Vol=99 Pan=SOUND". The Screen buttons open the track pages | High |
+| Select Seq/Preset | 19 | LED 1; "PRESET 00 Loc=00"; Bank n gives Loc=n0 | High |
+| Replace Track Sound | 2A | LED 14 blinks over "Trk01 INT 00". It acts on the release: a release alone (`2A 00`) shows the page, and the press runs no more instructions than an unused code | Medium |
+| Make Default Preset | 32 | From Select Sound: "Trk01" over the sound, LEDs 1, 2 and 10 (blinking), at the next location (Bank n then gives "PRESET 01 Loc=n1"). From Edit Seq/Preset: "Copy FROM Preset", its second function (Clone Preset) | Medium |
+| System/MIDI | 0A | LED 7; "Master Tune= +00 / Global Bend= 02". Screen 1 then shows "Touch=… / Pressure=", as in the manual (PDF p20: System•MIDI, Screen 1, "Pressure=") | High |
+
+**LEDs.** All 15 LED controls of the inventory are accounted for:
+
+| LED | Control |
+|---|---|
+| 0 | Edit Sound |
+| 1 | Select Seq/Preset |
+| 2–5 | Track 1–4 |
+| 6 | Edit Track |
+| 7 | System/MIDI |
+| 8 | Select Sound |
+| 9 | Edit Seq/Preset |
+| 10–13 | Track 5–8 |
+| 14 | Replace Track Sound |
+
+Confidence: High for the tracks and for LEDs 0, 1, 7, 8 and 9; Medium for 6 and 14.
+
+**Open.**
+- **Record, Stop and Play are not found.**
+  - Codes 0x00–0x03, 09, 0B, 12, 13, 1B, 22, 23, 29, 2B, 31, 33, 3A and 3B show nothing on any
+    screen tried. The screens were the sound screen, Edit Sound and Edit Seq/Preset pages,
+    Select Seq/Preset, and the Locate page of a newly created sequence.
+  - The instructions run in the 150 ms after each press, on the Edit Seq/Preset page, set a few
+    codes apart from the rest. The baseline, code 0x00, is about 89 190:
+    - 09 and 29 run about 3 500 more. They also resend the LEDs and redraw the Locate page
+      unchanged.
+    - 31 runs about 140 more.
+    - 02 and 3A run about 500 more.
+    - 03 and 3B run about 18 more.
+  - Guess: 09 and 29 behave like a transport button acting on an empty sequence. The sequencer
+    may also need a clock the machine does not give it yet (OTIS interrupts, Task 7).
+  - These codes are not in `Button`.
+- **Bytes 0xBC–0xFF** followed by `00` act in runs like the bank and screen codes:
+  - 0xBC–0xC4 act like Bank 1, 0xC5–0xD1 like Bank 2, and so on;
+  - 0xF0–0xF1 act like Screen 0, and so on up to 0xFD, which acts like Screen 9;
+  - 0xFE does nothing, and 0xFF acts like Select Seq/Preset.
+
+  They are not separate controls and are not in `Button`.
+- **A second byte other than `00`** after a press byte does nothing. Task 4's sweeps covered
+  press bytes 0x80, 0x81, 0xC0 and 0xFF. Here, every second byte 0x01–0xFF was sent after each
+  code that does nothing, from the sound screen.
+- **The sliders and wheels** are Task 6.
+
+**How it was found.** A scratch harness, not committed, booted the machine and put bytes on RxB
+2 ms apart. It printed the display rows and LEDs, the bytes sent and instruction counts. The
+firmware was run, never studied.
+- Every press code 0x80–0xFF was tapped (pressed and released) from five places: the sound
+  screen, ROM 55, the Edit Sound Pitch page, the Edit Seq/Preset Locate page and Select
+  Seq/Preset.
+- Each mode button was followed by each Bank button, and Edit Track by each Screen button.
+- Every release code 0x01–0x7F, with its `00`, was sent alone from the sound screen. Only 0x2A
+  (Replace Track Sound) shows anything.
+- The holds were timed: Down/No held for 1 s and 2 s, with each release form; Bank 9 held and
+  tapped; Edit Seq/Preset held and tapped.
+
+**Tests.**
+- The tests are panel_button_bytes, panel_button_table, ks32_firmware_version_screen,
+  ks32_firmware_release_ends_the_hold, ks32_firmware_reinit_prompt,
+  ks32_firmware_analog_test_page and ks32_firmware_quick_tap_is_seen.
+- Without the release bytes the four service-screen tests fail: Select Sound and Edit
+  Seq/Preset stay held and block the combination.
+
+**K16.** The buttons add no bound: four bytes sent back to back are all read at 500 kHz.
+
+**MAME.** Not compared.
+- The release form (`code`, then `00`) matches the Task 5 implementer's recollection of MAME's
+  esq5505 driver: press `code | 0x80, 00`, release `code & 0x7F, 00`.
+- That recollection was not checked against MAME. The evidence above settles the form.
 
 ## Line-A and TRAP use
 
