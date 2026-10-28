@@ -23,7 +23,8 @@ decision entry in `docs/decisions.md`.
   inputs.
 - After that the CPU idles in STOP with the interrupt mask at 0. The 1 ms tick runs, and the
   stack pointer is the same at 2.9 s and at 10 s.
-- There is no panel model yet (Task 4), so this steady state is "waiting for the panel".
+- The steady state is the low-battery warning on the panel display, which waits for a button
+  ("Press any button to continue", service manual PDF p12). See "Front panel: display and LEDs".
 - `kBootMs` = 2900, which is 1917 ms plus 50 %, rounded up.
 
 ## Memory map (K1)
@@ -137,6 +138,14 @@ in the boot.
     the timing moves.
   - So K16 (channel B at 500 kHz, the same source as MIDI) has no evidence yet. It is revisited
     in Tasks 4–5.
+  - Task 4 found a lower bound only. There is no start-up handshake, so there is no reply timing
+    to measure. But while it sends the warning, the firmware writes THRB on every 1 ms tick
+    without waiting for TxRDYB: at 9600 baud the trace shows ISR = 0x08 (TxRDYB clear) at
+    1903.074 ms and a THRB write at 1903.121 ms all the same, which overwrites the waiting
+    character. A panel character is 11 bits (MR1B = 0x13: 8 data bits, no parity; MR2B = 0x0F:
+    2 stop bits), so the link must run at 11 000 baud or more (a 16x clock of 176 kHz or more).
+    At 153.6 kHz (9600 baud) the warning loses characters; at 250 kHz and above the stream is the
+    same as at 500 kHz.
 
 **Confidence.** Medium for the CPU and DUART clocks (they pass the clock test, which constrains
 only their ratio). High for channel A. Low for channel B.
@@ -182,6 +191,96 @@ zero wait states.
 
 With the K1 map the boot makes no unmapped access, so the "reads 0, writes ignored, traced" rule
 never applies.
+
+## Front panel: display and LEDs (K7)
+
+**Fact.**
+- The keypad/display board is on DUART channel B. The firmware sets it up as MR1B = 0x13
+  (8 data bits, no parity), MR2B = 0x0F (2 stop bits) and CSRB = 0xEE (the K16 clocks), so a
+  character is 11 bits.
+- The display is 2 rows of 16 characters, addressed as positions 0x00–0x1F: row = position / 16,
+  column = position % 16.
+- There are 15 LEDs, numbered 0x00–0x0E. Which LED is which control is Task 5's, since it needs
+  the button codes.
+- There is no start-up handshake. The firmware never waits for or reads a reply from the panel
+  at start-up.
+- Bytes 0x00–0x7F are characters. Bytes 0x80 and up are commands, some with parameter bytes
+  (table below).
+- **Steady state at `kBootMs`:** the low-battery warning, row 0 `WARNING! Battery` and row 1
+  `low. See manual.` (the service manual's wording, PDF p12). No LED command has been sent, so
+  every LED is off, and nothing is marked blinking. The warning waits for a button ("Press any
+  button to continue"); it is not timed, and 10 s of boot send nothing after it. Task 6 removes
+  it with the battery input. `ks32_firmware_boot_shows_play_screen` pins this state.
+
+**Command table.** "Effect" is what `Panel` does. "None" means the panel takes the parameter
+bytes and changes nothing it models.
+
+| Bytes | Effect | Evidence | Confidence |
+|---|---|---|---|
+| 0x00–0x7F | A character at the cursor; the cursor moves on, from column 15 of row 0 to row 1 | The boot sends " ENSONIQ KS-32  " (16 bytes) and the warning (32 bytes, breaking between "Battery" and "low" exactly at 16). Codes below 0x20 come as characters too: the first play-screen draw sends 16 bytes, mostly 0x00, after `87 10`, and a later draw sends the sound name in their place | High for 0x20–0x7E. Medium that 0x00–0x1F are characters (custom glyphs?) and not commands |
+| `87 pp` | Cursor to position pp | `87 10` is always followed by 16 characters that read as row 1 (" KS Grand Piano ", "STRING ENSEMBLE "). `87 00` "INT   " `87 06` "00" builds row 0. The parameters seen are 0x00–0x1D, never 0x20 or more | High |
+| `8C` | Blank the display; cursor to 0 | Text follows with no `87`: the 32-character warning, and "Replace edit" (then `87 10` "sound?"). The play screen drawn after `8C` writes only columns 0–7 of row 0. Without the blanking, columns 8–15 would still read "Battery" | High for the cursor; Medium for the blanking |
+| `8D nn` / `8E nn` | LED nn on / off | After a button event the firmware sends `8E nn` for every nn from 0x00 to 0x0E but one, and `8D` for that one: a full refresh with one LED lit. The parameters are only 0x00–0x0E. That is 15 LEDs, the count of LED controls in `docs/reference/ks32-front-panel.md` (Edit Sound, Select Sound, Edit Seq/Preset, Edit Track, Select Seq/Preset, Track 1–8, Replace Track Sound, System/MIDI) | High for 15 LEDs. Medium for which of the two is "on" (one `8D` against fourteen `8E` reads as one LED lit) |
+| `8F nn` | LED nn blinks | Seen in two screens, on LEDs 0x0A and 0x00, mostly a few commands after `8D` on the same LED (`8D 0A` ... `8F 0A`): a third LED state. Blinking is a reading, not a proof | Low |
+| `90` ... `91` | Characters written between them are marked blinking (`PanelState::blink`) | The pair brackets exactly the value field of the parameter being edited ("+00" after "Master Tune= ", "99" after "Vol=", "ON  "). The same field is redrawn elsewhere without it. Whether the panel blinks, underlines or inverts it is not known | Medium that it marks the edit field; Low that it is blinking |
+| `80` | None | The first byte of all, at 549 ms, followed by a 16 ms pause before anything else. It reads as a reset | Unknown effect |
+| `94 xx` | None | Sent once, as `94 FF`, right after `80`. Whether FF is its parameter or a command of its own is not settled; neither changes the model | Low |
+| `93` + 9 bytes | None | Sent once in the boot. The last 8 bytes read as a 5-column bitmap of a note glyph (a stem in one column, the head at the bottom left), so it is likely a custom-character definition. Which code it defines is unknown. The bytes are taken as parameters | Low |
+| `81`, `83` | None | In the boot only: `81 83` before the start-up logo, `83` after it | Unknown effect |
+| `92`, `98` | None | Always the pair `92 98`, after `8C` or `87 00`, before a screen is drawn or redrawn | Unknown effect |
+| `88 00` | None | Always with 00. It is a command with a parameter, not text: the redraw `87 06 88 00 "00"` writes the field the first draw wrote as `87 06 "00"`. If the 00 were a character, the two draws would differ | Medium |
+| `86 00`, `89 00` | None | Always with 00; taken as parameters by analogy with `88` | Low |
+| `95 03` | None | Seen twice, in "Global Bend= " `95 03` "02". Taken as a one-parameter command like `94`. If `95` took no parameter, 0x03 would be a character in column 13 of row 1 | Low |
+| other 0x80–0xFF | Counted in `PanelState::unknown` | None seen | — |
+
+Two choices are not settled by evidence and are marked `// DECISION K7`. Past position 0x1F the
+cursor wraps to 0 (the firmware never writes there). Out-of-range parameters (`87` ≥ 0x20, LED
+≥ 0x0F) are counted in `unknown` and ignored.
+
+**How it was found.** Scratch runs printed channel B's bytes with their times and the
+channel-B DUART accesses. The firmware was run, never studied.
+- **Start-up sequence.**
+  - From 549 ms to 603 ms the firmware sends each byte on its own: CRB = 0x04 (enable the
+    transmitter), the THRB write, SRB polled until 0x0C (TxRDY and TxEMT), then CRB = 0x08.
+  - At 598 ms it sets channel B up again (CRB 0x20, 0x30, 0x40, 0x50, 0x10, MR 0x13 0x0F,
+    CSRB 0xEE, CRB 0x05), then sends `93` with its 9 bytes, `81` and `83`.
+  - At 603 ms IMR = 0x2B enables RxRDYB, and from then on the 1 ms tick sends at most one byte
+    per tick.
+  - The logo goes out at one character per 50 ms (604–1608 ms), then `83` at 1658 ms. `8C` and
+    the warning follow from 1884 ms at one character per ms; the last byte is at 1916 ms.
+- **No handshake.**
+  - Before 603 ms the firmware reads SRB only while it waits for TxEMT, and it never reads RHRB.
+  - A byte injected at 549.5 ms (0x00, 0x80 or 0xFF) stays in the FIFO, which shows in the SRB
+    values (0x05, 0x0D), and is ignored. The receiver reset at 598 ms discards it. The stream is
+    unchanged, bytes and times.
+  - Each of the 256 single bytes injected at 700 ms or at 2000 ms is read by the RxRDYB
+    interrupt (ISR 0x20, then SRB, then RHRB) and changes nothing that is sent.
+  - A count of executed instructions after each single byte at 2000 ms falls into three classes:
+    0x00, 0x01–0x7F and 0x80–0xFF. The receive path stores a byte without acting on it alone.
+- **Screens for the command table.** The boot alone uses only `80`, `94`, `93`, `81`, `83`,
+  `8C` and text. The other commands were seen in scratch runs that dismissed the warning with a
+  two-byte event: one of most bytes from 0x84 to 0xFF, then 0x00, on RxB. Single bytes and
+  the 0x80–0x83 starts do nothing. These events are evidence for Task 5. The button codes are
+  not decoded here.
+- **The `ks32emu boot --display-only` view of the boot** (rows printed on each change, trimmed):
+
+  ```
+  861 | E              |
+  ...
+  1508 | ENSONIQ KS-32  |
+  1884 |                |
+  1885 |W               |
+  ...
+  1916 |WARNING! Battery|
+  1916 |low. See manual.|
+  ```
+
+  Where the logo lands depends on the cursor after `80`...`83`, whose effect is unknown. The
+  model puts it on row 0. The steady state does not depend on it, because `8C` blanks and homes.
+
+**Confidence.** High for the channel, the 2 x 16 geometry, positioning, text and the 15 LED
+numbers. High that there is no handshake. Medium to Low for the rest, per row above.
+**MAME.** Not compared.
 
 ## Line-A and TRAP use
 

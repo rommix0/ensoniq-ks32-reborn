@@ -10,6 +10,7 @@
 
 #include "duart/duart.h"
 #include "ks32/board.h"
+#include "ks32/panel.h"
 #include "m68k/m68k.h"
 
 namespace ens::ks32 {
@@ -35,9 +36,11 @@ constexpr uint32_t kCpuHz = 15'238'090, kDuartHz = 4'000'000;  // DECISION K3
 constexpr uint32_t kSerialClockHz = 500'000;
 constexpr int kSlotClocks = 16;  // DECISION K3, K4
 // The emulated time the OS v3.01 takes from power-on to its steady state, about 1917 ms (the
-// last display byte sent; docs/ks32-hardware-interface.md), plus 50 %. With no panel model yet
-// the steady state is the idle loop after the start-up text, waiting for the panel (Task 4).
+// last display byte sent; docs/ks32-hardware-interface.md), plus 50 %. Until Task 6 adds the
+// analog inputs the steady state is the low-battery warning, waiting for a button (Task 5).
 constexpr uint32_t kBootMs = 2900;
+// DECISION K7: the front panel is on DUART channel B (0 = A, 1 = B).
+constexpr int kPanelChannel = 1;
 // DECISION K2: the DUART answers the acknowledge with its IVR; both levels are provisional
 // (the boot cannot tell them apart) and are settled in Task 7.
 constexpr int kOtisIrqLevel = 1;
@@ -56,6 +59,7 @@ public:
     m68k::Cpu& cpu() { return cpu_; }
     Board& board() { return board_; }
     duart::Duart& duart() { return duart_; }
+    const PanelState& panel() const { return panel_.state(); }
 
     // m68k::Bus
     uint8_t read8(uint32_t addr) override;
@@ -75,6 +79,7 @@ private:
 
     Board board_;
     duart::Duart duart_{kDuartHz};
+    Panel panel_;
     m68k::Cpu cpu_{*this};
     std::vector<uint8_t> osUpper_, osLower_;
     std::vector<uint8_t> ram_ = std::vector<uint8_t>(0x10000, 0);  // 64 KB (K1)

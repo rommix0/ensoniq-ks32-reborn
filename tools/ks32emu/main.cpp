@@ -1,5 +1,9 @@
 // ks32emu: runs the emulated KS-32 (its OS ROM on the 68000 with the DUART and the OTIS/ESP board).
 //   ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] [--count <n>] [--last <n>]
+//                [--display-only]
+// The panel display is printed as "<ms> |<row>|" lines each time it changes (bytes outside
+// 0x20-0x7E as \xNN), the LEDs as "<ms> LEDs ..." each time they change; --display-only leaves
+// out the summary.
 // File I/O lives here; src/ks32 stays pure. Errors print "error: <msg>" and exit 2.
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +33,7 @@ struct Options {
     std::string trace;  // comma list of otis,esp,duart,unmapped,iack
     uint64_t from = 0, count = UINT64_MAX;
     uint32_t last = 0;
+    bool displayOnly = false;
 };
 
 uint64_t parseNum(const std::string& opt, const std::string& v) {
@@ -43,6 +48,10 @@ Options parseOptions(int argc, char** argv) {
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a.compare(0, 2, "--") != 0) fail("unexpected argument '" + a + "'");
+        if (a == "--display-only") {
+            o.displayOnly = true;
+            continue;
+        }
         if (i + 1 >= argc) fail("option " + a + " needs a value");
         const std::string v = argv[++i];
         if (a == "--roms") o.roms = v;
@@ -102,6 +111,30 @@ void printBytes(const std::vector<uint8_t>& b) {
     std::printf("\n");
 }
 
+// A display row with every byte outside 0x20-0x7E as \xNN.
+std::string printable(const std::string& row) {
+    std::string s;
+    for (const char ch : row) {
+        const auto c = static_cast<unsigned char>(ch);
+        if (c >= 0x20 && c < 0x7F) {
+            s += ch;
+            continue;
+        }
+        char buf[8];
+        std::snprintf(buf, sizeof buf, "\\x%02X", c);
+        s += buf;
+    }
+    return s;
+}
+
+// "LEDs 8 10*": the lit LED numbers, * = blinking; "LEDs off" when none is lit.
+std::string ledText(const PanelState& p) {
+    std::string s = "LEDs";
+    for (int i = 0; i < kPanelLeds; ++i)
+        if (p.leds[i] != Led::Off) s += " " + std::to_string(i) + (p.leds[i] == Led::Blink ? "*" : "");
+    return s == "LEDs" ? "LEDs off" : s;
+}
+
 int boot(const Options& o) {
     std::set<Device> traced;
     if (!parseTrace(o.trace, traced)) fail("bad value '" + o.trace + "' for --trace (otis,esp,duart,unmapped,iack)");
@@ -140,7 +173,22 @@ int boot(const Options& o) {
 
     const uint64_t frames = o.ms * kWavRate / 1000;
     int16_t l, r;
-    for (uint64_t f = 0; f < frames; ++f) m->runFrame(l, r);
+    std::vector<std::string> rows = m->panel().rows;
+    std::string leds = ledText(m->panel());
+    for (uint64_t f = 0; f < frames; ++f) {
+        m->runFrame(l, r);
+        const PanelState& p = m->panel();
+        const auto ms = static_cast<unsigned long long>((f + 1) * 1000 / kWavRate);
+        if (p.rows != rows) {
+            rows = p.rows;
+            for (const std::string& row : rows) std::printf("%llu |%s|\n", ms, printable(row).c_str());
+        }
+        if (ledText(p) != leds) {
+            leds = ledText(p);
+            std::printf("%llu %s\n", ms, leds.c_str());
+        }
+    }
+    if (o.displayOnly) return 0;
 
     std::printf("ran %llu frames (%llu ms), %llu CPU cycles%s\n", static_cast<unsigned long long>(frames),
                 static_cast<unsigned long long>(o.ms), static_cast<unsigned long long>(m->cycles()),
@@ -173,11 +221,10 @@ int boot(const Options& o) {
     std::printf("%s\n", duartLast.empty() ? " none" : "");
     std::printf("OTIS active voices: %d\n", m->board().otis().activeVoices());
     std::printf("ESP halted: %s\n", m->board().esp().halted() ? "yes" : "no");
-    for (int ch = 0; ch < 2; ++ch) {
-        const std::vector<uint8_t> tx = m->duart().takeTransmitted(ch);
-        std::printf("DUART %c transmitted: %zu bytes\n", 'A' + ch, tx.size());
-        if (!tx.empty()) printBytes(tx);
-    }
+    const std::vector<uint8_t> tx = m->duart().takeTransmitted(0);  // channel B's bytes went to the panel
+    std::printf("DUART A transmitted: %zu bytes\n", tx.size());
+    if (!tx.empty()) printBytes(tx);
+    std::printf("panel: %s, unknown bytes %u\n", ledText(m->panel()).c_str(), m->panel().unknown);
     std::printf("DUART unsupported writes: %u\n", m->duart().unsupportedWrites());
 
     if (o.last) {
@@ -195,7 +242,7 @@ int main(int argc, char** argv) {
     try {
         if (argc < 2 || std::string(argv[1]) != "boot")
             fail("usage: ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] "
-                 "[--count <n>] [--last <n>]");
+                 "[--count <n>] [--last <n>] [--display-only]");
         return boot(parseOptions(argc, argv));
     } catch (const Failure& f) {
         std::fprintf(stderr, "error: %s\n", f.msg.c_str());

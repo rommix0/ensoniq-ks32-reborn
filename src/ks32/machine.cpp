@@ -209,6 +209,10 @@ void Machine::slot(int i, int n) {
     const uint32_t x1 = duartAcc_ / kCpuHz;
     duartAcc_ %= kCpuHz;
     if (x1) duart_.advance(x1);
+    // DECISION K7: the panel takes the bytes that finished leaving TxDB in this slot and answers
+    // with no processing delay of its own; its bytes enter RxDB at the line rate (D2).
+    for (uint8_t b : duart_.takeTransmitted(kPanelChannel)) panel_.fromCpu(b);
+    for (uint8_t b : panel_.takeToCpu()) duart_.receive(kPanelChannel, b);
     // DECISION K5: while running the ESP advances once at frame end (runFrame, via Board::route);
     // while halted slot i gets floor(89(i+1)/n) - floor(89 i/n) idle steps.
     Esp& esp = board_.esp();

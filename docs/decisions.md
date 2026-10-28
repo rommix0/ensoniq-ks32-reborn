@@ -746,7 +746,7 @@ Evidence cites the Motorola MC68681 data sheet (MC68681/D, Sep 1985, `datasheets
 
 ## KS-32 machine
 
-Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them provisionally; Task 3 settled K1-K3, K6, K9 and K14-K16 by running the OS ROM (v3.01). The evidence for those is in `docs/ks32-hardware-interface.md`, one section per fact. K4 and K5 remain Task 2's choices.
+Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them provisionally; Task 3 settled K1-K3, K6, K9 and K14-K16 by running the OS ROM (v3.01), and Task 4 the first part of K7. The evidence for those is in `docs/ks32-hardware-interface.md`, one section per fact. K4 and K5 remain Task 2's choices.
 
 ## K1: Memory map
 - Options: (a) Task 2's map: 64 KB of RAM at 0xFF0000, mirrored at 0-0xFFFF only; (b) 64 KB mirrored over 0x000000-0x03FFFF and at 0xFF0000; (c) 128 KB or 256 KB at 0x000000-0x03FFFF. For the vectors: the ROM overlay of 0-7 ends at the first write into 0-7, or at the first access outside 0-7; or a RAM at 0x000000 separate from the one at 0xFF0000.
@@ -790,6 +790,13 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Confidence: High.
 - Status: settled, Task 3. `// DECISION K6` at the unmapped fallthrough of `Machine::read8` (`src/ks32/machine.cpp`). Tests: ks32_machine_unmapped_is_traced, ks32_firmware_boot_is_fully_mapped.
 
+## K7: Panel protocol
+- Options: the channel (DUART A or B); a start-up handshake that the panel must answer, or none; for each command byte, its parameter count and effect; what the cursor does past the last position; how out-of-range parameters are handled.
+- Choice (first part, firmware to panel): the panel is on DUART channel B (`kPanelChannel`). The machine gives `Panel::fromCpu` the bytes that finished leaving TxDB in each slot, and queues `Panel::takeToCpu()` on RxDB, with no processing delay of its own; the bytes enter at the line rate (D2). There is no handshake, so `takeToCpu` returns nothing until Task 5. The display is 2 x 16 (positions 0x00-0x1F) with 15 LEDs (0x00-0x0E). Bytes 0x00-0x7F are characters. The commands are `87 pp` (cursor), `8C` (blank and home), `8D/8E/8F nn` (LED on/off/blink) and `90`/`91` (blink marking on/off). These take their parameters and change nothing modelled: `80`, `81`, `83`, `92`, `98`, `86 xx`, `88 xx`, `89 xx`, `94 xx`, `95 xx` and `93` with 9 bytes. Past position 0x1F the cursor wraps to 0. Other command bytes, `87` with 0x20 or more and LED numbers of 0x0F or more are counted in `PanelState::unknown` and ignored.
+- Evidence: `docs/ks32-hardware-interface.md` "Front panel: display and LEDs" (command table, with evidence per row). Channel B carries the display text. Before IMR enables RxRDYB the firmware never reads RHRB. A byte received during start-up is ignored and then discarded by the receiver reset at 598 ms. No single byte at 700 ms or 2000 ms changes the stream. Row 1 starts at 0x10: `87 10` is followed by 16 characters that form the second row. The wrap is never exercised (the firmware does not write past 0x1F).
+- Confidence: High for the channel, the geometry, `87`, text, the LED numbering and "no handshake". Medium for `8C` blanking, on/off polarity, `90`/`91` and `88`'s parameter. Low for `8F` = blink and for the parameter counts of `86`, `89`, `93`, `94` and `95`. The effects of `80`, `81`, `83`, `92` and `98` are unknown.
+- Status: first part, Task 4; Task 5 completes it with the panel-to-firmware direction (button codes). `// DECISION K7` at `kPanelChannel` (`src/ks32/machine.h`), the panel calls in `Machine::slot` (`src/ks32/machine.cpp`), and `paramCount` and the cursor wrap in `src/ks32/panel.cpp`. Tests: panel_* (`tests/test_ks32_panel.cpp`), ks32_firmware_boot_shows_play_screen.
+
 ## K9: Wait states
 - Options: (a) none; (b) wait states on ROM, RAM or device accesses.
 - Choice: (a). Every bus cycle takes the 68000's 4 clocks.
@@ -814,6 +821,6 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 ## K16: Panel-link serial clock
 - Options: the external 16x clock on IP5 (TxCB) and IP2 (RxCB) at 500 kHz, 1 MHz or 2 MHz.
 - Choice: 500 kHz, the same 16 MHz / 32 source as the MIDI channel (K3): 31 250 baud.
-- Evidence: no evidence yet. The firmware writes CSRB = 0xEE; 0.5, 1 and 2 MHz boot identically (same display text and exception counts; only the timing moves). Revisit in Tasks 4-5, when the panel answers.
-- Confidence: Low.
-- Status: Task 3; revisit in Tasks 4-5. `// DECISION K16` at `kSerialClockHz` (`src/ks32/machine.h`) and the `Machine` constructor.
+- Evidence: the firmware writes CSRB = 0xEE; 0.5, 1 and 2 MHz boot identically (same display text and exception counts; only the timing moves). Task 4 adds a lower bound only. There is no handshake, so there is no reply timing. While it sends the low-battery warning, the firmware writes THRB on every 1 ms tick even when TxRDYB is clear, and a panel character is 11 bits (MR1B = 0x13, MR2B = 0x0F). So the link needs 11 000 baud or more: a 16x clock of 176 kHz or more. At 153.6 kHz the warning loses characters; at 250 kHz and above it is unchanged. `docs/ks32-hardware-interface.md` "Clocks".
+- Confidence: Low (500 kHz meets the bound; nothing picks it over faster clocks).
+- Status: Task 3, revisited in Task 4 (lower bound); revisit in Task 5, when the panel answers. `// DECISION K16` at `kSerialClockHz` (`src/ks32/machine.h`) and the `Machine` constructor.

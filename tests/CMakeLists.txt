@@ -28,6 +28,7 @@ set(ENS_TEST_SOURCES
   test_duart.cpp
   test_ks32_machine.cpp
   test_ks32_firmware.cpp
+  test_ks32_panel.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})

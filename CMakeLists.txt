@@ -48,7 +48,8 @@ add_library(ens_m68k_harte STATIC src/m68k/harte_format.cpp)
 target_link_libraries(ens_m68k_harte PUBLIC ens_m68k)
 
 # KS-32 board: wave ROM layout, OTIS + ESP + delay DRAM and the frame routing.
-add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp src/ks32/machine.cpp)
+add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp src/ks32/machine.cpp
+  src/ks32/panel.cpp)
 target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp ens_m68k ens_duart)
 
 # Pure player layer (no OS code). Later tasks add sources to this list.
