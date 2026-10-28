@@ -82,10 +82,12 @@ Nothing else is touched in the boot: 0 unmapped accesses.
 **Fact.**
 - The DUART answers the interrupt acknowledge with its IVR. The firmware writes IVR = 0x40, so
   vector 64 is taken.
-- The levels are provisional: DUART on level 3, OTIS on level 1 (autovector). The boot cannot
-  tell levels apart. They are settled in Task 7, when notes make OTIS interrupt.
+- The levels stay at DUART 3 and OTIS 1 (autovector), with Low confidence. Task 7 played notes to
+  settle them, and the evidence cannot tell the levels apart (below).
+- OS v3.01 never enables an OTIS voice interrupt, at boot or with notes playing, so the OTIS IRQ
+  never asserts and its level is unobservable with this firmware.
 
-**How it was found.**
+**How it was found (Task 3, boot).**
 - **Vectored versus autovector.** The boot clock test enables the C/T interrupt (IMR = 0x08)
   and waits in STOP.
   - With the IVR answer: one vector-64 interrupt; the firmware stops the counter and goes on.
@@ -101,16 +103,41 @@ Nothing else is touched in the boot: 0 unmapped accesses.
     shows the masks 0, 5 (6 instructions in all) and 7. Mask L also appears, but only inside
     the level-L handler.
   - The firmware idles at mask 0, so any level from 1 up is serviced. The short mask-5 section
-    fits a device at level 5 or below. Nothing bounds the level further.
-  - Level 3 is provisional. The evidence bounds only the DUART level (1-5) and says nothing about OTIS. DUART 3 and OTIS 1 came from the Task 3 implementer's unverified recollection of MAME's esq5505 driver (DUART on IRQ 3, OTIS on IRQ 1). MAME was not opened to check it, so the values are not confirmed by evidence or by MAME until Task 7.
-- **OTIS.** OTIS never raises its IRQ during the boot (no voice ends with IRQE set). Its level
-  cannot be observed until notes play.
+    fits a device at level 5 or below.
 
-**Alternatives.** Autovector was rejected (events 138 and 139). Levels 1 to 6 are equivalent
-in the boot.
+**How it was found (Task 7, notes playing).** A scratch harness, not committed, booted a copy of
+the machine with run-time levels and then played three loads over MIDI in:
+- the 64-message burst of `ks32_firmware_midi_burst_no_overrun`, then 3 s, a note and its release;
+- 24 notes held for 3 s, then 100 notes 20 ms apart, then program change 5;
+- middle C on each of the 16 channels, held 300 ms and released.
+
+It counted the acknowledges by level and vector, the exception counts, the OTIS control-register
+writes (CR, register 0 of a voice page) with IRQE set and the reads of IRQV (register 14). It also
+took the PCM hash, the display and the SR mask before every instruction.
+- **OTIS.** No CR write sets IRQE (0 of 198 in the burst, 0 of 764 in the held-notes load), and
+  IRQV is never read. No voice can raise the IRQ, so OTIS on levels 1 to 6 changes nothing: the
+  OTIS 5 / DUART 3 run matches OTIS 1 / DUART 3 exactly.
+- **DUART.** Levels 1 to 6 give the same PCM hash under each load (0x2f0aade924b2e5d5 for the
+  burst, 0xf0a82d4402179384 for the held notes). They also give the same exception counts and
+  the same displays. No spurious or autovectored interrupt is taken (vectors 24-31: 0), and no
+  unexpected-event message appears. Every acknowledge is the DUART's vector 64. MIDI notes start
+  and release the same way, with 0 receive overruns.
+- **Masks.** With notes playing the masks are 0 and 7 outside the handlers. Inside the level-L
+  handler they are L and L - 1, whatever L is (with the DUART on level 3: masks 3 and 2; on
+  level 4: 4 and 3). A mask relative to the handler's own level bounds nothing. Mask 5 does not
+  appear with notes playing.
+
+**What the evidence decides.** The DUART is vectored (IVR), and its level is 1 to 5 (Task 3's
+mask-5 section; level 7 breaks the boot). It decides nothing among 1 to 5, and nothing at all about
+OTIS. The values are kept as they were (ruling T7-2). Their only basis is a recollection of MAME's
+esq5505 driver (DUART on IRQ 3, OTIS on IRQ 1), which was recalled and not checked. A firmware
+path that enables OTIS interrupts (the sequencer, perhaps) would be the place to look again.
+
+**Alternatives.** Autovector was rejected (events 138 and 139). DUART levels 1 to 5 and OTIS
+levels 1 to 6 are equivalent in every run.
 
 **Confidence.** High for the IVR answer. Low for both levels.
-**MAME.** Not compared. The provisional levels equal the recalled MAME values, unchecked (see above).
+**MAME.** Not compared. The values equal the recalled MAME values, unchecked.
 
 ## Clocks (K3, K16)
 
@@ -152,8 +179,60 @@ in the boot.
     At 153.6 kHz (9600 baud) the warning loses characters; at 250 kHz and above the stream is the
     same as at 500 kHz.
 
+- **MIDI in (Task 7).** Notes, program changes and a 64-message burst sent to channel A at
+  31 250 baud are received with no overrun (see "MIDI").
+
 **Confidence.** Medium for the CPU and DUART clocks (they pass the clock test, which constrains
-only their ratio). High for channel A. Low for channel B.
+only their ratio). High for channel A, confirmed by MIDI in. Low for channel B.
+**MAME.** Not compared.
+
+## MIDI (K3)
+
+**Fact.**
+- MIDI in and out are DUART channel A (`kMidiChannel`), the channel that is not the panel link.
+  The firmware writes CSRA = 0xEE: both directions from the external 16x clocks on IP4 (RxCA)
+  and IP3 (TxCA) at 500 kHz. That is 31 250 baud, `rxBitClocks(0) == 128` after the boot. The
+  DUART already models this clock (D3, Task 3), so the DUART is unchanged.
+- `Machine::midiIn(byte)` queues a byte on RxDA. It enters at the line rate, 320 us per byte (D2).
+  `Machine::takeMidiOut()` returns the bytes that left TxDA since the last call.
+- **Receive channel.** The firmware receives on every channel: the System/MIDI pages show its
+  defaults as "Base Channel= 01", "Status = BOTH" (Screen 4) and "MIDI Mode=OMNI" (Screen 6). A
+  middle C on each of the 16 channels sounds at the same level (peak 5835 to 5844), and each
+  releases on its note-off. The tests send on channel 1.
+- **Defaults on the other pages.** "Prog Change= ON" (Screen 7), "System Excl= OFF" (Screen 8),
+  "MIDI Loop = OFF" (Screen 9) and "Voice Muting=ON" (Screen 3).
+- **What sounds.** After the boot (ROM 00, KS Grand Piano) the output is exactly 0 for as long
+  as nothing is played. `90 3C 64` gives a peak of 5839 within 300 ms. `C0 05` selects ROM 05,
+  "Multi Sax", on the display.
+- **A note right after a program change is muted.** With "Voice Muting=ON" (the default), a note
+  that arrives within about 30 ms of a program change stays silent: peak 284 when it follows at
+  once, 0 at 30 ms and 2514 at 100 ms. With Voice Muting set to OFF on Screen 3, the same note
+  30 ms after the change sounds (peak 2444). This is the firmware's own behaviour, not lost bytes:
+  no overrun is counted, and the bytes reach the firmware in both cases.
+- **Burst.** 32 note-ons and 32 note-offs queued at once (192 bytes, 61 ms on the wire) cause no
+  receive overrun and no message on the display. Four seconds later the output peak is 19,
+  against 32 516 in the burst.
+- **MIDI out.**
+  - The boot sends 62 bytes on TxDA. They are control changes in running status on channels 3
+    and 1 (`B2 ...`, `B0 ...`), a pitch bend (`E0 ...`) and program changes, ending `C0 00`.
+  - After that, each sound selected on the panel sends its number in running status: Up/Yes twice
+    from ROM 00 sends `01`, then `02`.
+  - Notes received on MIDI in send nothing out ("MIDI Loop = OFF").
+- **System messages.** `ks32emu play` takes MIDI from `MidiIn` (`tools/ks32play/midi_in_win.h`).
+  `MidiIn` drops status 0xF0 and up: sysex, clock and active sensing. Sysex dumps are not a goal of
+  this plan. `ks32emu render` sends only what `parseSmf` gives, which is channel messages.
+
+**How it was found.** The machine was booted for `kBootMs` and bytes were put on RxDA with
+`Duart::receive(0, ...)`, later `Machine::midiIn`. The run recorded the peak of the output, the
+display rows, `overruns(0)` and the acknowledges. The System/MIDI pages were read with
+`ks32emu boot --press 3300:SYSTEM_MIDI --press <t>:SCREENn`. The firmware was run, never studied.
+
+**Tests.** ks32_firmware_midi_rate, ks32_firmware_midi_note_sounds,
+ks32_firmware_midi_burst_no_overrun, ks32_firmware_program_change_changes_display and
+ks32_firmware_render_is_deterministic. The render hash is 0x2bae46b3acc34cd0 on MinGW and on MSVC.
+
+**Confidence.** High for the channel, the rate, omni reception and the muting after a program
+change.
 **MAME.** Not compared.
 
 ## ESP wiring (K15)

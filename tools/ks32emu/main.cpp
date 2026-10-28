@@ -1,19 +1,33 @@
 // ks32emu: runs the emulated KS-32 (its OS ROM on the 68000 with the DUART and the OTIS/ESP board).
 //   ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] [--count <n>] [--last <n>]
 //                [--display-only] [--press <ms>:<name>[+<name>...]]... [--analog <name>=<raw>]...
+//   ks32emu render <in.mid> <out.wav> [--roms <dir>] [--tail <s>] [--press ...]... [--analog ...]...
+//   ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]...
 // --press presses the named buttons (kButtons names, e.g. EDIT_SEQ_PRESET, BANK9) in order at
-// <ms>, holds them 100 ms and releases them in reverse order; it may be repeated.
+// <ms>, holds them 100 ms and releases them in reverse order; it may be repeated. In boot <ms>
+// counts from power-on, in render from the end of the boot (the start of the WAV).
+// render boots for kBootMs (not written), sends each MIDI file event to MIDI in at its frame and
+// renders until the last event plus --tail (default 2 s); it writes a stereo WAV at kWavRate and
+// prints the FNV-1a 64 hash of the PCM. play does the same live: WinMM MIDI in, WASAPI out,
+// resampled to the device rate; it prints the display as it changes, and a typed line of button
+// names joined by + (e.g. bank9+screen1) presses them as --press does; q quits (Windows only).
+// MIDI in takes channel messages only: system messages (0xF0 and up) are not sent.
 // --analog sets an analog input (PITCH_WHEEL, MOD_WHEEL, CV_PEDAL, VOLUME, DATA_ENTRY, PRESSURE,
 // BATTERY) to a raw 10-bit conversion, 0..1023 (decimal), from power-on; it may be repeated.
 // The panel display is printed as "<ms> |<row>|" lines each time it changes (bytes outside
 // 0x20-0x7E as \xNN), the LEDs as "<ms> LEDs ..." each time they change; --display-only leaves
 // out the summary.
 // File I/O lives here; src/ks32 stays pure. Errors print "error: <msg>" and exit 2.
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -22,6 +36,23 @@
 #include "../ks32play/files.h"
 #include "ks32/machine.h"
 #include "m68k/m68k_dis.h"
+#include "player/resampler.h"
+#include "player/smf.h"
+#include "player/wav.h"
+
+#ifdef _WIN32
+#include "../ks32play/audio_out_wasapi.h"
+#include "../ks32play/midi_in_win.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <mutex>
+#include <thread>
+#endif
 
 using namespace ens::ks32;
 
@@ -33,6 +64,7 @@ struct Failure {
 [[noreturn]] void fail(const std::string& msg) { throw Failure{msg}; }
 
 struct Options {
+    std::vector<std::string> positional;  // render: <in.mid> <out.wav>
     std::string roms = "ks-32";
     uint64_t ms = 3000;
     std::string trace;  // comma list of otis,esp,duart,unmapped,iack
@@ -41,6 +73,9 @@ struct Options {
     bool displayOnly = false;
     std::vector<std::pair<uint64_t, std::vector<Button>>> presses;  // --press: ms, buttons
     std::vector<std::pair<Analog, uint16_t>> analogs;                // --analog: input, raw
+    double tail = 2.0;                                               // render --tail, seconds
+    int midi = 0;                                                    // play --midi
+    bool midiSet = false, list = false;                              // play: --midi given, --list
 };
 
 constexpr std::pair<Analog, const char*> kAnalogNames[] = {
@@ -56,22 +91,35 @@ uint64_t parseNum(const std::string& opt, const std::string& v) {
     return n;
 }
 
+// "<name>[+<name>...]", names as in kButtons (case-insensitive).
+std::vector<Button> parseButtons(const std::string& v) {
+    std::vector<Button> out;
+    for (size_t q = 0;;) {
+        const size_t next = v.find('+', q);
+        std::string name = v.substr(q, next == std::string::npos ? std::string::npos : next - q);
+        for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        const ButtonName* hit = nullptr;
+        for (const ButtonName& b : kButtons)
+            if (name == b.name) hit = &b;
+        if (!hit) fail("unknown button '" + name + "'");
+        out.push_back(hit->button);
+        if (next == std::string::npos) return out;
+        q = next + 1;
+    }
+}
+
 // "<ms>:<name>[+<name>...]"
 std::pair<uint64_t, std::vector<Button>> parsePress(const std::string& v) {
     const size_t colon = v.find(':');
     if (colon == std::string::npos) fail("bad value '" + v + "' for --press (<ms>:<name>[+<name>...])");
-    std::pair<uint64_t, std::vector<Button>> p{parseNum("--press", v.substr(0, colon)), {}};
-    for (size_t q = colon; q != std::string::npos;) {
-        const size_t next = v.find('+', q + 1);
-        const std::string name = v.substr(q + 1, next == std::string::npos ? std::string::npos : next - q - 1);
-        const ButtonName* hit = nullptr;
-        for (const ButtonName& b : kButtons)
-            if (name == b.name) hit = &b;
-        if (!hit) fail("unknown button '" + name + "' for --press");
-        p.second.push_back(hit->button);
-        q = next;
-    }
-    return p;
+    return {parseNum("--press", v.substr(0, colon)), parseButtons(v.substr(colon + 1))};
+}
+
+double parseSeconds(const std::string& opt, const std::string& v) {
+    char* end = nullptr;
+    const double s = std::strtod(v.c_str(), &end);
+    if (v.empty() || *end != '\0' || !(s >= 0 && s <= 3600)) fail("bad value '" + v + "' for " + opt);
+    return s;
 }
 
 // "<name>=<raw>"
@@ -89,9 +137,12 @@ Options parseOptions(int argc, char** argv) {
     Options o;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a.compare(0, 2, "--") != 0) fail("unexpected argument '" + a + "'");
-        if (a == "--display-only") {
-            o.displayOnly = true;
+        if (a.compare(0, 2, "--") != 0) {
+            o.positional.push_back(a);
+            continue;
+        }
+        if (a == "--display-only" || a == "--list") {
+            (a == "--list" ? o.list : o.displayOnly) = true;
             continue;
         }
         if (i + 1 >= argc) fail("option " + a + " needs a value");
@@ -104,7 +155,11 @@ Options parseOptions(int argc, char** argv) {
         else if (a == "--last") o.last = static_cast<uint32_t>(parseNum(a, v));
         else if (a == "--press") o.presses.push_back(parsePress(v));
         else if (a == "--analog") o.analogs.push_back(parseAnalog(v));
-        else fail("unknown option " + a);
+        else if (a == "--tail") o.tail = parseSeconds(a, v);
+        else if (a == "--midi") {
+            o.midi = static_cast<int>(parseNum(a, v));
+            o.midiSet = true;
+        } else fail("unknown option " + a);
     }
     return o;
 }
@@ -179,10 +234,8 @@ std::string ledText(const PanelState& p) {
     return s == "LEDs" ? "LEDs off" : s;
 }
 
-int boot(const Options& o) {
-    std::set<Device> traced;
-    if (!parseTrace(o.trace, traced)) fail("bad value '" + o.trace + "' for --trace (otis,esp,duart,unmapped,iack)");
-
+// The ROMs from o.roms, with the --analog settings applied from power-on.
+std::unique_ptr<Machine> makeMachine(const Options& o) {
     RomSet roms;
     roms.osUpper = load(o.roms + "/ks32", "ks32v301upper.bin");
     roms.osLower = load(o.roms + "/ks32", "ks32v301lower.bin");
@@ -194,6 +247,43 @@ int boot(const Options& o) {
     auto m = Machine::create(roms, err);
     if (!m) fail(err);
     for (const auto& [a, raw] : o.analogs) m->setAnalog(a, raw);
+    return m;
+}
+
+// Button events by ms: (button, down), in insertion order for equal times (multimap keeps it).
+using ButtonEvents = std::multimap<uint64_t, std::pair<Button, bool>>;
+
+// Presses `buttons` in order at `ms` and releases them in reverse order 100 ms later.
+void schedule(ButtonEvents& events, uint64_t ms, const std::vector<Button>& buttons) {
+    for (const Button b : buttons) events.emplace(ms, std::make_pair(b, true));
+    for (auto it = buttons.rbegin(); it != buttons.rend(); ++it) events.emplace(ms + 100, std::make_pair(*it, false));
+}
+
+// Applies every event due at `now` ms.
+void applyDue(Machine& m, ButtonEvents& events, uint64_t now) {
+    for (; !events.empty() && events.begin()->first <= now; events.erase(events.begin()))
+        m.button(events.begin()->second.first, events.begin()->second.second);
+}
+
+// One channel message to MIDI in: program change (0xC0) and channel pressure (0xD0) have one data
+// byte, the others two.
+void sendMidi(Machine& m, uint8_t status, uint8_t d1, uint8_t d2) {
+    m.midiIn(status);
+    m.midiIn(d1);
+    if ((status & 0xE0) != 0xC0) m.midiIn(d2);
+}
+
+void runBoot(Machine& m) {
+    int16_t l, r;
+    for (uint64_t f = 0; f < static_cast<uint64_t>(kBootMs) * kWavRate / 1000; ++f) m.runFrame(l, r);
+    (void)m.takeMidiOut();  // what the boot sends on MIDI out is not reported
+}
+
+int boot(const Options& o) {
+    std::set<Device> traced;
+    if (!parseTrace(o.trace, traced)) fail("bad value '" + o.trace + "' for --trace (otis,esp,duart,unmapped,iack)");
+    if (!o.positional.empty()) fail("unexpected argument '" + o.positional[0] + "'");
+    auto m = makeMachine(o);
 
     std::set<uint32_t> unmapped;
     std::map<int, uint8_t> duartLast;  // register -> last value written
@@ -216,22 +306,15 @@ int boot(const Options& o) {
             if (ring.size() > o.last) ring.pop_front();
         };
 
-    // ms -> (button, down), in option order for equal times (multimap keeps insertion order).
-    std::multimap<uint64_t, std::pair<Button, bool>> events;
-    for (const auto& [at, buttons] : o.presses) {
-        for (const Button b : buttons) events.emplace(at, std::make_pair(b, true));
-        for (auto it = buttons.rbegin(); it != buttons.rend(); ++it) events.emplace(at + 100, std::make_pair(*it, false));
-    }
+    ButtonEvents events;
+    for (const auto& [at, buttons] : o.presses) schedule(events, at, buttons);
 
     const uint64_t frames = o.ms * kWavRate / 1000;
     int16_t l, r;
     std::vector<std::string> rows = m->panel().rows;
     std::string leds = ledText(m->panel());
     for (uint64_t f = 0; f < frames; ++f) {
-        for (const uint64_t now = f * 1000 / kWavRate; !events.empty() && events.begin()->first <= now;) {
-            m->button(events.begin()->second.first, events.begin()->second.second);
-            events.erase(events.begin());
-        }
+        applyDue(*m, events, f * 1000 / kWavRate);
         m->runFrame(l, r);
         const PanelState& p = m->panel();
         const auto ms = static_cast<unsigned long long>((f + 1) * 1000 / kWavRate);
@@ -292,15 +375,285 @@ int boot(const Options& o) {
     return 0;
 }
 
+// FNV-1a 64 over the samples, each as two little-endian bytes (as ks32_firmware_render_is_deterministic).
+uint64_t pcmHash(const std::vector<int16_t>& pcm) {
+    uint64_t h = 14695981039346656037ull;
+    for (const int16_t s : pcm)
+        for (int i = 0; i < 2; ++i) {
+            h ^= static_cast<uint8_t>(static_cast<uint16_t>(s) >> (8 * i));
+            h *= 1099511628211ull;
+        }
+    return h;
+}
+
+int render(const Options& o) {
+    if (o.positional.size() != 2) fail("render needs <in.mid> <out.wav>");
+    std::vector<uint8_t> file;
+    std::string err;
+    if (!readFile(o.positional[0], file, err)) fail(err + " '" + o.positional[0] + "'");
+    std::vector<ens::player::MidiEvent> midi;  // frames at kWavRate, the machine's frame rate
+    if (!ens::player::parseSmf(file, midi, err)) fail(err + " '" + o.positional[0] + "'");
+
+    auto m = makeMachine(o);
+    runBoot(*m);
+    ButtonEvents events;
+    for (const auto& [at, buttons] : o.presses) schedule(events, at, buttons);
+    const uint64_t frames =
+        (midi.empty() ? 0 : midi.back().frame) + static_cast<uint64_t>(std::llround(o.tail * kWavRate));
+    std::vector<int16_t> pcm;
+    pcm.reserve(static_cast<size_t>(frames) * 2);
+    size_t next = 0;
+    int peak = 0;
+    int16_t l, r;
+    for (uint64_t f = 0; f < frames; ++f) {
+        applyDue(*m, events, f * 1000 / kWavRate);
+        for (; next < midi.size() && midi[next].frame <= f; ++next)
+            sendMidi(*m, midi[next].status, midi[next].d1, midi[next].d2);
+        m->runFrame(l, r);
+        pcm.push_back(l);
+        pcm.push_back(r);
+        peak = std::max({peak, std::abs(static_cast<int>(l)), std::abs(static_cast<int>(r))});
+    }
+    if (!writeFile(o.positional[1], ens::player::makeWav16(pcm, 2, kWavRate), err))
+        fail(err + " '" + o.positional[1] + "'");
+    std::printf("%zu MIDI events, %llu frames (%.3f s at %u Hz), peak %d, MIDI out %zu bytes\n", midi.size(),
+                static_cast<unsigned long long>(frames), static_cast<double>(frames) / kWavRate, kWavRate, peak,
+                m->takeMidiOut().size());
+    std::printf("pcm hash %016llx\n", static_cast<unsigned long long>(pcmHash(pcm)));
+    return 0;
+}
+
+#ifdef _WIN32
+
+constexpr double kChipRate = 30476180.0 / 1024.0;  // the machine's exact frame rate (Hz)
+
+// Everything the WASAPI render thread touches. The machine lives on that thread: render() takes
+// the typed presses, sends the queued MIDI, runs frames in blocks of 64 through the resampler
+// until the device's request is covered, then copies the display for the console thread.
+struct LiveEngine {
+    Machine& m;
+    MidiIn* midi = nullptr;  // nullptr: no MIDI input
+    std::unique_ptr<ens::player::Resampler> rs;  // created once the device rate is known, then `ready`
+    std::atomic<bool> ready{false};
+    std::vector<float> fifo;  // resampled L/R not yet sent to the device
+    uint64_t frame = 0;       // frames run since the end of the boot
+    ButtonEvents events;
+    int16_t block[64 * 2] = {};
+
+    std::mutex mu;  // guards the members below, shared with the console thread
+    std::vector<std::vector<Button>> typed;  // presses typed on the console, not yet scheduled
+    PanelState panel;                         // the display as of the last refill
+    uint64_t midiOut = 0;                     // bytes the firmware sent on MIDI out (not forwarded)
+
+    explicit LiveEngine(Machine& machine) : m(machine) {}
+
+    void render(float* out, uint32_t frames, uint32_t channels) {
+        std::fill(out, out + static_cast<size_t>(frames) * channels, 0.0f);
+        if (!ready.load(std::memory_order_acquire)) return;
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            for (const std::vector<Button>& b : typed) schedule(events, frame * 1000 / kWavRate, b);
+            typed.clear();
+        }
+        uint32_t msg = 0;
+        if (midi)
+            while (midi->poll(msg))
+                sendMidi(m, static_cast<uint8_t>(msg), static_cast<uint8_t>(msg >> 8), static_cast<uint8_t>(msg >> 16));
+        while (fifo.size() / 2 < frames) {
+            for (int i = 0; i < 64; ++i, ++frame) {
+                applyDue(m, events, frame * 1000 / kWavRate);
+                m.runFrame(block[2 * i], block[2 * i + 1]);
+            }
+            rs->process(block, 64, fifo);
+        }
+        for (uint32_t f = 0; f < frames; ++f) {
+            out[static_cast<size_t>(f) * channels] = fifo[2 * static_cast<size_t>(f)];
+            out[static_cast<size_t>(f) * channels + 1] = fifo[2 * static_cast<size_t>(f) + 1];
+        }
+        fifo.erase(fifo.begin(), fifo.begin() + 2 * static_cast<std::ptrdiff_t>(frames));  // keeps capacity
+        const size_t sent = m.takeMidiOut().size();
+        std::lock_guard<std::mutex> lock(mu);
+        panel = m.panel();
+        midiOut += sent;
+    }
+};
+
+std::atomic<bool> g_interrupted{false};
+
+BOOL WINAPI onConsoleCtrl(DWORD type) {
+    if (type != CTRL_C_EVENT && type != CTRL_BREAK_EVENT) return FALSE;
+    g_interrupted = true;  // quit cleanly from the main loop
+    return TRUE;
+}
+
+// Lines typed on stdin, read by a detached thread with ReadFile (not the CRT, whose stream lock
+// could stall exit; ks32play does the same). End of input is not a quit.
+class StdinLines {
+public:
+    StdinLines() {
+        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+        if (!h || h == INVALID_HANDLE_VALUE) return;
+        std::shared_ptr<Shared> sh = sh_;
+        std::thread([sh, h] {  // detached: process exit ends it if it is still blocked
+            char c = 0;
+            DWORD n = 0;
+            std::string line;
+            while (ReadFile(h, &c, 1, &n, nullptr) && n == 1) {
+                if (c == '\r') continue;
+                if (c != '\n') {
+                    line += c;
+                    continue;
+                }
+                std::lock_guard<std::mutex> lock(sh->mu);
+                sh->lines.push_back(std::move(line));
+                line.clear();
+            }
+        }).detach();
+    }
+    std::vector<std::string> take() {
+        std::lock_guard<std::mutex> lock(sh_->mu);
+        std::vector<std::string> out;
+        out.swap(sh_->lines);
+        return out;
+    }
+
+private:
+    struct Shared {
+        std::mutex mu;
+        std::vector<std::string> lines;
+    };
+    std::shared_ptr<Shared> sh_ = std::make_shared<Shared>();
+};
+
+int listDevices() {
+    const std::vector<std::string> names = MidiIn::devices();
+    if (names.empty()) std::printf("no MIDI input devices\n");
+    else std::printf("MIDI inputs:\n");
+    for (size_t i = 0; i < names.size(); ++i) std::printf("  %zu: %s\n", i, names[i].c_str());
+    std::string desc, err;
+    if (AudioOut::describeDefault(desc, err)) std::printf("audio output (default device): %s\n", desc.c_str());
+    else std::printf("audio output: %s\n", err.c_str());
+    return 0;
+}
+
+void printPanel(const PanelState& p) {
+    for (const std::string& row : p.rows) std::printf("|%s|\n", printable(row).c_str());
+    std::printf("%s\n", ledText(p).c_str());
+    std::fflush(stdout);
+}
+
+int play(const Options& o) {
+    if (!o.positional.empty()) fail("play takes no positional arguments");
+    if (!o.presses.empty()) fail("play takes typed presses, not --press");
+    if (o.list) return listDevices();
+
+    // Pick the MIDI input before booting, so a bad index fails fast. Without devices it runs
+    // with the typed buttons only.
+    const std::vector<std::string> names = MidiIn::devices();
+    if (o.midiSet && o.midi >= static_cast<int>(names.size()))
+        fail("MIDI input " + std::to_string(o.midi) + " not found (" + std::to_string(names.size()) + " devices)");
+
+    auto m = makeMachine(o);
+    std::printf("booting (%u ms emulated)...\n", kBootMs);
+    std::fflush(stdout);
+    runBoot(*m);
+    LiveEngine engine(*m);
+    engine.panel = m->panel();
+    MidiIn midi;
+
+    AudioOut audio;
+    uint32_t rate = 0, channels = 0;
+    std::string err;
+    if (!audio.start([&engine](float* out, uint32_t frames, uint32_t ch) { engine.render(out, frames, ch); }, rate,
+                     channels, err))
+        fail(err);
+    // The callback outputs silence until `ready`; from here on only the audio thread runs the machine.
+    engine.rs = std::make_unique<ens::player::Resampler>(kChipRate, static_cast<double>(rate), 2);
+    engine.fifo.reserve((static_cast<size_t>(audio.bufferFrames()) + 4096) * 2);  // refills never reallocate
+    if (!names.empty()) {
+        if (!midi.open(o.midi, err)) {
+            audio.stop();
+            fail(err);
+        }
+        engine.midi = &midi;
+    }
+    engine.ready.store(true, std::memory_order_release);
+
+    std::printf("audio: default device, %s, buffer %u frames (%.1f ms)\n", audio.formatName().c_str(),
+                audio.bufferFrames(), audio.bufferFrames() * 1000.0 / rate);
+    if (names.empty()) std::printf("midi: none (no MIDI input devices)\n");
+    else std::printf("midi: %d: %s\n", o.midi, names[static_cast<size_t>(o.midi)].c_str());
+    std::printf("Type button names joined by + (e.g. bank9+screen1) and Enter to press them; q to quit.\n");
+    PanelState shown = engine.panel;
+    printPanel(shown);
+
+    SetConsoleCtrlHandler(onConsoleCtrl, TRUE);
+    StdinLines input;
+    bool quit = false;
+    while (!quit && !audio.failed() && !g_interrupted.load()) {
+        Sleep(50);
+        for (std::string line : input.take()) {
+            if (line.compare(0, 3, "\xEF\xBB\xBF") == 0) line.erase(0, 3);  // a UTF-8 BOM (PowerShell pipes)
+            line.erase(std::remove_if(line.begin(), line.end(), [](char c) { return c == ' ' || c == '\t'; }),
+                       line.end());
+            if (line == "q" || line == "Q") {
+                quit = true;
+                break;
+            }
+            if (line.empty()) continue;
+            try {
+                std::vector<Button> b = parseButtons(line);
+                std::lock_guard<std::mutex> lock(engine.mu);
+                engine.typed.push_back(std::move(b));
+            } catch (const Failure& f) {
+                std::printf("%s\n", f.msg.c_str());
+            }
+        }
+        PanelState now;
+        {
+            std::lock_guard<std::mutex> lock(engine.mu);
+            now = engine.panel;
+        }
+        if (now.rows != shown.rows || now.leds != shown.leds) printPanel(shown = now);
+    }
+
+    audio.stop();
+    midi.close();
+    SetConsoleCtrlHandler(onConsoleCtrl, FALSE);
+    const AudioOut::Stats st = audio.stats();
+    std::printf("audio: %llu frames (%.2f s), %llu underruns, peak %.3f, %llu clipped, slowest refill %.2f ms; "
+                "midi in %llu messages, %llu dropped; midi out %llu bytes\n",
+                static_cast<unsigned long long>(st.frames), static_cast<double>(st.frames) / rate,
+                static_cast<unsigned long long>(st.underruns), static_cast<double>(st.peak),
+                static_cast<unsigned long long>(st.clipped), st.maxRenderMs,
+                static_cast<unsigned long long>(midi.received()), static_cast<unsigned long long>(midi.dropped()),
+                static_cast<unsigned long long>(engine.midiOut));
+    if (audio.failed()) fail(audio.error());
+    return 0;
+}
+
+#else
+
+int play(const Options&) { fail("play needs Windows (WinMM and WASAPI)"); }
+
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
-        if (argc < 2 || std::string(argv[1]) != "boot")
-            fail("usage: ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] "
+        const std::string cmd = argc < 2 ? "" : argv[1];
+        if (cmd != "boot" && cmd != "render" && cmd != "play")
+            fail("usage:\n  ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] "
                  "[--count <n>] [--last <n>] [--display-only] [--press <ms>:<name>[+<name>...]]... "
-                 "[--analog <name>=<raw>]...");
-        return boot(parseOptions(argc, argv));
+                 "[--analog <name>=<raw>]...\n"
+                 "  ks32emu render <in.mid> <out.wav> [--roms <dir>] [--tail <s>] [--press ...]... "
+                 "[--analog ...]...\n"
+                 "  ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]...");
+        const Options o = parseOptions(argc, argv);
+        if (cmd == "render") return render(o);
+        if (cmd == "play") return play(o);
+        return boot(o);
     } catch (const Failure& f) {
         std::fprintf(stderr, "error: %s\n", f.msg.c_str());
         return 2;

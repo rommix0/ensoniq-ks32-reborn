@@ -91,9 +91,14 @@ if(WIN32)
 endif()
 target_compile_definitions(ks32play PRIVATE _CRT_SECURE_NO_WARNINGS)
 
-# KS-32 machine runner: boots the OS ROM in emulation and reports what it did.
+# KS-32 machine runner: boots the OS ROM in emulation and reports what it did, renders a MIDI file
+# through it; live play (WinMM MIDI in, WASAPI out, ks32play's code) on Windows.
 add_executable(ks32emu tools/ks32emu/main.cpp tools/ks32play/files.cpp)
-target_link_libraries(ks32emu PRIVATE ens_ks32)
+target_link_libraries(ks32emu PRIVATE ens_player)
+if(WIN32)
+  target_sources(ks32emu PRIVATE tools/ks32play/midi_in_win.cpp tools/ks32play/audio_out_wasapi.cpp)
+  target_link_libraries(ks32emu PRIVATE winmm ole32 avrt)
+endif()
 target_compile_definitions(ks32emu PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # 68000 per-instruction suite runner (tools/m68k_harte/convert_harte.py makes the .m68t files).

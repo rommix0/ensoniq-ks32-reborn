@@ -42,8 +42,12 @@ constexpr int kSlotClocks = 16;  // DECISION K3, K4
 constexpr uint32_t kBootMs = 3200;
 // DECISION K7: the front panel is on DUART channel B (0 = A, 1 = B).
 constexpr int kPanelChannel = 1;
-// DECISION K2: the DUART answers the acknowledge with its IVR; both levels are provisional
-// (the boot cannot tell them apart) and are settled in Task 7.
+// DECISION K3: MIDI in and out are DUART channel A (31 250 baud from the external 16x clock).
+constexpr int kMidiChannel = 0;
+// DECISION K2: the DUART answers the acknowledge with its IVR. Both levels are Low confidence
+// (recalled MAME values, unchecked): the evidence bounds the DUART to 1-5 and cannot tell those
+// apart with notes playing, and OS v3.01 never enables an OTIS voice interrupt, so the OTIS level
+// is unobservable (docs/ks32-hardware-interface.md, "Interrupts").
 constexpr int kOtisIrqLevel = 1;
 constexpr int kDuartIrqLevel = 3;
 
@@ -73,6 +77,9 @@ public:
     const PanelState& panel() const { return panel_.state(); }
     void button(Button b, bool down) { panel_.button(b, down); }  // reaches RxDB from the next slot
     void setAnalog(Analog a, uint16_t raw);  // raw 0..0x3FF (masked); PAR follows at once (K8)
+    // A byte on MIDI in: it joins the channel's receive queue and enters at the line rate (D2).
+    void midiIn(uint8_t byte) { duart_.receive(kMidiChannel, byte); }
+    std::vector<uint8_t> takeMidiOut() { return duart_.takeTransmitted(kMidiChannel); }  // sent since the last call
 
     // m68k::Bus
     uint8_t read8(uint32_t addr) override;

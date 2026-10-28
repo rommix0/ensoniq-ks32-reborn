@@ -1,6 +1,7 @@
 // The KS-32 OS ROM (v3.01) booting on the machine. The firmware is run, never studied: these
 // tests look only at device accesses, exception counts and device state after kBootMs, and at
 // the panel after button presses.
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <initializer_list>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "check.h"
 #include "ks32_firmware.h"
@@ -327,4 +329,173 @@ TEST(ks32_firmware_slider_extremes) {
     m.setAnalog(Analog::Volume, kAnalogRest[static_cast<int>(Analog::Volume)]);
     m.setAnalog(Analog::DataEntry, kAnalogRest[static_cast<int>(Analog::DataEntry)]);
     press(m, Button::Screen5);
+}
+
+// ---- MIDI (Task 7) ------------------------------------------------------------------------------
+
+namespace {
+
+// FNV-1a 64 over the samples, each as two little-endian bytes.
+uint64_t pcmHash(const std::vector<int16_t>& pcm) {
+    uint64_t h = 14695981039346656037ull;
+    for (const int16_t s : pcm)
+        for (int i = 0; i < 2; ++i) {
+            h ^= static_cast<uint8_t>(static_cast<uint16_t>(s) >> (8 * i));
+            h *= 1099511628211ull;
+        }
+    return h;
+}
+
+// Runs ms of emulated time; the largest |sample| of either channel.
+int peakMs(Machine& m, uint32_t ms) {
+    const uint64_t frames = static_cast<uint64_t>(ms) * kWavRate / 1000;
+    int16_t l, r;
+    int peak = 0;
+    for (uint64_t f = 0; f < frames; ++f) {
+        m.runFrame(l, r);
+        peak = std::max({peak, std::abs(static_cast<int>(l)), std::abs(static_cast<int>(r))});
+    }
+    return peak;
+}
+
+void sendMidi(Machine& m, std::initializer_list<uint8_t> bytes) {
+    for (const uint8_t b : bytes) m.midiIn(b);
+}
+
+// One booted machine for the MIDI checks, run in sequence at construction (one boot, suite
+// runtime). The firmware's default sound (ROM 00) and MIDI settings (System/MIDI shows "Base
+// Channel= 01", "MIDI Mode=OMNI"), so channel 1 is played:
+//   200 ms of silence; middle C at velocity 100 for 300 ms (noteOn), then its note-off and 1 s;
+//   a burst of 32 note-ons and 32 note-offs queued at once, then 2 s, polling the display;
+//   2 s more, then the peak over 200 ms (released); program change 5, then 500 ms.
+struct MidiRig {
+    std::unique_ptr<Machine> m;
+    std::vector<uint8_t> bootOut;  // what the boot sent on MIDI out
+    int silence = 0, noteOn = 0, released = 0;
+    uint32_t overruns = 0;
+    bool saw144 = false, sawEvent = false;
+    uint32_t otherAcks = 0;  // interrupt acknowledges not answered with the DUART's vector 64 (K2)
+    std::vector<std::string> beforeProgram, afterProgram;
+};
+
+MidiRig& midiKs32() {
+    static MidiRig r = [] {
+        MidiRig x;
+        x.m = loadKs32();
+        if (!x.m) return x;
+        Machine& m = *x.m;
+        runMs(m, kBootMs);
+        x.bootOut = m.takeMidiOut();
+        m.onBusEvent = [&x](const BusEvent& e) {
+            if (e.dev == Device::Iack && e.value != 64) ++x.otherAcks;
+        };
+        x.silence = peakMs(m, 200);
+        sendMidi(m, {0x90, 0x3C, 0x64});
+        x.noteOn = peakMs(m, 300);
+        sendMidi(m, {0x80, 0x3C, 0x40});
+        runMs(m, 1000);
+        for (uint8_t k = 0; k < 32; ++k) sendMidi(m, {0x90, static_cast<uint8_t>(36 + k), 100});
+        for (uint8_t k = 0; k < 32; ++k) sendMidi(m, {0x80, static_cast<uint8_t>(36 + k), 64});
+        int16_t l, rr;
+        for (uint64_t f = 0; f < 2ull * kWavRate; ++f) {
+            m.runFrame(l, rr);
+            const std::string s = shown(m.panel());
+            x.saw144 |= s.find("144") != std::string::npos;
+            x.sawEvent |= s.find("EVENT") != std::string::npos;
+        }
+        x.overruns = m.duart().overruns(kMidiChannel);
+        runMs(m, 2000);
+        x.released = peakMs(m, 200);
+        x.beforeProgram = m.panel().rows;
+        sendMidi(m, {0xC0, 0x05});
+        runMs(m, 500);
+        x.afterProgram = m.panel().rows;
+        m.onBusEvent = nullptr;
+        return x;
+    }();
+    if (!r.m) std::printf("  skip: ROMs not found\n");
+    return r;
+}
+
+}  // namespace
+
+// K3: channel A runs from the 500 kHz external 16x clock (CSRA = 0xEE): 128 X1 clocks per bit,
+// 31 250 baud.
+TEST(ks32_firmware_midi_rate) {
+    Machine* m = bootedKs32();
+    if (!m) return;
+    CHECK_EQ(m->duart().rxBitClocks(kMidiChannel), 128u);
+    MidiRig& r = midiKs32();
+    if (!r.m) return;
+    std::printf("  boot MIDI out: %zu bytes, first %02X\n", r.bootOut.size(), r.bootOut.empty() ? 0 : r.bootOut[0]);
+    CHECK(!r.bootOut.empty() && (r.bootOut[0] & 0x80));  // a status byte
+}
+
+TEST(ks32_firmware_midi_note_sounds) {
+    MidiRig& r = midiKs32();
+    if (!r.m) return;
+    std::printf("  peak: silence %d, note %d\n", r.silence, r.noteOn);
+    CHECK(r.silence < 64);
+    CHECK(r.noteOn > 1000);
+}
+
+// 64 messages queued at once enter at the line rate (D2) and none is lost to an overrun. Every
+// interrupt is the DUART's: the firmware never enables an OTIS voice interrupt (K2). Afterwards
+// the notes have released.
+TEST(ks32_firmware_midi_burst_no_overrun) {
+    MidiRig& r = midiKs32();
+    if (!r.m) return;
+    std::printf("  overruns %u, peak 4 s after the burst %d\n", r.overruns, r.released);
+    CHECK_EQ(r.overruns, 0u);
+    CHECK(!r.saw144);
+    CHECK(!r.sawEvent);
+    CHECK_EQ(r.otherAcks, 0u);
+    CHECK(r.released < 256);
+}
+
+TEST(ks32_firmware_program_change_changes_display) {
+    MidiRig& r = midiKs32();
+    if (!r.m) return;
+    PanelState before, after;
+    before.rows = r.beforeProgram;
+    after.rows = r.afterProgram;
+    std::printf("  %s -> %s\n", shown(before).c_str(), shown(after).c_str());
+    CHECK(r.afterProgram != r.beforeProgram);
+    CHECK(shown(after).find("ROM 05") != std::string::npos);
+}
+
+namespace {
+
+// Boots a fresh machine, then renders 2 s of a fixed event list (two notes, a program change);
+// the PCM hash.
+uint64_t renderTwoSeconds() {
+    auto m = loadKs32();
+    if (!m) return 0;
+    runMs(*m, kBootMs);
+    std::vector<int16_t> pcm;
+    int16_t l, r;
+    for (uint64_t f = 0; f < 2ull * kWavRate; ++f) {
+        if (f == 0) sendMidi(*m, {0x90, 60, 100});
+        if (f == kWavRate / 4) sendMidi(*m, {0x90, 64, 80});
+        if (f == kWavRate / 2) sendMidi(*m, {0x80, 60, 64, 0x80, 64, 64});
+        if (f == kWavRate) sendMidi(*m, {0xC0, 5, 0x90, 67, 100});
+        if (f == kWavRate * 3 / 2) sendMidi(*m, {0x80, 67, 64});
+        m->runFrame(l, r);
+        pcm.push_back(l);
+        pcm.push_back(r);
+    }
+    return pcmHash(pcm);
+}
+
+}  // namespace
+
+TEST(ks32_firmware_render_is_deterministic) {
+    const uint64_t a = renderTwoSeconds();
+    if (!a) {
+        std::printf("  skip: ROMs not found\n");
+        return;
+    }
+    const uint64_t b = renderTwoSeconds();
+    std::printf("  render hash %016llx\n", static_cast<unsigned long long>(a));
+    CHECK_EQ(a, b);
 }
