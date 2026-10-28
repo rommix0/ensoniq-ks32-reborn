@@ -121,9 +121,10 @@ void Engine::render(float* l, float* r, int frames) {
         snap_.midiOutBytes = midiOut_;
         snapMu_.unlock();
     }
-    if (ramWanted_.load(std::memory_order_acquire) && !ramReady_.load(std::memory_order_relaxed)) {
+    // The acquire on ramReady_ pairs with takeRam's release, so its reads of ram_ end before this
+    // copy; the exchange takes the request first, so one made during the copy is kept.
+    if (!ramReady_.load(std::memory_order_acquire) && ramWanted_.exchange(false, std::memory_order_acquire)) {
         std::copy(m_->ramImage().begin(), m_->ramImage().end(), ram_.begin());
-        ramWanted_.store(false, std::memory_order_relaxed);
         ramReady_.store(true, std::memory_order_release);
     }
 }
