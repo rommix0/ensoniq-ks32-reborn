@@ -48,8 +48,8 @@ add_library(ens_m68k_harte STATIC src/m68k/harte_format.cpp)
 target_link_libraries(ens_m68k_harte PUBLIC ens_m68k)
 
 # KS-32 board: wave ROM layout, OTIS + ESP + delay DRAM and the frame routing.
-add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp)
-target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp)
+add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp src/ks32/machine.cpp)
+target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp ens_m68k ens_duart)
 
 # Pure player layer (no OS code). Later tasks add sources to this list.
 add_library(ens_player STATIC src/player/resampler.cpp src/player/json.cpp src/player/sample_map.cpp
@@ -89,6 +89,11 @@ if(WIN32)
   target_link_libraries(ks32play PRIVATE winmm ole32 avrt)
 endif()
 target_compile_definitions(ks32play PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# KS-32 machine runner: boots the OS ROM in emulation and reports what it did.
+add_executable(ks32emu tools/ks32emu/main.cpp tools/ks32play/files.cpp)
+target_link_libraries(ks32emu PRIVATE ens_ks32)
+target_compile_definitions(ks32emu PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # 68000 per-instruction suite runner (tools/m68k_harte/convert_harte.py makes the .m68t files).
 add_executable(m68k_harte tools/m68k_harte/main.cpp)

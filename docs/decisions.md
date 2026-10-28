@@ -743,3 +743,56 @@ Evidence cites the Motorola MC68681 data sheet (MC68681/D, Sep 1985, `datasheets
 - Evidence: 3.5 and 3.5.2 (PDF 26, 27: "runs continuously", the start command "terminates the current countdown sequence ... reinitializes itself"); 4.2.13.2 (ACR[6:4]; PDF 46). The sheet's advice to issue the start command before routing the timer to OP3 (3.5.2, PDF 27; OPCR[3:2] note, PDF 44) is about configuration order and does not make the start a precondition for running.
 - Confidence: Medium (the real phase of an unstarted timer depends on its prescaler and the count at power-up; any ROM that starts the timer explicitly, as the sheet recommends, is unaffected).
 - Status: `// DECISION D6` at the ACR write in `Duart::write` (`src/duart/duart.cpp`, Task 1 fix round). Tests: duart_timer_runs_without_start_command, duart_leaving_counter_mode_stops_it.
+
+## KS-32 machine
+
+Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Every entry here is provisional: Task 3 checks it against the boot trace (the first run of the OS ROM on this machine) and settles it. Evidence names the sources of the provisional value; the boot trace is the later check.
+
+## K1: Memory map
+- Options: (a) the map of the plan's default table; (b) a wider map with every window mirrored; (c) wait for the boot trace before writing any map.
+- Choice: (a), so the boot has something to run on. ROM at 0xC00000-0xC3FFFF: the upper EPROM (128 KB) supplies the even bytes, the lower EPROM (64 KB) the odd bytes and is mirrored every 0x20000. 64 KB RAM at 0xFF0000-0xFFFFFF, mirrored at 0x000000-0x00FFFF; reads of 0x000000-0x000007 come from ROM 0xC00000-7 until the first write into that range (the reset vectors). OTIS at 0x200000-0x20001F (words, reg = A4..A1), ESP at 0x260000-0x2601FF (odd bytes, reg = A8..A1), DUART at 0x280000-0x28001F (odd bytes, reg = A4..A1). Accesses of the wrong width: a byte access to OTIS is traced as Device::Otis, size 1 (a byte read returns the addressed byte of the 16-bit register read; a byte write is ignored); an even-byte access in the ESP or DUART window is traced with that device and its even address, reads 0 and its write is ignored; a word access to the ESP or DUART does the odd-byte device access in the low byte and the high byte reads 0. Task 3 counts these from the trace.
+- Evidence: service manual p1 (64 KB RAM); `docs/rom-investigation/findings.md` (device roles); the Plan 5 smoke bus (`tests/test_m68k_ks32_smoke.cpp`) for the ROM merge and vector overlay. The device addresses are placeholders until the trace shows what the ROM touches.
+- Confidence: Low for the device windows and RAM mirroring; Medium for the ROM layout.
+- Status: provisional, Task 3. `// DECISION K1` at `Machine::romByte` (`src/ks32/machine.cpp`, Task 2). Tests: ks32_machine_ram_write, ks32_machine_low_overlay_and_rom_mirror, ks32_machine_wrong_width_accesses_are_traced.
+
+## K2: Interrupt map
+- Options: (a) wire the OTIS IRQ and the DUART INTR to levels now; (b) leave both at level 0 (off) until the boot trace shows what the ROM sets up.
+- Choice: (b). `kOtisIrqLevel` and `kDuartIrqLevel` (`src/ks32/machine.h`) are 0; the IPL is the highest level of the asserting devices. The acknowledge for the DUART's level answers `duart.ivr()` while the DUART asserts INTR, otherwise `kAutovector`. Each acknowledge is traced as a Device::Iack event (addr = level, value = the vector answered).
+- Evidence: none yet; this is a placeholder.
+- Confidence: Low.
+- Status: provisional, Task 3. `// DECISION K2` at `Machine::updateIpl` (`src/ks32/machine.cpp`, Task 2).
+
+## K3: Clocks
+- Options: (a) MAME's clocks; (b) values derived from the schematic crystals.
+- Choice: (a). The CPU and OTIS run at 15 238 090 Hz (30 476 180 / 2). A voice slot is 16 CPU clocks. The DUART X1 is 4 000 000 Hz. The ESP runs 89 instruction periods per frame (P1).
+- Evidence: design section 7 (the clocks are MAME's values); findings.md section B (89 slots per frame, P1).
+- Confidence: Medium; the boot clock test (Task 3) and the MIDI rate (Task 7, 31 250 baud = 128 X1 clocks per bit) check them.
+- Status: provisional, Task 3. `// DECISION K3` at `kCpuHz` and `kDuartHz` (`src/ks32/machine.h`, Task 2).
+
+## K4: Scheduler
+- Options: (a) per voice slot: the CPU runs 16 clocks, then OTIS, DUART and ESP steps; (b) run the CPU a whole frame, then the devices.
+- Choice: (a). Each slot runs `cpu.run(16 - carry)` and carries the overshoot of the last instruction; a carry of 16 or more skips the CPU for that slot. Then `otis.stepVoice()`; the DUART advances by an exact rational X1 accumulator (16 x 4 000 000 / 15 238 090 X1 clocks per slot, the remainder kept); the ESP per K5; the IPL is recomputed. The IPL is also recomputed after every device access. The 40 reset cycles count in `cycles()` and are not carry. A frame ends when OTIS latches it (slot ACT).
+- Evidence: K3. (b) would let a device see a stale CPU state for a whole frame (about 1 ms) and make the DUART timing coarse.
+- Confidence: Medium.
+- Status: provisional, Task 3. `// DECISION K4` at `Machine::slot` (`src/ks32/machine.cpp`, Task 2). Test: ks32_machine_frame_cadence.
+
+## K5: ESP cadence
+- Options: (a) always `esp.advance(89)` at frame end; (b) at frame end while running, and while halted spread the idle steps over the slots.
+- Choice: (b). While running, `Board::route` calls `esp.advance(89)` at frame end (as `Board::frame`). While halted, slot i of an N-slot frame (N = ACT + 1) gets floor(89(i+1)/N) - floor(89 i/N) `idleStep()` calls, and `route` is given 0 slots so it does not advance the halted ESP a second time. The ESP's host accesses go straight to `hostRead`/`hostWrite`, so the firmware's loads land on the idle steps between its own writes.
+- Evidence: `Esp::idleStep` cadence contract (about one per 300 ns); findings.md section B.
+- Confidence: Medium.
+- Status: provisional, Task 3. `// DECISION K5` at `Machine::slot` (`src/ks32/machine.cpp`, Task 2).
+
+## K6: Unmapped accesses
+- Options: (a) bus error; (b) reads 0 and writes ignored, with a trace event.
+- Choice: (b) (the 68000 core takes no bus errors, M5). Every unmapped access is traced as Device::Unmapped with its size. The boot test (Task 3) requires none, so every address the firmware uses must be in the K1 map.
+- Evidence: M5 (`src/m68k/m68k.h`).
+- Confidence: High for the behaviour; the map it applies to is K1.
+- Status: provisional, Task 3. `// DECISION K6` at the unmapped fallthrough of `Machine::read8` (`src/ks32/machine.cpp`, Task 2). Tests: ks32_machine_unmapped_is_traced.
+
+## K14: RESET instruction
+- Options: (a) reset every device; (b) the DUART only; (c) none.
+- Choice: (b). `Machine::resetPeripherals()` resets the DUART and recomputes the IPL; OTIS and the ESP are untouched.
+- Evidence: none yet. (b) keeps what the firmware has programmed into the OTIS and ESP across a RESET instruction; Task 3 checks which lines the board really ties to RESET.
+- Confidence: Low.
+- Status: provisional, Task 3. `// DECISION K14` at `Machine::resetPeripherals` (`src/ks32/machine.cpp`, Task 2).

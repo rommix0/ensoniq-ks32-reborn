@@ -33,6 +33,10 @@ public:
     // SER0..SER2; esp.advance(kEspSlotsPerFrame); ESP SER3 -> main. OTIS CH0 (aux) is dropped.
     void frame(int16_t& mainL, int16_t& mainR);
 
+    // The routing half of frame(): OTIS frame `f` into ESP SER0..SER2, esp.advance(espSlots) only
+    // when espSlots > 0 (the Machine passes 0 while the ESP is halted), SER3 out to main.
+    void route(const OtisFrame& f, int16_t& mainL, int16_t& mainR, int espSlots);
+
 private:
     struct Waves : WaveMemory {
         std::vector<uint16_t> bank[2];

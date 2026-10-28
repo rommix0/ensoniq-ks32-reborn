@@ -1,0 +1,229 @@
+#include "ks32/machine.h"
+
+#include <algorithm>
+#include <utility>
+
+#include "ks32/wave_roms.h"
+
+namespace ens::ks32 {
+
+namespace {
+
+constexpr uint32_t kMask24 = 0xFFFFFF;
+constexpr uint32_t kRomBase = 0xC00000, kRomSize = 0x40000;
+constexpr uint32_t kRamTop = 0xFF0000;  // RAM at 0xFF0000-0xFFFFFF, mirrored at 0-0xFFFF
+constexpr uint32_t kOtisBase = 0x200000, kOtisSize = 0x20;
+constexpr uint32_t kEspBase = 0x260000, kEspSize = 0x200;
+constexpr uint32_t kDuartBase = 0x280000, kDuartSize = 0x20;
+
+bool inWindow(uint32_t a, uint32_t base, uint32_t size) { return a >= base && a < base + size; }
+bool isRom(uint32_t a) { return a >= kRomBase && a < kRomBase + kRomSize; }
+bool isRam(uint32_t a) { return a >= kRamTop || a < 0x10000; }
+
+bool sizeOk(const std::vector<uint8_t>& v, size_t want, const char* name, std::string& err) {
+    if (v.size() == want) return true;
+    err = std::string(name) + ": expected " + std::to_string(want) + " bytes, got " +
+          std::to_string(v.size());
+    return false;
+}
+
+}  // namespace
+
+Machine::Machine(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1)
+    : board_(std::move(bank0), std::move(bank1)) {}
+
+std::unique_ptr<Machine> Machine::create(const RomSet& roms, std::string& err) {
+    if (!sizeOk(roms.osUpper, 0x20000, "OS upper", err) || !sizeOk(roms.osLower, 0x10000, "OS lower", err))
+        return nullptr;
+    std::vector<uint16_t> bank0, bank1;
+    if (!buildWaveBanks(roms.u25, roms.u26, roms.rom2, roms.rom3, bank0, bank1, err)) return nullptr;
+    std::unique_ptr<Machine> m(new Machine(std::move(bank0), std::move(bank1)));
+    m->osUpper_ = roms.osUpper;
+    m->osLower_ = roms.osLower;
+    m->board_.otis().reset();
+    m->board_.esp().reset();
+    m->duart_.reset();
+    m->cpu_.reset();  // the 40 reset cycles count in cycles() and are not slot carry
+    m->updateIpl();
+    return m;
+}
+
+// DECISION K1: provisional map. ROM 0xC00000-0xC3FFFF: upper EPROM = even bytes, lower EPROM = odd
+// bytes mirrored every 0x20000. RAM 64 KB at 0xFF0000, mirrored at 0; 0-7 read ROM until the first
+// write there. OTIS 0x200000 (words), ESP 0x260000 and DUART 0x280000 (odd bytes). A byte access to
+// OTIS is traced with size 1 (read: the addressed byte of the register; write: ignored); an even-
+// byte access to the ESP or DUART reads 0 and its write is ignored, traced with its even address;
+// a word access to the ESP or DUART does the odd-byte access in the low byte (high byte reads 0).
+uint8_t Machine::romByte(uint32_t off) const {
+    return (off & 1) ? osLower_[(off >> 1) & 0xFFFF] : osUpper_[off >> 1];
+}
+
+uint8_t Machine::memByte(uint32_t a, bool& mapped) const {
+    mapped = true;
+    if (isRom(a)) return romByte(a - kRomBase);
+    if (a >= kRamTop) return ram_[a - kRamTop];
+    if (a < 0x10000) return (overlay_ && a < 8) ? romByte(a) : ram_[a];  // DECISION K1: 0-7 overlay
+    mapped = false;
+    return 0;
+}
+
+uint16_t Machine::peek16(uint32_t addr) const {
+    bool mapped;
+    addr &= kMask24 & ~1u;
+    const uint8_t hi = memByte(addr, mapped);
+    const uint8_t lo = memByte(addr + 1, mapped);
+    return static_cast<uint16_t>((hi << 8) | lo);
+}
+
+void Machine::trace(uint32_t addr, uint16_t value, uint8_t size, bool write, Device dev) {
+    if (onBusEvent) onBusEvent({cpu_.totalCycles(), addr, value, size, write, dev});
+}
+
+// DECISION K2: the IPL is the highest level of the asserting devices; both are level 0 (off) until Task 3.
+void Machine::updateIpl() {
+    int level = 0;
+    if (board_.otis().irqAsserted()) level = std::max(level, kOtisIrqLevel);
+    if (duart_.irq()) level = std::max(level, kDuartIrqLevel);
+    cpu_.setIpl(level);
+}
+
+int Machine::interruptAcknowledge(int level) {
+    const bool fromDuart = kDuartIrqLevel != 0 && level == kDuartIrqLevel && duart_.irq();
+    const int vec = fromDuart ? duart_.ivr() : m68k::kAutovector;
+    trace(static_cast<uint32_t>(level), static_cast<uint16_t>(fromDuart ? vec : 24 + level), 1, false,
+          Device::Iack);
+    return vec;
+}
+
+// DECISION K14: the RESET instruction resets the DUART only.
+void Machine::resetPeripherals() {
+    duart_.reset();
+    updateIpl();
+}
+
+uint8_t Machine::read8(uint32_t a) {
+    a &= kMask24;
+    bool mapped;
+    const uint8_t m = memByte(a, mapped);
+    if (mapped) return m;
+    uint8_t v = 0;
+    Device dev = Device::Unmapped;  // DECISION K6: unmapped reads 0, writes are ignored, every access is traced
+    if (inWindow(a, kOtisBase, kOtisSize)) {
+        const uint16_t w = board_.otis().read(static_cast<uint8_t>((a >> 1) & 0xF));
+        v = static_cast<uint8_t>((a & 1) ? w : w >> 8);
+        dev = Device::Otis;
+    } else if (inWindow(a, kEspBase, kEspSize)) {
+        if (a & 1) v = board_.esp().hostRead(static_cast<uint8_t>((a >> 1) & 0xFF));
+        dev = Device::Esp;
+    } else if (inWindow(a, kDuartBase, kDuartSize)) {
+        if (a & 1) v = duart_.read(static_cast<uint8_t>((a >> 1) & 0xF));
+        dev = Device::Duart;
+    }
+    trace(a, v, 1, false, dev);
+    updateIpl();
+    return v;
+}
+
+uint16_t Machine::read16(uint32_t a) {
+    a &= kMask24;
+    bool mapped;
+    const uint8_t hi = memByte(a, mapped);
+    if (mapped) return static_cast<uint16_t>((hi << 8) | memByte(a + 1, mapped));
+    uint16_t v = 0;
+    Device dev = Device::Unmapped;
+    if (inWindow(a, kOtisBase, kOtisSize)) {
+        v = board_.otis().read(static_cast<uint8_t>((a >> 1) & 0xF));
+        dev = Device::Otis;
+    } else if (inWindow(a, kEspBase, kEspSize)) {
+        v = board_.esp().hostRead(static_cast<uint8_t>((a >> 1) & 0xFF));
+        dev = Device::Esp;
+    } else if (inWindow(a, kDuartBase, kDuartSize)) {
+        v = duart_.read(static_cast<uint8_t>((a >> 1) & 0xF));
+        dev = Device::Duart;
+    }
+    trace(a, v, 2, false, dev);
+    updateIpl();
+    return v;
+}
+
+void Machine::write8(uint32_t a, uint8_t v) {
+    a &= kMask24;
+    if (isRom(a)) return;
+    if (isRam(a)) {
+        if (a < 8) overlay_ = false;
+        ram_[a >= kRamTop ? a - kRamTop : a] = v;
+        return;
+    }
+    Device dev = Device::Unmapped;
+    if (inWindow(a, kOtisBase, kOtisSize)) {
+        dev = Device::Otis;  // a byte write to a 16-bit register is ignored
+    } else if (inWindow(a, kEspBase, kEspSize)) {
+        if (a & 1) board_.esp().hostWrite(static_cast<uint8_t>((a >> 1) & 0xFF), v);
+        dev = Device::Esp;
+    } else if (inWindow(a, kDuartBase, kDuartSize)) {
+        if (a & 1) duart_.write(static_cast<uint8_t>((a >> 1) & 0xF), v);
+        dev = Device::Duart;
+    }
+    trace(a, v, 1, true, dev);
+    updateIpl();
+}
+
+void Machine::write16(uint32_t a, uint16_t v) {
+    a &= kMask24;
+    if (isRom(a) || isRam(a)) {
+        write8(a, static_cast<uint8_t>(v >> 8));
+        write8(a + 1, static_cast<uint8_t>(v));
+        return;
+    }
+    Device dev = Device::Unmapped;
+    if (inWindow(a, kOtisBase, kOtisSize)) {
+        board_.otis().write(static_cast<uint8_t>((a >> 1) & 0xF), v);
+        dev = Device::Otis;
+    } else if (inWindow(a, kEspBase, kEspSize)) {
+        board_.esp().hostWrite(static_cast<uint8_t>((a >> 1) & 0xFF), static_cast<uint8_t>(v));
+        dev = Device::Esp;
+    } else if (inWindow(a, kDuartBase, kDuartSize)) {
+        duart_.write(static_cast<uint8_t>((a >> 1) & 0xF), static_cast<uint8_t>(v));
+        dev = Device::Duart;
+    }
+    trace(a, v, 2, true, dev);
+    updateIpl();
+}
+
+// DECISION K4: one voice slot = 16 CPU clocks, with the overshoot of the last instruction carried
+// into the next slot (a carry of 16 or more skips the CPU); then the OTIS slot, the DUART by an
+// exact rational X1 accumulator, the ESP and the IPL. Slot i of an n-slot frame.
+void Machine::slot(int i, int n) {
+    if (carry_ >= kSlotClocks) {
+        carry_ -= kSlotClocks;
+    } else {
+        const int want = kSlotClocks - carry_;
+        carry_ = cpu_.run(want) - want;
+    }
+    board_.otis().stepVoice();
+    duartAcc_ += static_cast<uint32_t>(kSlotClocks) * kDuartHz;
+    const uint32_t x1 = duartAcc_ / kCpuHz;
+    duartAcc_ %= kCpuHz;
+    if (x1) duart_.advance(x1);
+    // DECISION K5: while running the ESP advances once at frame end (runFrame, via Board::route);
+    // while halted slot i gets floor(89(i+1)/n) - floor(89 i/n) idle steps.
+    Esp& esp = board_.esp();
+    if (esp.halted()) {
+        const int a = std::min(i, n), b = std::min(i + 1, n);
+        const int idle = kEspSlotsPerFrame * b / n - kEspSlotsPerFrame * a / n;
+        for (int k = 0; k < idle; ++k) esp.idleStep();
+    }
+    updateIpl();
+}
+
+void Machine::runFrame(int16_t& mainL, int16_t& mainR) {
+    Otis& otis = board_.otis();
+    const int n = otis.activeVoices();  // N = ACT + 1; a CPU write to ACT mid-frame only moves the end
+    int i = 0;
+    do {
+        slot(i++, n);
+    } while (!otis.frameReady());
+    board_.route(otis.takeFrame(), mainL, mainR, board_.esp().halted() ? 0 : kEspSlotsPerFrame);
+}
+
+}  // namespace ens::ks32

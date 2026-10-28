@@ -1,0 +1,77 @@
+#pragma once
+// The KS-32 as a machine: the 68000, the MC68681 DUART and the OTIS/ESP board joined by the
+// provisional address map (K1), run slot by slot against the OTIS voice scan (K4). Pure emulation:
+// no file I/O (the caller reads the ROM files). Integer-only; state is bit-identical across builds.
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "duart/duart.h"
+#include "ks32/board.h"
+#include "m68k/m68k.h"
+
+namespace ens::ks32 {
+
+struct RomSet {  // file images, unmodified
+    std::vector<uint8_t> osUpper, osLower;  // 0x20000 and 0x10000 bytes
+    std::vector<uint8_t> u25, u26, rom2, rom3;
+};
+
+enum class Device : uint8_t { Otis, Esp, Duart, Unmapped, Iack };
+
+struct BusEvent {
+    uint64_t cycle;  // cpu.totalCycles() when the access is made
+    uint32_t addr;   // 24-bit address; Iack: the level
+    uint16_t value;  // value read or written; Iack: the vector answered
+    uint8_t size;    // 1 or 2
+    bool write;
+    Device dev;
+};
+
+constexpr uint32_t kCpuHz = 15'238'090, kDuartHz = 4'000'000;  // DECISION K3
+constexpr int kSlotClocks = 16;                                // DECISION K3, K4
+// DECISION K2: interrupt levels, 0 = not connected. Task 3 settles both.
+constexpr int kOtisIrqLevel = 0;
+constexpr int kDuartIrqLevel = 0;
+
+class Machine : public m68k::Bus {
+public:
+    // nullptr on a wrong size, with err naming the file ("OS upper", "OS lower", "u25", ...).
+    static std::unique_ptr<Machine> create(const RomSet& roms, std::string& err);
+    void runFrame(int16_t& mainL, int16_t& mainR);  // until OTIS latches the next frame
+    uint64_t cycles() const { return cpu_.totalCycles(); }  // CPU cycles since power-on
+    uint16_t peek16(uint32_t addr) const;  // ROM and RAM only, devices read 0, no side effects
+    std::function<void(const BusEvent&)> onBusEvent;  // the bus trace; off when empty
+    m68k::Cpu& cpu() { return cpu_; }
+    Board& board() { return board_; }
+    duart::Duart& duart() { return duart_; }
+
+    // m68k::Bus
+    uint8_t read8(uint32_t addr) override;
+    uint16_t read16(uint32_t addr) override;
+    void write8(uint32_t addr, uint8_t v) override;
+    void write16(uint32_t addr, uint16_t v) override;
+    int interruptAcknowledge(int level) override;
+    void resetPeripherals() override;
+
+private:
+    Machine(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1);
+    uint8_t romByte(uint32_t off) const;
+    uint8_t memByte(uint32_t a, bool& mapped) const;  // ROM and RAM
+    void trace(uint32_t addr, uint16_t value, uint8_t size, bool write, Device dev);
+    void updateIpl();
+    void slot(int i, int n);
+
+    Board board_;
+    duart::Duart duart_{kDuartHz};
+    m68k::Cpu cpu_{*this};
+    std::vector<uint8_t> osUpper_, osLower_;
+    std::vector<uint8_t> ram_ = std::vector<uint8_t>(0x10000, 0);
+    bool overlay_ = true;  // reads of 0-7 come from ROM until the first write there
+    int carry_ = 0;        // CPU cycles run past the end of the last slot
+    uint32_t duartAcc_ = 0;
+};
+
+}  // namespace ens::ks32

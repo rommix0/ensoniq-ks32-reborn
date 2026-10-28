@@ -14,13 +14,14 @@ void Board::espHostWrite(uint8_t addr, uint8_t v) {
     if (esp_.halted()) esp_.idleStep();
 }
 
-void Board::frame(int16_t& mainL, int16_t& mainR) {
-    const OtisFrame f = otis_.runFrame();
+void Board::route(const OtisFrame& f, int16_t& mainL, int16_t& mainR, int espSlots) {
     esp_.setSerialIn(0, f.ch[1][0], f.ch[1][1]);
     esp_.setSerialIn(1, f.ch[2][0], f.ch[2][1]);
     esp_.setSerialIn(2, f.ch[3][0], f.ch[3][1]);
-    esp_.advance(kEspSlotsPerFrame);
+    if (espSlots > 0) esp_.advance(espSlots);
     esp_.serialOut(3, mainL, mainR);
 }
+
+void Board::frame(int16_t& mainL, int16_t& mainR) { route(otis_.runFrame(), mainL, mainR, kEspSlotsPerFrame); }
 
 }  // namespace ens::ks32
