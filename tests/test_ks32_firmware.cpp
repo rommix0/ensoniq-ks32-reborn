@@ -105,13 +105,23 @@ TEST(ks32_firmware_boot_shows_play_screen) {
 
 namespace {
 
+// Press b, hold it holdMs, release it, then give the firmware 300 ms.
+void press(Machine& m, Button b, uint32_t holdMs = 100) {
+    m.button(b, true);
+    runMs(m, holdMs);
+    m.button(b, false);
+    runMs(m, 300);
+}
+
 // One machine past the battery warning for the button tests, which mutate it (one boot for all
-// of them, suite runtime). The warning is dismissed by a press and release of Select Sound
-// queued in the same slot; afterTap is the panel 600 ms later. Each test starts by pressing Select
-// Sound and leaves no prompt open, so the tests do not depend on their order.
+// of them, suite runtime). Two quick taps, each a press and release queued in the same slot, 600 ms
+// apart: Select Sound, which dismisses the warning (afterTap), then Replace Track Sound, which acts
+// on its release (afterReplace). Select Sound then leaves that mode. Each test starts by pressing
+// Select Sound and leaves no prompt open, so the tests do not depend on their order.
 struct PanelRig {
     std::unique_ptr<Machine> m;
-    PanelState afterTap;
+    PanelState afterTap, afterReplace;
+    uint32_t overruns = 0;  // channel B receive overruns over the two taps
 };
 
 PanelRig& panelKs32() {
@@ -124,18 +134,16 @@ PanelRig& panelKs32() {
         x.m->button(Button::SelectSound, false);
         runMs(*x.m, 600);
         x.afterTap = x.m->panel();
+        x.m->button(Button::ReplaceTrackSound, true);
+        x.m->button(Button::ReplaceTrackSound, false);
+        runMs(*x.m, 600);
+        x.afterReplace = x.m->panel();
+        x.overruns = x.m->duart().overruns(kPanelChannel);
+        press(*x.m, Button::SelectSound);
         return x;
     }();
     if (!r.m) std::printf("  skip: ROMs not found\n");
     return r;
-}
-
-// Press b, hold it holdMs, release it, then give the firmware 300 ms.
-void press(Machine& m, Button b, uint32_t holdMs = 100) {
-    m.button(b, true);
-    runMs(m, holdMs);
-    m.button(b, false);
-    runMs(m, 300);
 }
 
 // The display as one line: rows joined, upper case, runs of spaces collapsed.
@@ -208,11 +216,14 @@ TEST(ks32_firmware_analog_test_page) {
     CHECK(shown(r.m->panel()).find("ANALOG") == std::string::npos);
 }
 
-// A press and release queued in one slot does what a 100 ms press does: both dismiss the warning
-// to the same display and LEDs.
+// A press and release queued in one slot does what a 100 ms press does, with nothing lost to an
+// overrun: Select Sound (acts on the press) dismisses the warning, and Replace Track Sound (acts on
+// the release) opens its page, to the same display and LEDs. A lost release would leave the sound
+// screen after Replace Track Sound.
 TEST(ks32_firmware_quick_tap_is_seen) {
     PanelRig& r = panelKs32();
     if (!r.m) return;
+    CHECK_EQ(r.overruns, 0u);
     auto m = loadKs32();
     runMs(*m, kBootMs);
     m->button(Button::SelectSound, true);
@@ -223,4 +234,12 @@ TEST(ks32_firmware_quick_tap_is_seen) {
     CHECK(shown(r.afterTap).find("WARNING") == std::string::npos);
     CHECK(m->panel().rows == r.afterTap.rows);
     CHECK(m->panel().leds == r.afterTap.leds);
+    m->button(Button::ReplaceTrackSound, true);
+    runMs(*m, 100);
+    m->button(Button::ReplaceTrackSound, false);
+    runMs(*m, 500);
+    std::printf("  display: %s\n", shown(r.afterReplace).c_str());
+    CHECK(r.afterReplace.leds[14] == Led::Blink);
+    CHECK(m->panel().rows == r.afterReplace.rows);
+    CHECK(m->panel().leds == r.afterReplace.leds);
 }
