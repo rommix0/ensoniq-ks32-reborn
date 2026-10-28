@@ -258,7 +258,7 @@ case), on the test method, or on the board:
 The pass bar (design section 3, Plan 5 Step 6): the user is shown the suite totals, the benchmark
 and the smoke result above.
 
-User verdict: (pending — recorded by the controller)
+User verdict: accepted, 2026-10-28 ("Accept, finish").
 
 ## Reproduce
 
