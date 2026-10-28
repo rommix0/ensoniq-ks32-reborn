@@ -74,10 +74,10 @@ Entry template:
 
 ## O9: Unused/reserved bits
 - Options: (a) unused bits read 0; (b) unused bits read 1 where the bit table shows "1"; (c) return the last written value.
-- Choice: CR reads `0xF000 | cr[11:0]`; SERMODE reads `0x07F8 | bits[15:11,2:0]`; PAGE keeps 7 bits; unlisted registers (voice reg 12, filter-page regs 0 and 7-12, channel-page reg 9 PAR and above) read 0 and ignore writes. Bits outside a register's justification (FC bit 0, STRT-L/END-L [4:0], K1/K2 [3:0], LVOL/RVOL [7:0], ACCH [15:13]) are not stored and read 0.
+- Choice: CR reads `0xF000 | cr[11:0]`; SERMODE reads `0x07F8 | bits[15:11,2:0]`; PAGE keeps 7 bits; unlisted registers (voice reg 12, filter-page regs 0 and 7-12, channel-page regs 10 and above) read 0 and ignore writes. PAR (channel-page reg 9) reads the POT conversion given by `setPot(v10)` as `v10 << 6` ([15:6], bits 5:0 read 0) and ignores writes; it starts at 0 and `reset()` leaves it. Bits outside a register's justification (FC bit 0, STRT-L/END-L [4:0], K1/K2 [3:0], LVOL/RVOL [7:0], ACCH [15:13]) are not stored and read 0.
 - Evidence: OTIS notes §4.5 (bit table shows "1" in unused CR/SERMODE positions, "presumably read back as 1"), §4.2-§4.4 justifications.
 - Confidence: Medium.
-- Status: Implemented in src/otis/otis.cpp (Task 2). PAR (page 64+ reg 9) is not modelled and reads 0.
+- Status: Implemented in src/otis/otis.cpp (Task 2). PAR added in Plan 6 Task 6 (`Otis::setPot`, OTIS notes §4.9 "PAR"); the KS-32 drives it from its analog multiplexer (K8). Test: otis_par_reads_pot_value.
 
 ## O10: Reset state
 - Options: (a) everything 0; (b) documented bits only; (c) CR starts with the voice stopped.
@@ -746,7 +746,7 @@ Evidence cites the Motorola MC68681 data sheet (MC68681/D, Sep 1985, `datasheets
 
 ## KS-32 machine
 
-Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them provisionally; Task 3 settled K1-K3, K6, K9 and K14-K16 by running the OS ROM (v3.01), and Tasks 4 and 5 settled K7. The evidence for those is in `docs/ks32-hardware-interface.md`, one section per fact. K4 and K5 remain Task 2's choices.
+Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them provisionally; Task 3 settled K1-K3, K6, K9 and K14-K16 by running the OS ROM (v3.01), Tasks 4 and 5 settled K7, and Task 6 settled K8 and K13. The evidence for those is in `docs/ks32-hardware-interface.md`, one section per fact. K4 and K5 remain Task 2's choices.
 
 ## K1: Memory map
 - Options: (a) Task 2's map: 64 KB of RAM at 0xFF0000, mirrored at 0-0xFFFF only; (b) 64 KB mirrored over 0x000000-0x03FFFF and at 0xFF0000; (c) 128 KB or 256 KB at 0x000000-0x03FFFF. For the vectors: the ROM overlay of 0-7 ends at the first write into 0-7, or at the first access outside 0-7; or a RAM at 0x000000 separate from the one at 0xFF0000.
@@ -798,12 +798,26 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Confidence: High for the channel, the geometry, `87`, text, the LED numbering, "no handshake", the press and release forms and the codes marked High in the button table. Medium for `8C` blanking, on/off polarity, `90`/`91`, `88`/`89` and the codes marked Medium. Low for `8F` = blink and for the parameter counts of `85`, `86`, `93`, `94` and `95`. The effects of `80`, `81`, `83`, `92` and `98` are unknown.
 - Status: settled, Tasks 4 and 5; Record, Stop and Play remain open. `// DECISION K7` at `kPanelChannel` (`src/ks32/machine.h`), the panel calls in `Machine::slot` (`src/ks32/machine.cpp`), and `paramCount`, the cursor wrap, `Panel::button` and the out-of-range rule in `Panel::run` (`src/ks32/panel.cpp`). Tests: panel_* (`tests/test_ks32_panel.cpp`), ks32_firmware_boot_shows_play_screen, ks32_firmware_version_screen, ks32_firmware_release_ends_the_hold, ks32_firmware_reinit_prompt, ks32_firmware_analog_test_page, ks32_firmware_quick_tap_is_seen.
 
+## K8: Analog inputs
+- Options: the path of the sliders, wheels, CV pedal, pressure and battery: (a) the OTIS POT converter (PAR) behind a multiplexer selected by DUART output bits; (b) the DUART input port; (c) another mapped device. For (a), the conversion completes at once when the selection changes, or after the datasheet's 1.6 ms.
+- Choice: (a), at once. DUART OP3..OP0 select one of 16 inputs, and `Machine::updateLines` sets `Otis::setPot` to the selected input's raw value after every device access and every slot. Selects: 0 pitch wheel, 1 pressure, 2 mod wheel, 3 data entry, 4 CV pedal, 5 volume, 6 battery, 15 reference; 7-14 are never selected. `Machine::setAnalog(Analog, raw)` sets an input's raw 10-bit conversion, 0..0x3FF (masked).
+- Evidence: `docs/ks32-hardware-interface.md` "Analog inputs". Every 4 ms the firmware reads PAR (page 0x40, reg 9) and then writes OPR set = 0x0F and OPR reset = n; no other OPR write touches OP3..OP0. Setting one select to 0x3FF or 0 moves exactly one Analog Test reading. The DUART input port reads 0xFF throughout and no reading follows it; the page makes no other device or unmapped access. The firmware reads 4 ms after each select, so a 1.6 ms conversion cannot be told from an instant one.
+- Confidence: High for the path and the select table; Medium for "at once" (not observable).
+- Status: settled, Task 6. `// DECISION K8` at `kAnalogSelect` and `Machine::updateLines` (`src/ks32/machine.cpp`). Tests: otis_par_reads_pot_value, ks32_firmware_analog_resting_values, ks32_firmware_slider_extremes.
+
 ## K9: Wait states
 - Options: (a) none; (b) wait states on ROM, RAM or device accesses.
 - Choice: (a). Every bus cycle takes the 68000's 4 clocks.
 - Evidence: `docs/ks32-hardware-interface.md` "Wait states". No failure in the boot points to timing; the boot clock test, which times OTIS against the DUART, passes with none (design open item F).
 - Confidence: Medium (no evidence of wait states; a timing failure in a later task reopens it).
 - Status: settled, Task 3. Nothing to mark in the code: `Machine` adds no clocks to an access.
+
+## K13: Resting analog values
+- Options: for each input, the raw value that gives the plan's resting state (pitch wheel at centre, mod wheel 0, CV pedal unplugged, volume at maximum so headless renders are audible, data entry at mid, pressure 0, battery nominal); for the reference (select 15), which the manual does not give, any value.
+- Choice: `kAnalogRest` = pitch wheel 0x200, mod wheel 0x3FF, CV pedal 0, volume 0x3FF, data entry 0x16E, pressure 0, battery 0x298; reference 0x180 (`kReferenceRest`). They read PW=064, Mod=000, CV=127, Vol=127, Knob=127, Pressure=000, Bat=164 and Reference=095.
+- Evidence: `docs/ks32-hardware-interface.md` "Analog inputs". The battery reading is raw x 255 / 1023, and the boot warns below about 125 (raw 0x1E0 warns, 0x200 does not), the manual's lower bound (PDF p13: 125-205); 0x298 is the middle of the band. The pitch wheel's centre is its value at power-on, so any value reads 64; 0x200 leaves room both ways. Mod= is 0 from 0x300, Vol= 127 from about 0x2E8, Pressure= 0 up to 0x200. CV= reads 127 for raws below about 0xA0, apart from the pedal's travel (0 at 0xC0): the manual's unplugged reading (PDF p20). The reference changes nothing at or below 0x180; above it the firmware subtracts (reference - 0x180) from the other readings.
+- Confidence: High for the battery band and the readings; Low for the reference value (any of 0-0x180 behaves the same).
+- Status: settled, Task 6. `// DECISION K13` at `kAnalogRest` (`src/ks32/machine.h`), `kReferenceRest` and the `Machine` constructor (`src/ks32/machine.cpp`). Tests: ks32_firmware_cold_boot_is_clean, ks32_firmware_analog_resting_values, ks32_firmware_boot_shows_play_screen.
 
 ## K14: RESET instruction
 - Options: (a) reset every device; (b) the DUART only; (c) none.

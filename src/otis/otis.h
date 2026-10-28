@@ -29,6 +29,9 @@ public:
     bool irqAsserted() const;   // true = IRQ pin pulled low
     int activeVoices() const;   // ACT+1
     void setSerialIn(int16_t l, int16_t r);  // SER3 input when SERMODE.A/D=1 (latched into CH3L/R)
+    // DECISION O9: the POT pin's conversion, 10 bits; PAR (pages 64-127, reg 9) reads v10 << 6.
+    // The conversion is not timed: PAR follows at once (K8). reset() leaves it.
+    void setPot(uint16_t v10) { pot_ = v10 & 0x3FF; }
 
     // Voice scan. stepVoice() processes the next voice slot (0..ACT): wave fetches, address
     // update, IRQ, interpolation, 4-pole filter, volume and channel accumulation. After slot
@@ -78,6 +81,7 @@ private:
     Voice voice_[32];
     uint8_t act_;        // ACT [4:0]
     uint8_t page_;       // PAGE [6:0]
+    uint16_t pot_ = 0;   // PAR [9:0], the last POT conversion
     uint16_t sermodeBits_;  // SERMODE bits [15:11] and [2:0] only
     int32_t chAcc_[8];   // CH0L,CH0R..CH3L,CH3R: the channel registers (last latched / test value)
     int32_t chSum_[8];   // running 21-bit signed accumulators for the frame in progress

@@ -1,8 +1,10 @@
 // ks32emu: runs the emulated KS-32 (its OS ROM on the 68000 with the DUART and the OTIS/ESP board).
 //   ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] [--count <n>] [--last <n>]
-//                [--display-only] [--press <ms>:<name>[+<name>...]]...
+//                [--display-only] [--press <ms>:<name>[+<name>...]]... [--analog <name>=<raw>]...
 // --press presses the named buttons (kButtons names, e.g. EDIT_SEQ_PRESET, BANK9) in order at
 // <ms>, holds them 100 ms and releases them in reverse order; it may be repeated.
+// --analog sets an analog input (PITCH_WHEEL, MOD_WHEEL, CV_PEDAL, VOLUME, DATA_ENTRY, PRESSURE,
+// BATTERY) to a raw 10-bit conversion, 0..1023 (decimal), from power-on; it may be repeated.
 // The panel display is printed as "<ms> |<row>|" lines each time it changes (bytes outside
 // 0x20-0x7E as \xNN), the LEDs as "<ms> LEDs ..." each time they change; --display-only leaves
 // out the summary.
@@ -38,6 +40,13 @@ struct Options {
     uint32_t last = 0;
     bool displayOnly = false;
     std::vector<std::pair<uint64_t, std::vector<Button>>> presses;  // --press: ms, buttons
+    std::vector<std::pair<Analog, uint16_t>> analogs;                // --analog: input, raw
+};
+
+constexpr std::pair<Analog, const char*> kAnalogNames[] = {
+    {Analog::PitchWheel, "PITCH_WHEEL"}, {Analog::ModWheel, "MOD_WHEEL"}, {Analog::CvPedal, "CV_PEDAL"},
+    {Analog::Volume, "VOLUME"}, {Analog::DataEntry, "DATA_ENTRY"}, {Analog::Pressure, "PRESSURE"},
+    {Analog::Battery, "BATTERY"},
 };
 
 uint64_t parseNum(const std::string& opt, const std::string& v) {
@@ -65,6 +74,17 @@ std::pair<uint64_t, std::vector<Button>> parsePress(const std::string& v) {
     return p;
 }
 
+// "<name>=<raw>"
+std::pair<Analog, uint16_t> parseAnalog(const std::string& v) {
+    const size_t eq = v.find('=');
+    if (eq == std::string::npos) fail("bad value '" + v + "' for --analog (<name>=<raw>)");
+    const uint64_t raw = parseNum("--analog", v.substr(eq + 1));
+    if (raw > 0x3FF) fail("raw value " + v.substr(eq + 1) + " for --analog is over 1023");
+    for (const auto& [a, name] : kAnalogNames)
+        if (v.compare(0, eq, name) == 0) return {a, static_cast<uint16_t>(raw)};
+    fail("unknown analog input '" + v.substr(0, eq) + "' for --analog");
+}
+
 Options parseOptions(int argc, char** argv) {
     Options o;
     for (int i = 2; i < argc; ++i) {
@@ -83,6 +103,7 @@ Options parseOptions(int argc, char** argv) {
         else if (a == "--count") o.count = parseNum(a, v);
         else if (a == "--last") o.last = static_cast<uint32_t>(parseNum(a, v));
         else if (a == "--press") o.presses.push_back(parsePress(v));
+        else if (a == "--analog") o.analogs.push_back(parseAnalog(v));
         else fail("unknown option " + a);
     }
     return o;
@@ -172,6 +193,7 @@ int boot(const Options& o) {
     std::string err;
     auto m = Machine::create(roms, err);
     if (!m) fail(err);
+    for (const auto& [a, raw] : o.analogs) m->setAnalog(a, raw);
 
     std::set<uint32_t> unmapped;
     std::map<int, uint8_t> duartLast;  // register -> last value written
@@ -276,7 +298,8 @@ int main(int argc, char** argv) {
     try {
         if (argc < 2 || std::string(argv[1]) != "boot")
             fail("usage: ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] "
-                 "[--count <n>] [--last <n>] [--display-only] [--press <ms>:<name>[+<name>...]]...");
+                 "[--count <n>] [--last <n>] [--display-only] [--press <ms>:<name>[+<name>...]]... "
+                 "[--analog <name>=<raw>]...");
         return boot(parseOptions(argc, argv));
     } catch (const Failure& f) {
         std::fprintf(stderr, "error: %s\n", f.msg.c_str());

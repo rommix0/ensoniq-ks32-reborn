@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <initializer_list>
 #include <memory>
 #include <string>
@@ -15,12 +16,40 @@ using namespace ens::ks32;
 
 namespace {
 
-// One machine booted for kBootMs, shared by the tests that only read its state (suite runtime);
-// nullptr without the ROMs.
+// The display as one line: rows joined, upper case, runs of spaces collapsed.
+std::string shown(const PanelState& p) {
+    std::string s;
+    for (const std::string& row : p.rows)
+        for (const char c : row + " ") {
+            const char u = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (u != ' ' || (!s.empty() && s.back() != ' ')) s += u;
+        }
+    return s;
+}
+
+// What the display showed at any frame of the shared boot.
+struct BootSeen {
+    bool lowBattery = false;       // "LOW" together with "BATTERY"
+    bool unexpectedEvent = false;  // "Unexpected Event ID = n" (service manual PDF p11)
+};
+BootSeen bootSeen;
+
+// One machine booted from blank RAM for kBootMs with the K13 resting analog values, shared by
+// the tests that only read its state (suite runtime); nullptr without the ROMs. The display is
+// polled after every frame (bootSeen).
 Machine* bootedKs32() {
     static const std::unique_ptr<Machine> m = [] {
         auto b = loadKs32();
-        if (b) runMs(*b, kBootMs);
+        if (!b) return b;
+        const uint64_t frames = static_cast<uint64_t>(kBootMs) * kWavRate / 1000;
+        int16_t l, r;
+        for (uint64_t f = 0; f < frames; ++f) {
+            b->runFrame(l, r);
+            const std::string s = shown(b->panel());
+            if (s.find("LOW") != std::string::npos && s.find("BATTERY") != std::string::npos)
+                bootSeen.lowBattery = true;
+            if (s.find("EVENT") != std::string::npos) bootSeen.unexpectedEvent = true;
+        }
         return b;
     }();
     if (!m) std::printf("  skip: ROMs not found\n");
@@ -28,6 +57,13 @@ Machine* bootedKs32() {
 }
 
 }  // namespace
+
+TEST(ks32_firmware_cold_boot_is_clean) {
+    Machine* m = bootedKs32();
+    if (!m) return;
+    CHECK(!bootSeen.lowBattery);
+    CHECK(!bootSeen.unexpectedEvent);
+}
 
 // The boot clock test leaves OTIS at 32 voices with the K3 clocks (design 10 A).
 TEST(ks32_firmware_boot_keeps_32_voices) {
@@ -85,20 +121,19 @@ TEST(ks32_firmware_boot_is_deterministic) {
     CHECK_EQ(traceHash(*a, kBootMs), traceHash(*b, kBootMs));
 }
 
-// The steady display the boot reaches without a button press. With no analog inputs yet (Task 6)
-// it is the low-battery warning (service manual PDF p12: "WARNING! Battery low. See manual.",
-// then "Press any button to continue"), not the play screen. The boot sends no LED command.
-// Task 6 updates this pin when the warning goes away.
+// The steady display the boot reaches without a button press. With the K13 resting values (battery
+// nominal) it is the play screen: Select Sound mode on ROM sound 00, with only the Select Sound LED
+// (8) lit. Below a battery reading of about 125 the boot ends on the low-battery warning instead.
 TEST(ks32_firmware_boot_shows_play_screen) {
     Machine* m = bootedKs32();
     if (!m) return;
     const PanelState& p = m->panel();
     CHECK_EQ(p.rows.size(), 2u);
     if (p.rows.size() == 2) {
-        CHECK(p.rows[0] == "WARNING! Battery");
-        CHECK(p.rows[1] == "low. See manual.");
+        CHECK(p.rows[0] == "ROM   00        ");
+        CHECK(p.rows[1] == " KS Grand Piano ");
     }
-    for (Led l : p.leds) CHECK(l == Led::Off);
+    for (int i = 0; i < kPanelLeds; ++i) CHECK(p.leds[i] == (i == 8 ? Led::On : Led::Off));
     CHECK_EQ(p.blink, 0u);
     CHECK_EQ(p.unknown, 0u);  // every byte the boot sends is in the decoded table (K7)
 }
@@ -113,11 +148,11 @@ void press(Machine& m, Button b, uint32_t holdMs = 100) {
     runMs(m, 300);
 }
 
-// One machine past the battery warning for the button tests, which mutate it (one boot for all
-// of them, suite runtime). Two quick taps, each a press and release queued in the same slot, 600 ms
-// apart: Select Sound, which dismisses the warning (afterTap), then Replace Track Sound, which acts
-// on its release (afterReplace). Select Sound then leaves that mode. Each test starts by pressing
-// Select Sound and leaves no prompt open, so the tests do not depend on their order.
+// One booted machine for the button tests, which mutate it (one boot for all of them, suite
+// runtime). Two quick taps, each a press and release queued in the same slot, 600 ms apart:
+// Up/Yes, which acts on the press and steps ROM 00 to ROM 01 (afterTap), then Replace Track Sound,
+// which acts on its release (afterReplace). Select Sound then leaves that mode. Each test starts by
+// pressing Select Sound and leaves no prompt open, so the tests do not depend on their order.
 struct PanelRig {
     std::unique_ptr<Machine> m;
     PanelState afterTap, afterReplace;
@@ -130,8 +165,8 @@ PanelRig& panelKs32() {
         x.m = loadKs32();
         if (!x.m) return x;
         runMs(*x.m, kBootMs);
-        x.m->button(Button::SelectSound, true);
-        x.m->button(Button::SelectSound, false);
+        x.m->button(Button::UpYes, true);
+        x.m->button(Button::UpYes, false);
         runMs(*x.m, 600);
         x.afterTap = x.m->panel();
         x.m->button(Button::ReplaceTrackSound, true);
@@ -144,17 +179,6 @@ PanelRig& panelKs32() {
     }();
     if (!r.m) std::printf("  skip: ROMs not found\n");
     return r;
-}
-
-// The display as one line: rows joined, upper case, runs of spaces collapsed.
-std::string shown(const PanelState& p) {
-    std::string s;
-    for (const std::string& row : p.rows)
-        for (const char c : row + " ") {
-            const char u = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            if (u != ' ' || (!s.empty() && s.back() != ' ')) s += u;
-        }
-    return s;
 }
 
 // Service manual PDF p5: "Press Edit Seq/Preset. While holding down Bank 9, press Screen 1"
@@ -217,7 +241,7 @@ TEST(ks32_firmware_analog_test_page) {
 }
 
 // A press and release queued in one slot does what a 100 ms press does, with nothing lost to an
-// overrun: Select Sound (acts on the press) dismisses the warning, and Replace Track Sound (acts on
+// overrun: Up/Yes (acts on the press) steps ROM 00 to ROM 01, and Replace Track Sound (acts on
 // the release) opens its page, to the same display and LEDs. A lost release would leave the sound
 // screen after Replace Track Sound.
 TEST(ks32_firmware_quick_tap_is_seen) {
@@ -226,12 +250,12 @@ TEST(ks32_firmware_quick_tap_is_seen) {
     CHECK_EQ(r.overruns, 0u);
     auto m = loadKs32();
     runMs(*m, kBootMs);
-    m->button(Button::SelectSound, true);
+    m->button(Button::UpYes, true);
     runMs(*m, 100);
-    m->button(Button::SelectSound, false);
+    m->button(Button::UpYes, false);
     runMs(*m, 500);
     std::printf("  display: %s\n", shown(r.afterTap).c_str());
-    CHECK(shown(r.afterTap).find("WARNING") == std::string::npos);
+    CHECK(shown(r.afterTap).find("ROM 01") != std::string::npos);
     CHECK(m->panel().rows == r.afterTap.rows);
     CHECK(m->panel().leds == r.afterTap.leds);
     m->button(Button::ReplaceTrackSound, true);
@@ -242,4 +266,65 @@ TEST(ks32_firmware_quick_tap_is_seen) {
     CHECK(r.afterReplace.leds[14] == Led::Blink);
     CHECK(m->panel().rows == r.afterReplace.rows);
     CHECK(m->panel().leds == r.afterReplace.leds);
+}
+
+namespace {
+
+// The number after "<name>=" on the display, -1 when absent.
+int reading(const PanelState& p, const char* name) {
+    const std::string s = shown(p), key = std::string(name) + "=";
+    const size_t at = s.find(key);
+    return at == std::string::npos ? -1 : std::atoi(s.c_str() + at + key.size());
+}
+
+// Presses an Analog Test screen button (Screen 0-4) and returns the display.
+const PanelState& analogScreen(Machine& m, Button screen) {
+    press(m, screen);
+    return m.panel();
+}
+
+}  // namespace
+
+// Service manual PDF p13, p20 and p21 (manual pp. 10, 17 and 18): with the K13 resting values
+// the battery reads inside its 125-205 band, the unplugged CV pedal 127 and the pressure with no
+// key pressed 0. The other rests: pitch wheel centred (64), mod wheel 0, volume at maximum (127).
+TEST(ks32_firmware_analog_resting_values) {
+    PanelRig& r = panelKs32();
+    if (!r.m) return;
+    Machine& m = *r.m;
+    std::printf("  screen 0: %s\n", serviceScreen(m, Button::Screen0).c_str());
+    CHECK_EQ(reading(m.panel(), "PW"), 64);
+    CHECK_EQ(reading(m.panel(), "MOD"), 0);
+    std::printf("  screen 1: %s\n", shown(analogScreen(m, Button::Screen1)).c_str());
+    CHECK_EQ(reading(m.panel(), "CV"), 127);
+    CHECK_EQ(reading(m.panel(), "VOL"), 127);
+    std::printf("  screen 2: %s\n", shown(analogScreen(m, Button::Screen2)).c_str());
+    const int bat = reading(m.panel(), "BAT");
+    CHECK(bat >= 125 && bat <= 205);
+    std::printf("  screen 4: %s\n", shown(analogScreen(m, Button::Screen4)).c_str());
+    CHECK_EQ(reading(m.panel(), "PRESSURE"), 0);
+    press(m, Button::Screen5);  // leaves the page (PDF p21)
+}
+
+// The two sliders at both ends of the converter's range read the ends of the manual's table
+// (PDF p20, rendered: Vol= 0-127, Knob= 0-255). The firmware smooths the readings, so each
+// setting runs 1.5 s before it is read.
+TEST(ks32_firmware_slider_extremes) {
+    PanelRig& r = panelKs32();
+    if (!r.m) return;
+    Machine& m = *r.m;
+    serviceScreen(m, Button::Screen0);
+    for (const uint16_t raw : {uint16_t{0}, uint16_t{0x3FF}}) {
+        m.setAnalog(Analog::Volume, raw);
+        m.setAnalog(Analog::DataEntry, raw);
+        runMs(m, 1500);
+        const int vol = reading(analogScreen(m, Button::Screen1), "VOL");
+        const int knob = reading(analogScreen(m, Button::Screen2), "KNOB");
+        std::printf("  raw 0x%03X: vol=%d knob=%d\n", raw, vol, knob);
+        CHECK_EQ(vol, raw ? 127 : 0);
+        CHECK_EQ(knob, raw ? 255 : 0);
+    }
+    m.setAnalog(Analog::Volume, kAnalogRest[static_cast<int>(Analog::Volume)]);
+    m.setAnalog(Analog::DataEntry, kAnalogRest[static_cast<int>(Analog::DataEntry)]);
+    press(m, Button::Screen5);
 }

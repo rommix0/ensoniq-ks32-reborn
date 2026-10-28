@@ -25,7 +25,12 @@ decision entry in `docs/decisions.md`.
   stack pointer is the same at 2.9 s and at 10 s.
 - The steady state is the low-battery warning on the panel display, which waits for a button
   ("Press any button to continue", service manual PDF p12). See "Front panel: display and LEDs".
-- `kBootMs` = 2900, which is 1917 ms plus 50 %, rounded up.
+- `kBootMs` was 2900, which is 1917 ms plus 50 %, rounded up.
+
+**Task 6 update.** With the analog inputs at their K13 resting values (battery nominal) the boot
+ends on the play screen instead (see "Analog inputs"). The last panel byte is written at 2121 ms
+and nothing is sent in the 10 s after it. The last new kind of device access comes at 1997 ms.
+`kBootMs` = 3200, which is 2121 ms plus 50 %, rounded up.
 
 ## Memory map (K1)
 
@@ -206,11 +211,13 @@ never applies.
   at start-up.
 - Bytes 0x00–0x7F are characters. Bytes 0x80 and up are commands, some with parameter bytes
   (table below).
-- **Steady state at `kBootMs`:** the low-battery warning, row 0 `WARNING! Battery` and row 1
-  `low. See manual.` (the service manual's wording, PDF p12). No LED command has been sent, so
-  every LED is off, and nothing is marked blinking. The warning waits for a button ("Press any
-  button to continue"); it is not timed, and 10 s of boot send nothing after it. Task 6 removes
-  it with the battery input. `ks32_firmware_boot_shows_play_screen` pins this state.
+- **Steady state at `kBootMs`** (Task 6): the play screen, row 0 `ROM   00        ` and row 1
+  ` KS Grand Piano `. LED 8 (Select Sound) is on and the others are off. Nothing is marked
+  blinking. `ks32_firmware_boot_shows_play_screen` pins this state.
+- **Before Task 6** the battery read 0 and the boot ended on the low-battery warning, row 0
+  `WARNING! Battery` and row 1 `low. See manual.` (the service manual's wording, PDF p12), with
+  every LED off. The warning waits for a button ("Press any button to continue"); it is not
+  timed. A low battery input still gives it, for example `ks32emu boot --analog BATTERY=480`.
 
 **Command table.** "Effect" is what `Panel` does. "None" means the panel takes the parameter
 bytes and changes nothing it models.
@@ -300,7 +307,8 @@ numbers. High that there is no handshake. Medium to Low for the rest, per row ab
     pressed and released first, Screen 1 does nothing on the "Store Sequences" page.
   - The firmware sees both bytes of a quick tap. A press and a release queued in the same slot
     reach it at the line rate. They dismiss the battery warning to the same screen and LEDs as a
-    100 ms press.
+    100 ms press. Since Task 6 the boot ends on the play screen, so the test taps Up/Yes instead
+    (ROM 00 to ROM 01), with the same result.
 - **The mode button is released first.** The manual says "Press Edit Seq/Preset. While holding
   down Bank 9, press Screen 1".
   - The combination works only when Edit Seq/Preset is released before Bank 9 is pressed.
@@ -376,7 +384,7 @@ Confidence: High for the tracks and for LEDs 0, 1, 7, 8 and 9; Medium for 6 and 
 - **A second byte other than `00`** after a press byte does nothing. Task 4's sweeps covered
   press bytes 0x80, 0x81, 0xC0 and 0xFF. Here, every second byte 0x01–0xFF was sent after each
   code that does nothing, from the sound screen.
-- **The sliders and wheels** are Task 6.
+- **The sliders and wheels** are in "Analog inputs".
 
 **How it was found.** A scratch harness, not committed, booted the machine and put bytes on RxB
 2 ms apart. It printed the display rows and LEDs, the bytes sent and instruction counts. The
@@ -404,9 +412,103 @@ firmware was run, never studied.
   esq5505 driver: press `code | 0x80, 00`, release `code & 0x7F, 00`.
 - That recollection was not checked against MAME. The evidence above settles the form.
 
+## Analog inputs (K8, K13)
+
+**Fact.**
+- The analog inputs reach the OTIS POT pin through a multiplexer selected by DUART OP3..OP0.
+  The pin feeds OTIS's 10-bit converter, read as PAR (page 64 and up, register 9, value in
+  [15:6]).
+- Every 4 ms the firmware does three things:
+  - it reads PAR;
+  - it writes OPR set = 0x0F, which drives OP3..OP0 low;
+  - it writes OPR reset = n, so that OP3..OP0 = n.
+
+  The next read, 4 ms later, takes input n.
+- No other OPR write touches OP3..OP0. The others drive OP6 (ESPHALT, K15) and OP7 (pulsed at
+  565 and 598 ms, around the panel set-up).
+- **The select table.** It was found by setting one select to 0x3FF or 0, with the others at
+  0x100, and watching which Analog Test reading moved. "Screen" is the Analog Test screen that
+  shows the reading. The last column holds with the reference at or below 0x180.
+
+  | Select | Input | Reading (screen) | Raw to reading |
+  |---|---|---|---|
+  | 0 | Pitch wheel | PW= (0) | Inverted, centred on its value at power-on: 64 there, 0 from about 0x140 above it, 127 from about 0x140 below it |
+  | 1 | Pressure | Pressure= (4) | 0 up to 0x200, 50 at 0x280, 101 at 0x300, 127 from 0x380 |
+  | 2 | Mod wheel | Mod= (0) | Inverted: 127 up to about 0x30, 86 at 0x100, 36 at 0x200, 0 from 0x300 |
+  | 3 | Data entry slider | Knob= (2) | 0 at 0, about 0.35 per raw step, 255 from about 0x2E0. Steps of 0x10 or less do not move the display |
+  | 4 | CV pedal | CV= (1) | 127 below about 0xA0 (unplugged), 0 at 0xC0-0x100, 40 at 0x180, 82 at 0x200, 127 from 0x300 |
+  | 5 | Volume slider | Vol= (1) | 0 at 0, about 0.17 per raw step, 127 from about 0x2E8 |
+  | 6 | Battery | Bat= (2) | raw x 255 / 1023: 125 at 0x1F8, 165 at 0x298, 205 at 0x338 |
+  | 7-14 | None | None | Never selected |
+  | 15 | Reference | Reference= (3) | raw / 4 |
+
+- **The reference.** Above 0x180, the firmware subtracts (reference - 0x180) from selects 1-6
+  before scaling. Bat= then wraps below 0. At or below 0x180 it subtracts nothing.
+- **When each input is read.**
+  - Boot: the reference at 633 ms, then the pitch wheel 8 times from 955 ms, between two reads
+    of the reference. Then the cycle 0 2 3 1 0 5 4 (28 ms).
+  - The battery is read once in the boot, at 1657 ms. Below a reading of about 125 the warning
+    follows at 1884 ms: raw 0x1E0 warns, 0x200 does not.
+  - Play screen: the same cycle, with the reference now and then.
+  - Analog Test page: 0 5 4 F 6 0 2 3 1 (36 ms).
+- **Smoothing.** The firmware filters the readings. After a step, the battery reading takes about
+  1 s to settle, and the display is redrawn about every 120 ms.
+- **Pitch-wheel centre.** The centre is the wheel's value at power-on. Booted at 0x100, PW= reads
+  64 at 0x100; booted at 0x300, it reads 64 at 0x300.
+- **Ranges.** `Machine::setAnalog(Analog, raw)` takes the raw conversion, 0..0x3FF (masked).
+- **Slider ends.** They match the manual's table (PDF p20). Its text extraction is garbled, so
+  the page was rendered as an image. Vol= reads 0 at raw 0 and 127 at 0x3FF. Knob= reads 0 at
+  raw 0 and 255 at 0x3FF.
+- **Not part of the path.** The DUART input port (register 13) is read regularly (58 times in the
+  boot) and reads 0xFF. No reading follows it.
+
+**Resting values (K13).** `kAnalogRest` (`src/ks32/machine.h`) holds them. The reference's value
+is `kReferenceRest` (`src/ks32/machine.cpp`).
+
+| Input | Raw | Reading | Basis |
+|---|---|---|---|
+| Pitch wheel | 0x200 | PW=064 | Centred: any value reads 64 when it is the power-on value. 0x200 is the converter's middle and leaves room both ways |
+| Mod wheel | 0x3FF | Mod=000 | Mod wheel down. Mod= is 0 from 0x300 |
+| CV pedal | 0x000 | CV=127 | Unplugged: "Unplug the CV pedal and verify that CV=127" (PDF p20). Raws below about 0xA0 read 127, apart from the pedal's travel |
+| Volume | 0x3FF | Vol=127 | Maximum, so headless renders are audible |
+| Data entry | 0x16E | Knob=127 | Mid of 0-255 |
+| Pressure | 0x000 | Pressure=000 | No key pressed (PDF p21) |
+| Battery | 0x298 | Bat=164 | Middle of 125-205 (PDF p13). Set after the boot, 0x298 settles at 165. From power-on the filter stops at 164 |
+| Reference (select 15) | 0x180 | Reference=095 | Every value from 0 to 0x180 gives the same readings (0, 0x100, 0x170, 0x17C and 0x180 tried). 0x180 is the highest of them. The manual gives no Reference= value |
+
+**How it was found.** Scratch harnesses, not committed, did the following:
+- traced the OTIS and DUART accesses on the Analog Test page (PAR reads and OPR writes, with
+  times);
+- listed the select sequence in the boot, on the play screen and on the page;
+- made each select drive PAR at once (K8);
+- moved one select at a time: to 0x3FF and to 0 for the table, then up and down in 0x40 steps;
+- read settled displays (2.5 s each) on a grid of reference values (0x080-0x3FF) by common raw
+  values (0-0x3FF);
+- booted with the battery from 0x100 to 0x3E0 in 0x20 steps and recorded whether the warning
+  appeared;
+- booted with the pitch wheel at 0x100, 0x200 and 0x300.
+
+**Alternatives.** The DUART input port reads 0xFF throughout and no reading follows it. No other
+device access and no unmapped access appears on the page.
+
+**Conversion timing (K8).** The datasheet's 1.6 ms conversion is not modelled: PAR follows the
+selected input at once. The firmware reads 4 ms after each select, so the timing cannot show.
+
+**Confidence.** High for the path and the select table. Medium for the raw-to-reading mappings,
+which were read off settled displays. Low for the reference's resting value.
+
+**Tests.** otis_par_reads_pot_value, ks32_firmware_cold_boot_is_clean,
+ks32_firmware_analog_resting_values, ks32_firmware_slider_extremes and
+ks32_firmware_boot_shows_play_screen.
+
+**MAME.** Not compared. The Task 6 implementer recalls, without checking, that MAME's esq5505
+driver feeds the OTIS pot input from a table indexed by DUART output bits. The evidence above
+settles the path.
+
 ## Line-A and TRAP use
 
-The firmware uses line-A opcodes and TRAPs as calls. Counts up to `kBootMs` (2900 ms):
+The firmware uses line-A opcodes and TRAPs as calls. Counts up to 2900 ms of Task 3's boot, which
+ended on the battery warning:
 
 - vector 10 (line A): 5236;
 - TRAP #2 to #12 (vectors 34–44): 292, 10, 302, 0, 17, 2380, 436, 13, 18, 1, 69.

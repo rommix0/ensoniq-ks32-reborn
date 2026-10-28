@@ -21,6 +21,14 @@ bool isRom(uint32_t a) { return a >= kRomBase && a < kRomBase + kRomSize; }
 // DECISION K1: 64 KB RAM, A16/A17 not decoded: mirrored four times over 0-0x3FFFF and at 0xFF0000.
 bool isRam(uint32_t a) { return a >= kRamTop || a < 0x40000; }
 
+// DECISION K8: the mux select (DUART OP3..OP0) of each Analog, found by setting one select to a
+// distinctive value and watching which Analog Test reading moves.
+constexpr uint8_t kAnalogSelect[] = {0, 2, 4, 5, 3, 1, 6};  // by Analog
+// DECISION K13: select 0x0F, the reference. The firmware subtracts (reference - 0x180) from the
+// slider, wheel, pedal, pressure and battery readings when the reference is above 0x180, and
+// nothing at or below it; 0x180 is the highest value that needs no correction.
+constexpr uint16_t kReferenceRest = 0x180;
+
 bool sizeOk(const std::vector<uint8_t>& v, size_t want, const char* name, std::string& err) {
     if (v.size() == want) return true;
     err = std::string(name) + ": expected " + std::to_string(want) + " bytes, got " +
@@ -33,6 +41,13 @@ bool sizeOk(const std::vector<uint8_t>& v, size_t want, const char* name, std::s
 Machine::Machine(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1)
     : board_(std::move(bank0), std::move(bank1)) {
     for (int pin = 2; pin <= 5; ++pin) duart_.setExternalClock(pin, kSerialClockHz);  // DECISION K3, K16
+    for (int a = 0; a < 7; ++a) mux_[kAnalogSelect[a]] = kAnalogRest[a];  // DECISION K13
+    mux_[0x0F] = kReferenceRest;
+}
+
+void Machine::setAnalog(Analog a, uint16_t raw) {
+    mux_[kAnalogSelect[static_cast<int>(a)]] = raw & 0x3FF;
+    updateLines();
 }
 
 std::unique_ptr<Machine> Machine::create(const RomSet& roms, std::string& err) {
@@ -83,12 +98,14 @@ void Machine::trace(uint32_t addr, uint16_t value, uint8_t size, bool write, Dev
 
 // DECISION K2: the IPL is the highest level of the asserting devices.
 // DECISION K15: DUART OP6 is ESPHALT, active high (the pin is high while OPR bit 6 is 0).
+// DECISION K8: OP3..OP0 select the mux input on the OTIS POT pin; the conversion is at once.
 void Machine::updateLines() {
     int level = 0;
     if (board_.otis().irqAsserted()) level = std::max(level, kOtisIrqLevel);
     if (duart_.irq()) level = std::max(level, kDuartIrqLevel);
     cpu_.setIpl(level);
     board_.esp().setHaltPin((duart_.outputPins() & 0x40) != 0);
+    board_.otis().setPot(mux_[duart_.outputPins() & 0x0F]);
 }
 
 int Machine::interruptAcknowledge(int level) {
