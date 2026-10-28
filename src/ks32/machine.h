@@ -68,7 +68,7 @@ public:
     Machine(const Machine&) = delete;  // cpu_ holds a Bus& to *this
     Machine& operator=(const Machine&) = delete;
     void runFrame(int16_t& mainL, int16_t& mainR);  // until OTIS latches the next frame
-    uint64_t cycles() const { return cpu_.totalCycles(); }  // CPU cycles since power-on
+    uint64_t cycles() const { return cpu_.totalCycles(); }  // CPU cycles since the machine was created
     uint16_t peek16(uint32_t addr) const;  // ROM and RAM only, devices read 0, no side effects
     std::function<void(const BusEvent&)> onBusEvent;  // the bus trace; off when empty
     m68k::Cpu& cpu() { return cpu_; }
@@ -77,7 +77,8 @@ public:
     const PanelState& panel() const { return panel_.state(); }
     void button(Button b, bool down) { panel_.button(b, down); }  // reaches RxDB from the next slot
     // A key of the local keyboard, note 28-103 (K12): it rides the panel link like a button.
-    void key(int note, bool down, uint8_t velocity) { panel_.key(note, down, velocity); }
+    // `strike` is the keyboard's strike value, not a MIDI velocity (strike 64 sounds at 20).
+    void key(int note, bool down, uint8_t strike) { panel_.key(note, down, strike); }
     void setAnalog(Analog a, uint16_t raw);  // raw 0..0x3FF (masked); PAR follows at once (K8)
     // A byte on MIDI in: it joins the channel's receive queue and enters at the line rate (D2).
     void midiIn(uint8_t byte) { duart_.receive(kMidiChannel, byte); }

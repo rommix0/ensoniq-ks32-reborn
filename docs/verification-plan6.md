@@ -2,7 +2,7 @@
 
 Closing check of Plan 6 (the emulated KS-32, `ks32emu`, running the user's OS ROM v3.01): the test suite on both toolchains, the speed of the machine, cross-toolchain identity of the firmware runs, the answer to each open item of the design (section 10, A to F), the decisions with their confidences, every judgment call in one place, the controls for which no code was found, and what is left open. The user's acceptance is recorded in the last section.
 
-The facts and how each was found are in `docs/ks32-hardware-interface.md`. The decisions are in `docs/decisions.md` (`## DUART`, D1 to D6, and `## KS-32 machine`, K1 to K16). The usage is in `docs/ks32emu.md`.
+The facts and how each was found are in `docs/ks32-hardware-interface.md`. The decisions are in `docs/decisions.md` (`## DUART`, D1 to D7, and `## KS-32 machine`, K1 to K16). The usage is in `docs/ks32emu.md`.
 
 ## Test counts
 
@@ -162,6 +162,7 @@ From the ledger (`.superpowers/sdd/2026-10-28-ks32-machine/progress.md`), each w
 - **MIDI out** from the firmware is counted and not forwarded.
 - **Voice Muting** (ON by default) mutes a note that arrives within about 30 ms of a program change. This is the firmware's behaviour. A sequencer or a player that sends a program change and a note together hears this.
 - **The RAM image** after about 6 short power-ons reinitializes; the emulator does not protect against that.
+- **Allocation in the run loop.** `Machine::runFrame` and `midiIn` allocate (the DUART and Panel take-by-swap vectors, the deque pending queue, and an unbounded pending queue); make them allocation-free and bound the queue as Plan 7's first task (final-review Important 1, ruling F-1).
 - **Deferred review items.** Listed under "Deferred review items" below, because the ledger they came from is deleted when the plan finishes.
 - **Nothing here was compared with MAME.** Every value that mentions MAME is a recollection, marked as unchecked.
 - **The ROM was not studied.** By the user's ruling of 2026-10-23, the OS was run and its behaviour read from traces, never disassembled. So every "why" in the hardware document is an inference from behaviour.
@@ -171,60 +172,60 @@ From the ledger (`.superpowers/sdd/2026-10-28-ks32-machine/progress.md`), each w
 Every minor item that the task reviews deferred, by task, one line each. "Behavioural" means it can change what the emulator does; the rest are comments, documents and tests. Items that were carried into a later task and fixed there are not listed (Task 2: non-copyable `Machine`, the DUART summary's even-byte filter and the K5 idle-spread test, commit b4c2cca; Task 4: the 93 glyph bytes in the panel test and the K7 marker at the out-of-range rule).
 
 **Task 1 (DUART)**
-- The reset comment and D4 say the C/T is in timer mode, but ACR = 0 is counter mode (`duart.cpp:22-31`). Text.
-- CR "reset receiver" clears the overrun flag, where the data sheet (4.2.7.2) says the other registers are unaltered (`duart.cpp:341`). Behavioural, a model detail. The firmware resets the receivers during start-up with nothing pending, and no run counted a receive overrun.
-- A rate change in the middle of a character can underflow `ticksLeft` and wedge the shifter (`duart.cpp:71-85`). **Behavioural, but OS v3.01 does not reach it in the runs traced.** The rate (`tick16`) changes only when CSR, ACR[7] or, for a timer clock, the C/T preload changes while a character is in flight. Traced for the boot and then 12 s with eight button presses (Select Sound, Edit Sound, System/MIDI, Edit Seq/Preset and the Bank 9 service screen): CSRA = 0xEE once at 221 ms, CSRB = 0xEE at 221 ms and again at 598 ms (the same value, so the rate does not change), ACR = 0x30 then 0x60 twice (bit 7 always 0), and no THR write before 549 ms, after every rate change. With CSR = 0xEE the rate comes from an IP-pin clock, which does not depend on ACR or the C/T. Not traced: runs under MIDI load, and screens not visited. A firmware path that writes CSR or ACR[7] with a character in flight would reach it.
-- Disabling the transmitter drops a character waiting in THR, with no DECISION marker (`duart.cpp:359-362`; D4's marker is only at reset). Behavioural as the data sheet describes it (3.1: a disabled transmitter cannot be loaded); what is missing is the marker. Task 4 saw it in the panel stream, and the panel output was not affected.
-- ISR[7] is not re-evaluated on an ACR write (`duart.cpp:247-253, 390-394`). Behavioural, the input-change interrupt only; the firmware enables none (ACR 0x30 and 0x60).
-- `x1Hz()` is unused beyond its accessor (`duart.h`). Code.
-- `duart_leaving_counter_mode_stops_it` is vacuous: the stop-command read already clears `ctRunning_` (`tests/test_duart.cpp:168-181`). Test.
+- Fixed in the final-review wave: CR "reset receiver" no longer clears the overrun flag (4.2.7.2, D2; `Duart::command`, test `duart_reset_receiver_keeps_overrun`). The boot trace and render hashes did not change.
+- Fixed in the final-review wave: `runShifter` clamps the shifter phase to the new tick length, so a rate change in the middle of a character cannot underflow `ticksLeft` (test `duart_tx_rate_change_mid_character_finishes`). OS v3.01 did not reach it in the runs traced (CSR and ACR[7] never changed with a character in flight); the hashes did not change.
+- Fixed in the final-review wave: disabling the transmitter with a character in THR is now decision D7 (`// DECISION D7` in `Duart::command`, `decisions.md` D7), which cites the data sheet's two conflicting passages. No behaviour change.
+- ISR[7] is not re-evaluated on an ACR write (the ACR case in `Duart::write`, and `Duart::isr`). Behavioural, the input-change interrupt only; the firmware enables none (ACR 0x30 and 0x60).
+- `x1Hz()` is unused beyond its accessor (`Duart::x1Hz` in `duart.h`). Code.
+- `duart_leaving_counter_mode_stops_it` is vacuous: the stop-command read already clears `ctRunning_` (`tests/test_duart.cpp`, the test of that name). Test.
 
 **Task 2 (machine skeleton)**
 - No test pins the DUART X1 rate per slot. Test.
 - Wrong-width OTIS byte reads and the ESP window paths are untested. Test.
 - `ks32emu boot` lists only the first 16 unmapped runs. Tool; the K1 map has none.
-- The `BusEvent` value of a word write to the ESP or DUART is the whole word; it should be said at `machine.h:467`. Comment.
+- The `BusEvent` value of a word write to the ESP or DUART is the whole word; it should be said at `struct BusEvent` (`src/ks32/machine.h`). Comment.
 
 **Task 3 (firmware boot)**
 - D2's text still says the external IP clock receives nothing (`decisions.md`, D2). Text.
 - Table 4-2's footnote (IP2 is the C/T input when ACR[6:4] is 000 or 100) is not modelled or cited. The firmware's ACR values are 0x30 and 0x60, which are 011 and 110, so it does not apply.
-- `setExternalClock` silently clamps rates above X1 to 0 (`duart.cpp:62`). Behavioural for a caller that passes such a rate; the machine's 500 kHz is far below X1.
-- `loadKs32` reports a bad ROM set (create fails) as "skip: ROMs not found" (`tests/ks32_firmware.h:28`). Test helper.
-- `docs/m68k.md:113` still describes the deleted `m68k_ks32_firmware_smoke` test. Text, still present.
+- `setExternalClock` silently clamps rates above X1 to 0 (`Duart::setExternalClock`). Behavioural for a caller that passes such a rate; the machine's 500 kHz is far below X1.
+- Fixed in the final-review wave: `loadKs32` (`tests/ks32_firmware.h`) prints the error and fails the running test when the ROM files exist but `Machine::create` rejects them; a skip is only for absent files.
+- Fixed in the final-review wave: `docs/m68k.md` ("KS-32 firmware smoke run") no longer describes the deleted `m68k_ks32_firmware_smoke` test; it says the Plan 6 boot tests superseded it.
+- Fixed: the K2 text named the Task 3 implementer; it now says "recalled and not checked".
 - The suite was 16.4 s against a 20 s budget and could share one booted machine; it is now about 28 s. Test time.
 
 **Task 4 (panel display)**
-- `8C` clears `s_.blink` but not `blinkOn_` (`panel.cpp:487-491`). Behavioural, the blink marking only.
-- The last-byte time is 1917 ms in one place and 1916 ms in others (hardware doc, `machine.h`). Text, still present.
-- `bootedKs32()` returns a mutable `Machine*`; it wants a read-only comment. Test helper.
+- `8C` clears `s_.blink` but not `blinkOn_` (`Panel::run`, the `0x8C` case in `src/ks32/panel.cpp`). Behavioural, the blink marking only.
+- Fixed in the final-review wave: the last-byte time is 1916 ms everywhere in the hardware doc (it had 1917 ms at two places).
+- `bootedKs32()` returns a mutable `Machine*`; it wants a read-only comment (`tests/test_ks32_firmware.cpp`). Test helper.
 
 **Task 5 (buttons)**
 - The evidence text of `85 pp` uses reasoning from before `88`/`89` were found (hardware doc). Text.
-- The Medium-confidence names in the `Button` enum carry no `DECISION K7` marker (`panel.h:492-503`). Code comment.
-- `release_ends_the_hold` asserts only an absence; it should also assert "STORE SEQUENCES". Test.
-- The `89 00` slot-0 test coincides with the natural cursor, so it cannot fail (`test_ks32_panel.cpp:776-781`). Test.
-- `87 20` raises `unknown` during button use (`panel.cpp:448-449`). Behavioural, the counter only; the display is unaffected, and the hardware doc says so.
-- A comment at `test_ks32_firmware.cpp:124` says the overruns are counted "over the two taps", but they are counted since reset. Test comment.
+- The Medium-confidence names in the `Button` enum carry no `DECISION K7` marker (`enum class Button` in `src/ks32/panel.h`). Code comment.
+- `ks32_firmware_release_ends_the_hold` asserts only an absence; it should also assert "STORE SEQUENCES" (`tests/test_ks32_firmware.cpp`). Test.
+- The `89 00` slot-0 test coincides with the natural cursor, so it cannot fail (`panel_cursor_save_restore` in `tests/test_ks32_panel.cpp`). Test.
+- `87 20` raises `unknown` during button use (the `0x87` case in `Panel::run`, `src/ks32/panel.cpp`). Behavioural, the counter only; the display is unaffected, and the hardware doc says so.
+- A comment on the `overruns` field of `PanelRig` (`tests/test_ks32_firmware.cpp`) says the overruns are counted "over the two taps", but they are counted since reset. Test comment.
 
 **Task 6 (analog inputs)**
-- A hard-coded 7 at `machine.cpp:381`, and the array sizes should be `static_assert`ed against `Analog`. Code.
+- A hard-coded 7 in the `Machine` constructor (the `kAnalogRest` loop, `src/ks32/machine.cpp`), and the array sizes should be `static_assert`ed against `Analog`. Code.
 - The line-A and TRAP counts in the hardware doc are from Task 3's boot, which ended on the battery warning. Text, labelled as such.
-- The cold-boot "EVENT" match is broad (`test_ks32_firmware.cpp:664`). Test.
+- The cold-boot "EVENT" match is broad (`bootedKs32` in `tests/test_ks32_firmware.cpp`). Test.
 
 **Task 7 (MIDI, render, play)**
 - `ks32emu render` has no test of its own, because the test has a loop of its own; `sendMidi` and the render loop should be shared in a header. Test.
 - `pcmHash` is duplicated verbatim in the test and the tool. Code.
-- `--tail 0` drops the last event (`main.cpp`). Behavioural, a tool edge case.
+- `--tail 0` drops the last event (the render end frame in `tools/ks32emu/main.cpp`). Behavioural, a tool edge case.
 - Live MIDI is quantised to one audio period (about 10 ms). Behavioural, by design.
 - The audio callback makes small allocations (the `takeMidiOut` swap, the press schedule). Behavioural in principle (a real-time hazard); no underrun has been measured, and `play` has not been run on a Q25.
 
 **Task 8 (battery RAM, card, keyboard)**
 - The Task 8 report blamed a gap in the key peaks on Volume smoothing; it is more likely the sound (the rig was on the ROM 01 organ, not the ROM 00 piano). Report text.
-- The comment on `Machine::key` should say the value is the strike value, not a MIDI velocity (`machine.h:419-420`); `docs/ks32emu.md` says it. It matters for Plan 7. Comment.
-- `loadRamImage` does not reset the CPU's cycle total or exception counts, so `cycles()` is not "since power-on" after a load. Behavioural for a program that loads an image into a running machine; `ks32emu` loads at power-on.
-- `ks32emu` uses the throwing overload of `std::filesystem::exists` (`main.cpp`). Behavioural: an unreadable `--ram` path ends the tool with an uncaught exception instead of an `error:` line.
-- `ram_image_keeps_settings` never checks that Master Tune is restored to +00 on the shared rig. Test.
-- The warm-boot warning check samples every 100 ms and matches "LOW" alone (`test_ks32_firmware.cpp:640-644`). Test.
+- Fixed in the final-review wave: `Machine::key` and `Panel::key` name the parameter `strike` and say it is the keyboard's strike value, not a MIDI velocity (strike 64 sounds at 20).
+- Fixed in the final-review wave as a comment: `cycles()` is now documented as "since the machine was created", because `loadRamImage` keeps the CPU's cumulative count and exception counts. Behavioural for a program that loads an image into a running machine; `ks32emu` loads at power-on.
+- `ks32emu` uses the throwing overload of `std::filesystem::exists` (the RAM-path check in `tools/ks32emu/main.cpp`). Behavioural: an unreadable `--ram` path ends the tool with an uncaught exception instead of an `error:` line.
+- `ks32_firmware_ram_image_keeps_settings` never checks that Master Tune is restored to +00 on the shared rig. Test.
+- The warm-boot warning check samples every 100 ms and matches "LOW" alone (`ks32_firmware_ram_image_keeps_settings`, `tests/test_ks32_firmware.cpp`). Test.
 
 **Task 9 (bench and documents)**
 - `bench` ignores options it does not use (`--ms`, `--trace` and so on) without an error. Behavioural, the tool.
@@ -244,7 +245,7 @@ User verdict: pending.
 # builds (see docs/verification-plan5.md for the configure lines)
 $env:PATH = "C:\winlibs\mingw32\bin;" + $env:PATH
 cmake --build build; cmake --build build-msvc --config Release
-.\build\ens_tests.exe                       # 355 passed; prints "boot trace hash" and "render hash"
+.\build\ens_tests.exe                       # 357 passed; prints "boot trace hash" and "render hash"
 .\build-msvc\Release\ens_tests.exe
 ctest --test-dir build; ctest --test-dir build-msvc -C Release
 

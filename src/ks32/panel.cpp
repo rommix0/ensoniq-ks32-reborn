@@ -79,11 +79,11 @@ void Panel::button(Button b, bool down) {
 // byte, the strike value: 0 there would make it a button event. The firmware plays the note and
 // sends it on MIDI out (note = code + 28; strike 127 gives velocity 127, 64 gives 20). Notes 28-103
 // are the 76 keys; the firmware also plays codes 76-127, which no key sends.
-void Panel::key(int note, bool down, uint8_t velocity) {
+void Panel::key(int note, bool down, uint8_t strike) {
     if (note < kLowestKey || note >= kLowestKey + kKeyCount) return;
     const auto code = static_cast<uint8_t>(note - kLowestKey);
     toCpu_.push_back(down ? static_cast<uint8_t>(code | 0x80) : code);
-    toCpu_.push_back(std::clamp<uint8_t>(velocity, 1, 127));
+    toCpu_.push_back(std::clamp<uint8_t>(strike, 1, 127));
 }
 
 std::vector<uint8_t> Panel::takeToCpu() {

@@ -66,9 +66,9 @@ public:
     void reset();                  // blank display, LEDs off, cursor at 0
     void fromCpu(uint8_t byte);    // one byte the firmware sent to the panel
     void button(Button b, bool down);  // queues the press or release bytes for the firmware
-    // Queues a key event: note 28-103 (others are ignored); velocity is the strike value the
-    // keyboard sends, 1-127 (clamped), which the firmware maps through its touch curve.
-    void key(int note, bool down, uint8_t velocity);
+    // Queues a key event: note 28-103 (others are ignored); strike is the value the keyboard
+    // sends, 1-127 (clamped), which the firmware maps through its touch curve; it is not a MIDI velocity.
+    void key(int note, bool down, uint8_t strike);
     const PanelState& state() const { return s_; }
     std::vector<uint8_t> takeToCpu();  // the queued bytes, oldest first (no start-up handshake, K7)
 

@@ -18,14 +18,14 @@ decision entry in `docs/decisions.md`.
 
 **Where the boot ends.** With the wiring below the boot reaches a steady state.
 - The last new kind of device access comes at 1066 ms.
-- The last byte of the start-up text comes at 1917 ms. The text is "ENSONIQ KS-32", then
+- The last byte of the start-up text comes at 1916 ms. The text is "ENSONIQ KS-32", then
   "WARNING! Battery low. See manual.", sent on channel B. The battery warning is Task 6's analog
   inputs.
 - After that the CPU idles in STOP with the interrupt mask at 0. The 1 ms tick runs, and the
   stack pointer is the same at 2.9 s and at 10 s.
 - The steady state is the low-battery warning on the panel display, which waits for a button
   ("Press any button to continue", service manual PDF p12). See "Front panel: display and LEDs".
-- `kBootMs` was 2900, which is 1917 ms plus 50 %, rounded up.
+- `kBootMs` was 2900, which is 1916 ms plus 50 %, rounded up.
 
 **Task 6 update.** With the analog inputs at their K13 resting values (battery nominal) the boot
 ends on the play screen instead (see "Analog inputs"). The last panel byte is written at 2121 ms
@@ -491,8 +491,8 @@ firmware was run, never studied.
 **K16.** The buttons add no bound: four bytes sent back to back are all read at 500 kHz.
 
 **MAME.** Not compared.
-- The release form (`code`, then `00`) matches the Task 5 implementer's recollection of MAME's
-  esq5505 driver: press `code | 0x80, 00`, release `code & 0x7F, 00`.
+- The release form (`code`, then `00`) matches MAME's esq5505 driver, recalled from MAME, unchecked:
+  press `code | 0x80, 00`, release `code & 0x7F, 00`.
 - That recollection was not checked against MAME. The evidence above settles the form.
 
 ## Analog inputs (K8, K13)
@@ -585,7 +585,7 @@ which were read off settled displays. Low for the reference's resting value.
 ks32_firmware_analog_resting_values, ks32_firmware_slider_extremes and
 ks32_firmware_boot_shows_play_screen.
 
-**MAME.** Not compared. The Task 6 implementer recalls, without checking, that MAME's esq5505
+**MAME.** Not compared. Recalled from MAME, unchecked: MAME's esq5505
 driver feeds the OTIS pot input from a table indexed by DUART output bits. The evidence above
 settles the path.
 
