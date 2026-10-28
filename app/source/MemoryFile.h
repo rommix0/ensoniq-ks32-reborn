@@ -11,3 +11,7 @@ constexpr juce::int64 kMemoryBytes = 0x10000;  // the battery RAM (K1, K11)
 std::vector<uint8_t> loadMemoryFile(const juce::File& file, juce::String& err);
 // Writes <file>.tmp, then moves it over file. False if either step fails.
 bool saveMemoryFile(const juce::File& file, const std::vector<uint8_t>& img);
+// Erase: saves the 64 KB zero image (A11, R7).
+inline bool eraseMemoryFile(const juce::File& file) {
+    return saveMemoryFile(file, std::vector<uint8_t>(static_cast<size_t>(kMemoryBytes), 0));
+}

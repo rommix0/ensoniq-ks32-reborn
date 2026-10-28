@@ -26,7 +26,7 @@ public:
     // Stores file and, when it holds an image, restarts the machine from it. A file of the wrong
     // size is refused (err) and the setting stays.
     bool setMemoryFile(const juce::File& file, juce::String& err);
-    void eraseMemory();  // a cold machine (A11); the caller has confirmed
+    void eraseMemory();  // zeros to the file, then a cold machine (A11, R7); the caller has confirmed
 
     void prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock) override;
     void releaseResources() override {}
@@ -54,7 +54,7 @@ public:
     void setStateInformation(const void*, int) override {}
 
 private:
-    enum class Ram { Keep, File, Cold };
+    enum class Ram { Keep, File };
     bool restart(Ram ram);  // a new engine from roms_; the old one stays if that fails
     void timerCallback() override;  // the 60 s save (A11)
 

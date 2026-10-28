@@ -2,6 +2,7 @@
 // content), and the memory file's load and save.
 #include <juce_core/juce_core.h>
 
+#include <algorithm>
 #include <cstdio>
 
 #include "../source/MemoryFile.h"
@@ -70,6 +71,12 @@ void memoryFile(const juce::File& dir) {
     CHECK(saveMemoryFile(mem, img));  // over an existing file
     CHECK(loadMemoryFile(mem, err) == img);
     CHECK(!mem.getSiblingFile("ks32-memory.bin.tmp").exists());
+
+    // Erase (R7): the file becomes 64 KB of zeros at once, over the saved image.
+    CHECK(eraseMemoryFile(mem));
+    const auto erased = loadMemoryFile(mem, err);
+    CHECK(err.isEmpty() && erased.size() == static_cast<size_t>(kMemoryBytes));
+    CHECK(std::all_of(erased.begin(), erased.end(), [](uint8_t b) { return b == 0; }));
 
     mem.replaceWithData(img.data(), 100);  // the wrong size: reported and ignored
     CHECK(loadMemoryFile(mem, err).empty() && err.isNotEmpty());

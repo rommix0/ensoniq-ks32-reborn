@@ -55,10 +55,13 @@ bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
     return true;
 }
 
-// DECISION A11: erase gives a fresh machine, whose 64 KB RAM is all zeros, so the firmware rebuilds
-// its memory as it boots.
+// DECISION A11, R7: erase writes the 64 KB zero image to the memory file at once (an explicit act,
+// not held back by the boot gate) and restarts the machine from it, so the firmware rebuilds its
+// memory as it boots. With no machine, only the file is erased.
 void Ks32Processor::eraseMemory() {
-    if (engine_) restart(Ram::Cold);
+    eraseMemoryFile(settings_.memoryFile());
+    memoryError_ = {};
+    if (engine_) restart(Ram::File);
 }
 
 bool Ks32Processor::restart(Ram ram) {
@@ -66,7 +69,7 @@ bool Ks32Processor::restart(Ram ram) {
     std::vector<uint8_t> img;
     if (ram == Ram::Keep && engine_ && engine_->snapshot().booted)
         img = engine_->machine().ramImage();  // audio stopped: the machine is ours to read
-    else if (ram != Ram::Cold)
+    else
         img = loadMemoryFile(settings_.memoryFile(), memoryError_);  // wrong size: reported, cold boot
     std::string e;
     auto fresh = ens::app::Engine::create(roms_, e);

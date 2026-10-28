@@ -99,7 +99,6 @@ void SettingsPage::refresh() {
     roms_ = checkRomFolder(dir, nullptr);
     memField_.setText(proc_.settings().memoryFile().getFullPathName(), juce::dontSendNotification);
     memNote_ = proc_.memoryError();
-    erase_.setEnabled(proc_.engine() != nullptr);
 }
 
 void SettingsPage::changed() {
@@ -249,7 +248,7 @@ void SettingsPage::confirmErase() {
                              .withIconType(juce::MessageBoxIconType::WarningIcon)
                              .withTitle("Erase memory")
                              .withMessage("This erases the settings, edited sounds and sequences the battery keeps, "
-                                          "and restarts the machine cold.")
+                                          "and restarts the machine cold. The memory file is erased now.")
                              .withButton("Erase")
                              .withButton("Cancel")
                              .withAssociatedComponent(this);
