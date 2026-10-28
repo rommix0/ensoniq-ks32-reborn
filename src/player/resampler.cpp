@@ -64,6 +64,9 @@ Resampler::Resampler(double inRate, double outRate, int channels)
     // Zero history for the samples before the first input (taps reach 2*half_ - 1 frames back).
     base_ = -2 * static_cast<int64_t>(half_);
     buf_.assign(static_cast<size_t>(2 * half_) * static_cast<size_t>(channels_), 0.0f);
+    // The most the history holds when fed one frame at a time, so that never reallocates (the
+    // Plan 7 engine on the audio thread).
+    buf_.reserve(static_cast<size_t>(2 * half_ + 1) * static_cast<size_t>(channels_));
 }
 
 void Resampler::process(const int16_t* in, size_t inFrames, std::vector<float>& out) {

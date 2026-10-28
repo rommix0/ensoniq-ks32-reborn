@@ -79,12 +79,23 @@ public:
     // A key of the local keyboard, note 28-103 (K12): it rides the panel link like a button.
     // `strike` is the keyboard's strike value, not a MIDI velocity (strike 64 sounds at 20).
     void key(int note, bool down, uint8_t strike) { panel_.key(note, down, strike); }
+    // Bytes the panel link takes now without dropping one: the panel's ring holds them, and the
+    // DUART's channel B receive queue, which drains that ring every slot, has room for them (A1, A2).
+    // A caller that queues a button or key (2 bytes) only when this is 2 or more never splits one.
+    uint32_t panelDropped() const { return panel_.dropped(); }  // A2, since the machine was created
+    int panelRoom() const {
+        const int queued = static_cast<int>(panel_.toCpuQueued());
+        const int ring = static_cast<int>(Panel::kToCpuSize) - queued;
+        const int wire = static_cast<int>(duart::Duart::kRxQueue - duart_.rxQueued(kPanelChannel)) - queued;
+        return ring < wire ? ring : wire;
+    }
     void setAnalog(Analog a, uint16_t raw);  // raw 0..0x3FF (masked); PAR follows at once (K8)
     // A byte on MIDI in: it joins the channel's receive queue and enters at the line rate (D2).
     void midiIn(uint8_t byte) { duart_.receive(kMidiChannel, byte); }
-    std::vector<uint8_t> takeMidiOut() { return duart_.takeTransmitted(kMidiChannel); }  // sent since the last call
+    // The oldest byte the firmware sent on MIDI out and not yet popped (A2: 256 are kept).
+    bool popMidiOut(uint8_t& b) { return duart_.popTransmitted(kMidiChannel, b); }
     // The battery-backed RAM (K1, K11): 64 KB, raw bytes, the CPU's view at 0xFF0000-0xFFFFFF.
-    std::vector<uint8_t> ramImage() const { return ram_; }
+    const std::vector<uint8_t>& ramImage() const { return ram_; }
     // Replaces the RAM and powers the machine on again with it: the CPU, OTIS, the ESP, the DUART
     // and the panel are reset, so the next runFrame boots from the loaded RAM. false with err
     // naming "RAM image" on a wrong size, and nothing changes.

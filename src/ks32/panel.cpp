@@ -28,7 +28,7 @@ int paramCount(uint8_t cmd) {
 
 void Panel::reset() {
     s_ = PanelState{};
-    s_.rows.assign(kPanelRows, std::string(kPanelCols, ' '));
+    for (auto& r : s_.rows) r.fill(' ');
     cursor_ = 0;
     saved_ = {};
     toCpu_.clear();
@@ -71,8 +71,8 @@ void Panel::fromCpu(uint8_t b) {
 // until 0C 00 comes; Bank 9 + Screen 1 needs Bank 9 held). The DUART paces them at the line rate.
 void Panel::button(Button b, bool down) {
     const auto code = static_cast<uint8_t>(b);
-    toCpu_.push_back(down ? static_cast<uint8_t>(code | 0x80) : code);
-    toCpu_.push_back(0x00);
+    toCpu_.push(down ? static_cast<uint8_t>(code | 0x80) : code);
+    toCpu_.push(0x00);
 }
 
 // DECISION K12: a key event is code | 0x80 (down) or code (up), code = note - 28, then a nonzero
@@ -82,14 +82,8 @@ void Panel::button(Button b, bool down) {
 void Panel::key(int note, bool down, uint8_t strike) {
     if (note < kLowestKey || note >= kLowestKey + kKeyCount) return;
     const auto code = static_cast<uint8_t>(note - kLowestKey);
-    toCpu_.push_back(down ? static_cast<uint8_t>(code | 0x80) : code);
-    toCpu_.push_back(std::clamp<uint8_t>(strike, 1, 127));
-}
-
-std::vector<uint8_t> Panel::takeToCpu() {
-    std::vector<uint8_t> out;
-    out.swap(toCpu_);
-    return out;
+    toCpu_.push(down ? static_cast<uint8_t>(code | 0x80) : code);
+    toCpu_.push(std::clamp<uint8_t>(strike, 1, 127));
 }
 
 // The commands with a known effect; the others in paramCount change nothing that is modelled.
@@ -108,7 +102,7 @@ void Panel::run(uint8_t cmd, uint8_t param) {
             else cursor_ = saved_[param];
             break;
         case 0x8C:  // blank the display, cursor to 0
-            for (std::string& r : s_.rows) r.assign(kPanelCols, ' ');
+            for (auto& r : s_.rows) r.fill(' ');
             s_.blink = 0;
             cursor_ = 0;
             break;

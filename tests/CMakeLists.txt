@@ -29,11 +29,20 @@ set(ENS_TEST_SOURCES
   test_ks32_machine.cpp
   test_ks32_firmware.cpp
   test_ks32_panel.cpp
+  test_app_engine.cpp
+  test_app_panel_layout.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})
-target_link_libraries(ens_tests PRIVATE ens_player ens_ks32 ens_trace ens_otis ens_esp ens_m68k_harte ens_m68k ens_duart ens_common)
+target_link_libraries(ens_tests PRIVATE ens_app ens_player ens_ks32 ens_trace ens_otis ens_esp ens_m68k_harte ens_m68k ens_duart ens_common)
 target_compile_definitions(ens_tests PRIVATE ENS_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
   ENS_DATA_DIR="${CMAKE_SOURCE_DIR}/docs/rom-investigation/data" ENS_ROM_DIR="${ENS_ROM_DIR}"
   _CRT_SECURE_NO_WARNINGS)
 add_test(NAME ens_tests COMMAND ens_tests)
+
+# Real-time checks: replaces global operator new/delete to count allocations, so it is its own
+# executable with its own main.
+add_executable(ens_rt_tests rt_main.cpp)
+target_link_libraries(ens_rt_tests PRIVATE ens_app)
+target_compile_definitions(ens_rt_tests PRIVATE ENS_ROM_DIR="${ENS_ROM_DIR}")
+add_test(NAME ens_rt_tests COMMAND ens_rt_tests)

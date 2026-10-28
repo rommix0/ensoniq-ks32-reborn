@@ -16,6 +16,7 @@ set(ENS_M68K_TESTS_DIR "${CMAKE_SOURCE_DIR}/testdata/680x0/68000/m68t" CACHE PAT
 set(ENS_ROM_DIR "${CMAKE_SOURCE_DIR}/ks-32" CACHE PATH "KS-32 ROM directory for ROM-dependent tests")
 
 option(ENS_BUILD_MAME_REF "Build the vendored MAME reference tool" OFF)
+option(ENS_BUILD_APP "Build the JUCE app (MSVC x64)" OFF)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})  # build/ens_tests
 
@@ -57,6 +58,10 @@ add_library(ens_player STATIC src/player/resampler.cpp src/player/json.cpp src/p
   src/player/effects.cpp src/player/voices.cpp src/player/esp_loader.cpp src/player/synth.cpp
   src/player/smf.cpp src/player/wav.cpp)
 target_link_libraries(ens_player PUBLIC ens_common ens_ks32)
+
+# The JUCE-free engine between the machine and an audio callback (Plan 7): no file I/O, no OS calls.
+add_library(ens_app STATIC src/app/engine.cpp src/app/panel_layout.cpp)
+target_link_libraries(ens_app PUBLIC ens_ks32 ens_player)
 
 # Trace format + runner. The parser and PCM compare are chip-free (reused by the MAME harness).
 add_library(ens_trace_parse STATIC src/trace/trace_parse.cpp)
@@ -110,4 +115,12 @@ add_test(NAME m68k_suite COMMAND m68k_harte ${ENS_M68K_TESTS_DIR})
 # MAME reference harness (Task 12): vendored MAME chip code, built only on request.
 if(ENS_BUILD_MAME_REF)
   add_subdirectory(tools/mame_ref)
+endif()
+
+# The JUCE app (Plan 7): fetches JUCE into the build directory, MSVC x64 only.
+if(ENS_BUILD_APP)
+  if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "ENS_BUILD_APP needs MSVC x64")
+  endif()
+  add_subdirectory(app)
 endif()

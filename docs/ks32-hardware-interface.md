@@ -195,8 +195,8 @@ only their ratio). High for channel A, confirmed by MIDI in. Low for channel B.
   The firmware writes CSRA = 0xEE: both directions from the external 16x clocks on IP4 (RxCA)
   and IP3 (TxCA) at 500 kHz. That is 31 250 baud, `rxBitClocks(0) == 128` after the boot. The
   DUART already models this clock (D3, Task 3), so the DUART is unchanged.
-- `Machine::midiIn(byte)` queues a byte on RxDA. It enters at the line rate, 320 us per byte (D2).
-  `Machine::takeMidiOut()` returns the bytes that left TxDA since the last call.
+- `Machine::midiIn(byte)` queues a byte on RxDA (up to 1024, A1). It enters at the line rate, 320 us
+  per byte (D2). `Machine::popMidiOut(b)` pops the bytes that left TxDA, oldest first (up to 256, A2).
 - **Receive channel.** The firmware receives on every channel: the System/MIDI pages show its
   defaults as "Base Channel= 01", "Status = BOTH" (Screen 4) and "MIDI Mode=OMNI" (Screen 6). A
   middle C on each of the 16 channels sounds at the same level (peak 5835 to 5844), and each
@@ -401,7 +401,8 @@ numbers. High that there is no handshake. Medium to Low for the rest, per row ab
     `--press 3500:EDIT_SEQ_PRESET+BANK9+SCREEN1` does not.
 - **Event 133** ("unknown button event", PDF p11) was never raised by any byte form tried.
 
-**Codes.** `Button` (`src/ks32/panel.h`) has these 43 codes.
+**Codes.** `Button` (`src/ks32/panel.h`) has these 43 codes, and the two transport codes of
+"Front panel: transport buttons" (45 in all).
 - "Code" is the 7-bit code; the press byte is code | 0x80.
 - Each name follows the function the firmware shows for that code, checked against service
   manual Figure 2 (PDF p4) and `docs/reference/ks32-front-panel.md`.
@@ -443,7 +444,8 @@ numbers. High that there is no handshake. Medium to Low for the rest, per row ab
 Confidence: High for the tracks and for LEDs 0, 1, 7, 8 and 9; Medium for 6 and 14.
 
 **Open.**
-- **Record, Stop and Play are not found.**
+- **Record, Stop and Play were not found here.** Plan 7 Task 3 found Play (09) and Stop/Continue
+  (29) by MIDI out; Record is still not found ("Front panel: transport buttons").
   - Codes 0x00–0x03, 09, 0B, 12, 13, 1B, 22, 23, 29, 2B, 31, 33, 3A and 3B show nothing on any
     screen tried. The screens were the sound screen, Edit Sound and Edit Seq/Preset pages,
     Select Seq/Preset, and the Locate page of a newly created sequence.
@@ -494,6 +496,43 @@ firmware was run, never studied.
 - The release form (`code`, then `00`) matches MAME's esq5505 driver, recalled from MAME, unchecked:
   press `code | 0x80, 00`, release `code & 0x7F, 00`.
 - That recollection was not checked against MAME. The evidence above settles the form.
+
+## Front panel: transport buttons (A14)
+
+**Fact.**
+- **Play is code 09, Stop/Continue is code 29.** On the Select Seq/Preset screen ("PRESET 00
+  Loc=00 / Sequence-00", LEDs 1 and 2) of a cold-booted machine:
+  - pressing 09 (`89 00`) sends MIDI Start, `FA`, on MIDI out while it is held;
+  - pressing 29 (`A9 00`) sends MIDI Stop, `FC`.
+  - Neither changes the display or the LEDs, and neither release sends anything. No clock (`F8`)
+    and no Continue (`FB`) were seen in the 1.3 s watched.
+- Names: the byte each sends is the only evidence. 09 is called Play because it sends Start; 29
+  is called Stop/Continue because it sends Stop; the panel's Stop button shares a "Continue" label
+  with Play (`docs/reference/ks32-front-panel.md`). How Continue is given (a chord or a second
+  press) was not tested.
+- **Record is not found.** No other code 0x00–0x7F outside `Button` changed the display, the
+  LEDs or MIDI out, apart from 0x3C–0x7F, which act like the Bank and Screen buttons (as in "Front
+  panel: buttons", "Open").
+- These are the two codes Plan 6 singled out by instruction count (09 and 29, "Open" above): they
+  act on a stopped, empty sequence without showing anything, which is why the display sweeps missed
+  them.
+
+**How it was found.** A scratch harness, not committed, ran the firmware and watched only the
+display, the LEDs and MIDI out. The firmware was run, never studied.
+- System/MIDI Screens 0–9 and the Edit Seq/Preset pages were read for a clock-out setting. There
+  is none; the Control pages offer "Clock = INTERNAL" or "MIDI", which was left at INTERNAL.
+- Select Seq/Preset already showed "Sequence-00", and Up/Yes changed nothing there, so no sequence
+  was created.
+- For each code 0x00–0x7F not in `Button` (85 codes), and once with no press as a control: a fresh
+  machine with zero RAM was booted for `kBootMs`, Select Seq/Preset was tapped (100 ms, then 400 ms),
+  MIDI out was drained, the code was held 300 ms, released, and the machine run 1000 ms more. The
+  display, LEDs and MIDI out were compared with the state before the press. One pass.
+- 09 and 29 were confirmed once more by the test, on the shared test machine.
+
+**Test.** ks32_firmware_transport_codes.
+
+**Confidence.** High for the bytes 09 and 29 send. Medium for the names. Record: not found.
+**MAME.** Not compared.
 
 ## Analog inputs (K8, K13)
 

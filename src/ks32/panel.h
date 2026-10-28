@@ -1,13 +1,15 @@
 #pragma once
 // The KS-32 keypad/display board on DUART channel B (K7): a 2 x 16 character display, 15 LEDs and
-// 43 buttons, and the 76-key keyboard whose events share the link (K12). The command set is decoded
+// 45 buttons, and the 76-key keyboard whose events share the link (K12). The command set is decoded
 // from the byte stream the OS v3.01 sends, and the button and key codes from what it shows, plays
 // and sends on MIDI out when they are sent (docs/ks32-hardware-interface.md, "Front panel",
 // "Keyboard"), never from ROM code. Pure emulation: no I/O, no statics.
 #include <array>
 #include <cstdint>
 #include <string>
-#include <vector>
+#include <type_traits>
+
+#include "common/ring.h"
 
 namespace ens::ks32 {
 
@@ -18,8 +20,9 @@ constexpr int kLowestKey = 28, kKeyCount = 76;
 enum class Led : uint8_t { Off, On, Blink };
 
 // The panel's controls by key code, named after the function the firmware shows for each
-// (docs/ks32-hardware-interface.md, "Front panel: buttons"). Record, Stop and Play are not found.
+// (docs/ks32-hardware-interface.md, "Front panel: buttons"). Record is not found.
 enum class Button : uint8_t {
+    Play = 0x09, StopContinue = 0x29,  // DECISION A14: they send MIDI Start (FA) and Stop (FC)
     Screen2 = 0x04, Bank2 = 0x05, Screen4 = 0x06, Bank4 = 0x07, Track7 = 0x08, SystemMidi = 0x0A,
     DownNo = 0x0C, UpYes = 0x0D, Screen5 = 0x0E, Bank5 = 0x0F, Track1 = 0x10, Track5 = 0x11,
     Screen1 = 0x14, Bank1 = 0x15, Screen6 = 0x16, Bank6 = 0x17, Track3 = 0x18, SelectSeqPreset = 0x19,
@@ -51,14 +54,20 @@ inline constexpr ButtonName kButtons[] = {
     {Button::EditSeqPreset, "EDIT_SEQ_PRESET"}, {Button::EditTrack, "EDIT_TRACK"},
     {Button::SelectSeqPreset, "SELECT_SEQ_PRESET"}, {Button::ReplaceTrackSound, "REPLACE_TRACK_SOUND"},
     {Button::MakeDefaultPreset, "MAKE_DEFAULT_PRESET"}, {Button::SystemMidi, "SYSTEM_MIDI"},
+    {Button::Play, "PLAY"}, {Button::StopContinue, "STOP_CONTINUE"},
 };
 
+// Plain data, so the audio thread can copy it without allocating.
 struct PanelState {
-    std::vector<std::string> rows;  // kPanelRows strings of kPanelCols character codes (0x00-0x7F)
+    std::array<std::array<char, kPanelCols>, kPanelRows> rows{};  // character codes (0x00-0x7F)
     uint32_t blink = 0;             // bit p: position p (row * 16 + column) written inside 0x90 ... 0x91
     std::array<Led, kPanelLeds> leds{};  // by LED number, the parameter of 0x8D/0x8E/0x8F
     uint32_t unknown = 0;           // command bytes outside the decoded table and out-of-range parameters
 };
+static_assert(std::is_trivially_copyable_v<PanelState>);
+
+// Row 0 or 1 as a string of kPanelCols characters, for tools and tests.
+inline std::string rowText(const PanelState& p, int row) { return std::string(p.rows[row].data(), kPanelCols); }
 
 class Panel {
 public:
@@ -70,7 +79,10 @@ public:
     // sends, 1-127 (clamped), which the firmware maps through its touch curve; it is not a MIDI velocity.
     void key(int note, bool down, uint8_t strike);
     const PanelState& state() const { return s_; }
-    std::vector<uint8_t> takeToCpu();  // the queued bytes, oldest first (no start-up handshake, K7)
+    bool popToCpu(uint8_t& b) { return toCpu_.pop(b); }  // the oldest queued byte (no start-up handshake, K7)
+    std::size_t toCpuQueued() const { return toCpu_.size(); }
+    uint32_t dropped() const { return toCpu_.dropped(); }  // A2: bytes for the firmware lost to a full ring
+    static constexpr std::size_t kToCpuSize = 256;
 
 private:
     void run(uint8_t cmd, uint8_t param);
@@ -78,7 +90,7 @@ private:
     PanelState s_;
     uint8_t cursor_ = 0;    // next write position, 0..31
     std::array<uint8_t, 2> saved_{};  // cursor slots of 0x88/0x89
-    std::vector<uint8_t> toCpu_;
+    ByteRing<kToCpuSize> toCpu_;  // DECISION A2: 256 bytes for the firmware; when full the newest is dropped
     bool blinkOn_ = false;  // inside 0x90 ... 0x91
     uint8_t cmd_ = 0;       // command waiting for parameter bytes (0 = none)
     uint8_t param_ = 0;     // its first parameter

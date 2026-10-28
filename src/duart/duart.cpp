@@ -124,8 +124,8 @@ void Duart::startRx(Channel& c) {
     // the shift register; a character finished with the FIFO full waits in the shift register,
     // and the start bit of the next one overruns it: the waiting character is lost and OE sets
     // (data sheet 3.2 and 4.2.9.4).
-    const uint8_t byte = c.pending.front();
-    c.pending.pop_front();
+    uint8_t byte = 0;
+    c.pending.pop(byte);
     if (c.held) {
         c.held = false;
         c.overrun = true;
@@ -139,21 +139,17 @@ void Duart::startRx(Channel& c) {
 
 void Duart::receive(int ch, uint8_t byte) {
     Channel& c = ch_[ch & 1];
-    if (c.rxEnabled) c.pending.push_back(byte);  // D2: lost while the receiver is disabled
+    if (c.rxEnabled) c.pending.push(byte);  // D2: lost while the receiver is disabled; A1: bounded
 }
 
-std::vector<uint8_t> Duart::takeTransmitted(int ch) {
-    std::vector<uint8_t> out;
-    out.swap(ch_[ch & 1].sent);
-    return out;
-}
+bool Duart::popTransmitted(int ch, uint8_t& b) { return ch_[ch & 1].sent.pop(b); }
 
 void Duart::advanceTx(int ch, uint32_t n) {
     Channel& c = ch_[ch];
     const uint32_t k = tick16(ch, false);
     if (!k) return;
     while (c.tx.busy && runShifter(c.tx, k, n)) {
-        c.sent.push_back(c.txByte);
+        c.sent.push(c.txByte);
         if (c.thrFull) {
             c.thrFull = false;
             startTx(c, c.thr);

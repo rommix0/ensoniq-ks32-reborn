@@ -250,8 +250,10 @@ void Machine::slot(int i, int n) {
     if (x1) duart_.advance(x1);
     // DECISION K7: the panel takes the bytes that finished leaving TxDB in this slot and answers
     // with no processing delay of its own; its bytes enter RxDB at the line rate (D2).
-    for (uint8_t b : duart_.takeTransmitted(kPanelChannel)) panel_.fromCpu(b);
-    for (uint8_t b : panel_.takeToCpu()) duart_.receive(kPanelChannel, b);
+    // DECISION A2: the panel link is drained every slot, both ways.
+    uint8_t byte = 0;
+    while (duart_.popTransmitted(kPanelChannel, byte)) panel_.fromCpu(byte);
+    while (panel_.popToCpu(byte)) duart_.receive(kPanelChannel, byte);
     // DECISION K5: while running the ESP advances once at frame end (runFrame, via Board::route);
     // while halted slot i gets floor(89(i+1)/n) - floor(89 i/n) idle steps.
     Esp& esp = board_.esp();

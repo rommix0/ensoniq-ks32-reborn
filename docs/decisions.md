@@ -802,7 +802,7 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 
 ## K7: Panel protocol
 - Options: the channel (DUART A or B); a start-up handshake that the panel must answer, or none; for each command byte, its parameter count and effect; what the cursor does past the last position; how out-of-range parameters are handled. For the buttons: the byte form of a press, whether a release exists and its form (for example code | 0x80, a second code, or a different second byte), or no release with a hold expressed some other way; the code of each control.
-- Choice (first part, firmware to panel): the panel is on DUART channel B (`kPanelChannel`). The machine gives `Panel::fromCpu` the bytes that finished leaving TxDB in each slot, and queues `Panel::takeToCpu()` on RxDB, with no processing delay of its own; the bytes enter at the line rate (D2). There is no handshake: `takeToCpu` returns only button events (second part). The display is 2 x 16 (positions 0x00-0x1F) with 15 LEDs (0x00-0x0E). Bytes 0x00-0x7F are characters. The commands are `87 pp` (cursor), `8C` (blank and home), `8D/8E/8F nn` (LED on/off/blink) and `90`/`91` (blink marking on/off). These take their parameters and change nothing modelled: `80`, `81`, `83`, `92`, `98`, `86 xx`, `94 xx`, `95 xx` and `93` with 9 bytes (Task 4 also had `88 xx` and `89 xx` here; see the second part). Past position 0x1F the cursor wraps to 0. Other command bytes, `87` with 0x20 or more and LED numbers of 0x0F or more are counted in `PanelState::unknown` and ignored.
+- Choice (first part, firmware to panel): the panel is on DUART channel B (`kPanelChannel`). The machine gives `Panel::fromCpu` the bytes that finished leaving TxDB in each slot, and queues the bytes of `Panel::popToCpu` on RxDB, with no processing delay of its own; the bytes enter at the line rate (D2). There is no handshake: `popToCpu` gives only button events (second part). The display is 2 x 16 (positions 0x00-0x1F) with 15 LEDs (0x00-0x0E). Bytes 0x00-0x7F are characters. The commands are `87 pp` (cursor), `8C` (blank and home), `8D/8E/8F nn` (LED on/off/blink) and `90`/`91` (blink marking on/off). These take their parameters and change nothing modelled: `80`, `81`, `83`, `92`, `98`, `86 xx`, `94 xx`, `95 xx` and `93` with 9 bytes (Task 4 also had `88 xx` and `89 xx` here; see the second part). Past position 0x1F the cursor wraps to 0. Other command bytes, `87` with 0x20 or more and LED numbers of 0x0F or more are counted in `PanelState::unknown` and ignored.
 - Choice (second part, panel to firmware, Task 5): `Panel::button(b, down)` queues `code | 0x80, 00` for a press and `code, 00` for a release; `Machine::button` passes it on, and the bytes reach RxDB from the next slot at the line rate. `Button` holds the 43 controls found (codes 0x04-0x39); Record, Stop and Play are open. Task 5 also settles `88 nn` / `89 nn` as saving the cursor in slot nn and moving it back (slots 0 and 1; others counted in `unknown`), and adds `85` with one parameter and no modelled effect.
 - Evidence: `docs/ks32-hardware-interface.md` "Front panel: display and LEDs" (command table, with evidence per row). Channel B carries the display text. Before IMR enables RxRDYB the firmware never reads RHRB. A byte received during start-up is ignored and then discarded by the receiver reset at 598 ms. No single byte at 700 ms or 2000 ms changes the stream. Row 1 starts at 0x10: `87 10` is followed by 16 characters that form the second row. The wrap is never exercised (the firmware does not write past 0x1F). Buttons: "Front panel: buttons". Held Down/No repeats until `0C 00` and no other byte form stops it. Bank 9 + Screen 1/9/0 open the version, reinitialize and Analog Tests screens only while Bank 9 is held, and a press and release in one slot acts like a 100 ms press. Each code's screen matches Figure 2's labels and the inventory. Without a release, Select Sound stays held and blocks the combinations. The service manual's "Press Edit Seq/Preset" means press and release: holding it through the combination gives the Locate page.
 - Confidence: High for the channel, the geometry, `87`, text, the LED numbering, "no handshake", the press and release forms and the codes marked High in the button table. Medium for `8C` blanking, on/off polarity, `90`/`91`, `88`/`89` and the codes marked Medium. Low for `8F` = blink and for the parameter counts of `85`, `86`, `93`, `94` and `95`. The effects of `80`, `81`, `83`, `92` and `98` are unknown.
@@ -870,3 +870,103 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Evidence: the firmware writes CSRB = 0xEE; 0.5, 1 and 2 MHz boot identically (same display text and exception counts; only the timing moves). Task 4 adds a lower bound only. There is no handshake, so there is no reply timing. While it sends the low-battery warning, the firmware writes THRB on every 1 ms tick even when TxRDYB is clear, and a panel character is 11 bits (MR1B = 0x13, MR2B = 0x0F). So the link needs 11 000 baud or more: a 16x clock of 176 kHz or more. At 153.6 kHz the warning loses characters; at 250 kHz and above it is unchanged. `docs/ks32-hardware-interface.md` "Clocks".
 - Confidence: Low (500 kHz meets the bound; nothing picks it over faster clocks).
 - Status: Task 3, revisited in Task 4 (lower bound). Task 5's buttons add no bound: a press and release sent back to back are all read at 500 kHz. `// DECISION K16` at `kSerialClockHz` (`src/ks32/machine.h`) and the `Machine` constructor.
+
+# KS-32 app
+
+## A1: MIDI-in bound
+- Options: (a) an unbounded receive queue (Plan 6's deque), which allocates on the audio thread and grows without limit under a flood; (b) a fixed queue per channel that drops bytes beyond it, newest first, and counts them.
+- Choice: (b), 1024 bytes per DUART channel (`ByteRing<1024> pending`, `src/common/ring.h`). A byte that finds the queue full is dropped and counted in `Duart::rxDropped(ch)`; the count clears on reset, like `overruns`.
+- Evidence: Plan 7's real-time constraint and ruling F-1 of `docs/verification-plan6.md`. At 31 250 baud the line carries about 3 125 bytes a second, so 1024 bytes is about 330 ms of back-to-back MIDI, far more than one audio block brings. The queue stands for the MIDI cable, which has no buffer of its own, so the bound is an emulator choice, not a hardware fact.
+- Confidence: High.
+- Status: settled, Plan 7 Task 1. `// DECISION A1` at `Channel::pending` (`src/duart/duart.h`) and in the test. Test: duart_rx_queue_is_bounded; Plan 6's hashes are unchanged.
+
+## A2: Transmit and panel rings
+- Options: (a) take-by-swap vectors (Plan 6), which allocate every slot; (b) fixed rings that drop the newest byte when full and count it.
+- Choice: (b). The DUART's sent-characters ring holds 256 per channel (`Duart::popTransmitted`, `Duart::txDropped`), and the panel's bytes for the firmware 256 (`Panel::popToCpu`). `Machine::slot` drains the panel channel both ways every slot; the caller pops MIDI out with `Machine::popMidiOut` (the engine every block, Task 2; `ks32emu` every frame).
+- Evidence: a slot is 16 CPU clocks (about 1 us), and one character takes about 300 slots at 31 250 baud, so the panel rings never hold more than a few bytes; 256 bytes of MIDI out is about 80 ms of the line. The order is the old FIFO's, so the boot trace, render and smoke PCM hashes are unchanged (d2afd0fed8861cbd, 2bae46b3acc34cd0, a479ba867298cc55).
+- Confidence: High.
+- Status: settled, Plan 7 Task 1. `// DECISION A2` at `Channel::sent` (`src/duart/duart.h`), `Panel::toCpu_` (`src/ks32/panel.h`) and `Machine::slot` (`src/ks32/machine.cpp`). Tests: duart_pop_transmitted_in_order, panel_pop_to_cpu, rt_machine_runframe_does_not_allocate.
+
+## A3: MIDI timing in a block
+- Options: (a) every byte of a block enters at its start; (b) a byte at output offset `o` enters before machine frame `floor(o * 29762 / outRate)` of the block, with a fixed store per block.
+- Choice: (b). `Engine::midi` stores up to 1024 bytes a block with their machine frame; `render` feeds them before that frame runs, and any left after the block's last frame enter at its end. Bytes beyond 1024 are dropped and counted in `Snapshot::midiDropped`, with the DUART's own drops (A1).
+- Evidence: the design (§6.2) asks for sample-accurate MIDI within a block. A note at offset 479 sounds 478 output frames after one at offset 0 (engine_midi_offset_places_note). 1024 bytes is the DUART's whole receive queue (A1), so the store never loses what the wire could still hold.
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A3` at `Engine::midi` (`src/app/engine.cpp`) and `kMidiStore` (`src/app/engine.h`). Tests: engine_midi_offset_places_note, engine_midi_overflow_is_counted.
+
+## A4: GUI event timing
+- Options: (a) the GUI calls the machine under a lock; (b) a fixed single-producer queue the audio thread drains at the start of each block.
+- Choice: (b). `Engine::post` pushes into a 256-event `SpscRing` and returns false when it is full; `render` applies the events at the start of the next block, in post order. A button or key goes on the panel link only while `Machine::panelRoom()` has room for both of its bytes (the panel's ring and the DUART channel B queue it drains into), so an event is never split; the rest wait for a later block, still in order. Analog events apply at once.
+- Evidence: the real-time constraint (no locks on the audio thread). A block is 10 ms or less at usual settings, below what a mouse press can resolve. 256 events at once all arrive whole (engine_posts_never_split_a_panel_event: no panel or channel B drops). The Bank 9 + Screen 1 chord, posted with 100 ms of blocks between, opens the version screen (engine_chord_reaches_version_screen).
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A4` at `Engine::post` and `Engine::render` (`src/app/engine.cpp`) and `kEventQueue` (`src/app/engine.h`). Tests: spsc_ring_fifo_and_full, engine_chord_reaches_version_screen, engine_posts_never_split_a_panel_event.
+
+## A5: Snapshot hand-off
+- Options: (a) a sequence counter the GUI retries on (design §6.2); (b) a mutex the audio side takes with `try_lock`, skipping the block when the GUI holds it, while the GUI locks normally.
+- Choice: (b). After each block the engine copies the panel state, `booted`, the frame count and the MIDI counters into `Snapshot` under `try_lock`; `Engine::snapshot()` returns a copy under the lock.
+- Evidence: simpler than (a) and race-free; the audio side never waits. A skipped block only delays the display by one block. `PanelState` is plain data, so the copy does not allocate (rt_engine_render_does_not_allocate).
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A5` at `Engine::render` (`src/app/engine.cpp`). Tests: engine_boot_snapshot, rt_engine_render_does_not_allocate.
+
+## A6: Booted
+- Options: (a) watch the display for the play screen; (b) a fixed emulated time since power-on.
+- Choice: (b). `Snapshot::booted` is true once the engine has run `kBootMs` (3200 ms) of machine frames since `create` or `loadRam`.
+- Evidence: `kBootMs` is the measured boot (about 2121 ms) plus 50 % (`src/ks32/machine.h`). After 3000 ms of 48 kHz blocks it is false; after 3300 ms it is true and the display shows ROM 00, KS Grand Piano, with the Select Sound LED on (engine_boot_snapshot).
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A6` at `kBootFrames` (`src/app/engine.cpp`). Test: engine_boot_snapshot.
+
+## A7: Display glyphs
+- Options: for the display codes 0x00-0x1F and 0x7F, which have no known glyphs (Medium confidence that they are characters, interface doc line 309): (a) guess glyphs; (b) draw them blank and show their codes on demand.
+- Choice: (b). Codes 0x20-0x7E are drawn as ASCII in a monospaced font (Consolas), one per cell of the 2 x 16 grid; 0x00-0x1F and 0x7F are drawn blank. The display's right-click menu has a "View" section with "Show display codes", which toggles a hex overlay: every cell shows its code as two hex digits, so the meaning of the unknown codes can be found by watching.
+- Evidence: design section 6.3. The play screen ("ROM   00" / " KS Grand Piano") draws as the artboard shows (checked on a snapshot of the Standalone, `KS32_SNAPSHOT`).
+- Confidence: High for 0x20-0x7E; Low for the rest, which is why they are blank.
+- Status: settled, Plan 7 Task 6. `// DECISION A7` at `DisplayPart::paint` (`app/source/PanelEditor.cpp`). The menu is on the display, not a menu bar: the stock Standalone wrapper has no menu bar, and the VST3 has none of its own.
+
+## A8: Blink
+- Options: the blink rate of the display's blinking cells and of blinking LEDs: (a) measure it on a real KS-32; (b) a fixed rate, logged to revisit.
+- Choice: (b). 2 Hz at 50 % duty (250 ms on, 250 ms off) from the message-thread clock (`Time::getMillisecondCounter`), for display cells and LEDs alike; a blinking cell is drawn blank while off.
+- Evidence: not measured; no real unit to hand. The editor's 30 Hz timer repaints the display and the LEDs when the snapshot or the blink phase changes.
+- Confidence: Low (a choice, not a measurement).
+- Status: open to revisit with a real unit. `// DECISION A8` at `PanelEditor::timerCallback` and `DisplayPart::paint` (`app/source/PanelEditor.cpp`).
+
+## A9: Chord latch
+- Options: how to hold two buttons at once with one mouse (Bank 9 + Screen 1 and the like): (a) a modifier that latches; (b) toggle buttons; (c) no chords. And when the release is sent: (d) on mouse-up only inside the button, as `juce::Button` does; (e) on mouse-up wherever the mouse is.
+- Choice: (a) and (e). A right-click or Shift-click latches a button down, drawn pressed, until it is clicked again (any click releases it). A plain press is sent on mouse-down and its release on mouse-up, wherever the mouse is. Space presses the focused button while held. When the app stops being the foreground process (Alt-Tab), every unlatched button that is down is released; latched buttons stay down.
+- Evidence: design section 6.3 and review focus 3 (a stuck button breaks later chords). Each button sends a press or release only on a change of its own down state, so a late mouse-up after a focus-loss release sends nothing.
+- Confidence: High for the rules; the mouse checks (version chord, drag-off, Alt-Tab) are left to the user's acceptance pass (ruling R1).
+- Status: settled, Plan 7 Task 6. `// DECISION A9` at `ButtonPart` and `PanelEditor::timerCallback` (`app/source/PanelEditor.cpp`).
+
+## A10: Strike
+- Options: the strike value (1-127, `Machine::key`) of a key clicked with the mouse, which has no speed: (a) a fixed strike; (b) from where the key is clicked along its length; (c) from a modifier key.
+- Choice: (b). Strike = 1 + round(126 x y / keyLength), where y is the distance from the key's back edge and keyLength the key's drawn length (white and black keys alike): the front is loud. On a drag, each key entered takes the strike where the mouse entered it. The release sends the press's strike as its release value.
+- Evidence: design section 6.3. The firmware reads the strike through its touch curve (`docs/ks32-hardware-interface.md`, "Keyboard": strike 64 sounds at 20, 127 at 127), so the whole 1-127 range stays reachable on every key. The release value only reaches MIDI out as the note-off velocity.
+- Confidence: Medium (a choice; the feel is the user's to judge).
+- Status: settled, Plan 7 Task 7. `// DECISION A10` at `KeyPart::strikeAt` (`app/source/PanelEditor.cpp`). Louder near the front, and a glissando with no stuck notes, are left to the user's acceptance pass (ruling R1).
+
+## A11: Memory saving
+- Options: when to write the battery memory file: (a) on close only; (b) on close and every 60 s while running, never before the machine has booted; and for Erase, (c) delete the file, (d) restart the machine with zero RAM and let the next automatic save write it, or (e) write the 64 KB zero image to the file at once and restart the machine from it.
+- Choice: (b) and (e) (ruling R7). The memory (`ks32-memory.bin` in `%APPDATA%\KS-32` unless changed) is loaded at start; a file of the wrong size is reported on the settings page and ignored, and the machine boots cold. It is saved on close from `machine().ramImage()` (audio stopped) and every 60 s through `requestRam`/`takeRam`, each time only when `Snapshot::booted` (A6). Each save writes `<file>.tmp` and then replaces the file (`File::replaceFileIn`). Erase asks first, then writes the 64 KB zero image to the memory file at once (`eraseMemoryFile`, the same `.tmp` and replace) and restarts the machine from that file, so the firmware rebuilds its memory as it boots. The boot gate covers the automatic saves (close and the 60 s save) only: Erase is an explicit act and a quick close must not undo it (R7). With no machine running, Erase still erases the file.
+- Evidence: design sections 6.4-6.5. Six or so start-ups of under about 2 s make OS v3.01 reinitialize its memory (Plan 6), so a save before the play screen could store a half-booted image; with the A6 gate a quick open and close leaves the file untouched. The temporary file means a crash mid-write keeps the previous image whole; the 60 s save bounds what a crash loses. Checked on the Standalone with a temporary settings folder (`KS32_SETTINGS_DIR`): closed 0.5 s after the window appeared, the file kept its time stamp; after 6 s it was written on close; after 63 s running it had been rewritten by the timer; Erase followed by a close 0.8 s later left the file as 64 KB of zeros (it had 15 415 non-zero bytes before) with no `.tmp` left, and the next start booted cold from it: the image saved after 6 s differs from a true cold boot's (no memory file) in 16 bytes and from the warm image in 114. `app_tests` covers load, save over an existing file, no `.tmp` left, Erase leaving a 64 KB zero file, and the wrong size.
+- Confidence: High.
+- Status: settled, Plan 7 Task 5. `// DECISION A11` at `Ks32Processor::~Ks32Processor`, `eraseMemory` (also R7) and `timerCallback` (`app/source/Processor.cpp`), `saveMemoryFile` (`app/source/MemoryFile.cpp`) and the memory note (`app/source/SettingsPage.cpp`). Erase then Master Tune reading 00 on System/MIDI is left to the user's acceptance pass (ruling R1).
+
+## A12: MIDI bytes passed
+- Options: (a) only channel messages (note, controller, pitch bend and the like), filtering out sysex and real-time; (b) every byte of every `MidiBuffer` message, sysex and real-time included.
+- Choice: (b). `Ks32Processor::processBlock` hands each message's bytes to `Engine::midi(samplePosition, data, numBytes)` unchanged, before `render`.
+- Evidence: the MIDI IN jack receives the whole stream, and the firmware decides what to read (sysex dumps, MIDI clock and the like are its business, not the host's). The engine bounds a block's bytes (A3) and the DUART its queue (A1), so a sysex flood is dropped and counted, not allocated (engine_midi_overflow_is_counted).
+- Confidence: High.
+- Status: settled, Plan 7 Task 4. `// DECISION A12` at `Ks32Processor::processBlock` (`app/source/Processor.cpp`). Verified by the build and a 12 s launch of the Standalone; playing from a MIDI keyboard is left to the user's acceptance pass (ruling R1).
+
+## A13: Default window
+- Options: the editor's size: (a) the artboard's 2040 x 720 units at 1:1; (b) two thirds of it by default, resizable, aspect fixed.
+- Choice: (b). 1360 x 480 by default, resizable from 1020 x 360 (half size) to 4080 x 1440, with the aspect ratio fixed at 2040:720. The whole board is drawn in design units and scaled uniformly by one transform, so the controls and their mouse areas scale together.
+- Evidence: design section 6.3. The default fits a 1366-wide laptop screen; the layout table (`src/app/panel_layout.cpp`) is the artboard as a browser lays it out, rounded to whole units (tests: panel_layout_*).
+- Confidence: High.
+- Status: settled, Plan 7 Task 6. `// DECISION A13` at the `PanelEditor` constructor (`app/source/PanelEditor.cpp`). Readability at the minimum size is left to the user's acceptance pass (ruling R1).
+
+## A14: Transport buttons
+- Options: for Record, Stop and Play, (a) a code the running firmware answers, found by one bounded hunt that watches MIDI out as well as the display and LEDs; (b) no code, and the app shows the button disabled.
+- Choice: (a) for Play (`Button::Play`, code 09, `PLAY`) and Stop/Continue (`Button::StopContinue`, code 29, `STOP_CONTINUE`); (b) for Record, which stays out of `Button`.
+- Evidence: `docs/ks32-hardware-interface.md` "Front panel: transport buttons". From Select Seq/Preset ("Sequence-00") on a cold-booted machine, each of the 85 codes 0x00-0x7F outside `Button` was held 300 ms once: 09 sends MIDI Start (`FA`) and 29 sends MIDI Stop (`FC`), with no display or LED change; no other code changed the display, the LEDs or MIDI out, apart from 0x3C-0x7F, which act like Bank and Screen buttons. No `F8` or `FB` was seen; System/MIDI has no clock-out setting. These are the two codes Plan 6 singled out by instruction count.
+- Confidence: High for the bytes sent; Medium for the names (from the bytes and the panel's labels); Record not found.
+- Status: settled, Plan 7 Task 3. `// DECISION A14` at `Button` (`src/ks32/panel.h`). Tests: ks32_firmware_transport_codes, panel_button_table.

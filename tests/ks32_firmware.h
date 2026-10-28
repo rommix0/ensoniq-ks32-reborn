@@ -10,10 +10,8 @@
 #include "check.h"
 #include "ks32/machine.h"
 
-// The OS and wave ROMs from ENS_ROM_DIR; nullptr when a file is missing (the caller prints
-// "  skip: ROMs not found"). Files that exist but are rejected (a wrong size) print the error
-// and fail the running test, so a bad ROM set never passes as a skip.
-inline std::unique_ptr<ens::ks32::Machine> loadKs32() {
+// The OS and wave ROM files from ENS_ROM_DIR, unchecked; false when a file is missing.
+inline bool readKs32Roms(ens::ks32::RomSet& r) {
     const std::string dir = ENS_ROM_DIR;
     const auto read = [](const std::string& path, std::vector<uint8_t>& out) {
         std::ifstream f(path, std::ios::binary);
@@ -21,11 +19,17 @@ inline std::unique_ptr<ens::ks32::Machine> loadKs32() {
         out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
         return true;
     };
+    return read(dir + "/ks32/ks32v301upper.bin", r.osUpper) && read(dir + "/ks32/ks32v301lower.bin", r.osLower) &&
+           read(dir + "/sq1-u25.bin", r.u25) && read(dir + "/sq1-u26.bin", r.u26) &&
+           read(dir + "/rom2.u39", r.rom2) && read(dir + "/rom3.u38", r.rom3);
+}
+
+// The machine on the ROMs from ENS_ROM_DIR; nullptr when a file is missing (the caller prints
+// "  skip: ROMs not found"). Files that exist but are rejected (a wrong size) print the error
+// and fail the running test, so a bad ROM set never passes as a skip.
+inline std::unique_ptr<ens::ks32::Machine> loadKs32() {
     ens::ks32::RomSet r;
-    if (!read(dir + "/ks32/ks32v301upper.bin", r.osUpper) || !read(dir + "/ks32/ks32v301lower.bin", r.osLower) ||
-        !read(dir + "/sq1-u25.bin", r.u25) || !read(dir + "/sq1-u26.bin", r.u26) ||
-        !read(dir + "/rom2.u39", r.rom2) || !read(dir + "/rom3.u38", r.rom3))
-        return nullptr;
+    if (!readKs32Roms(r)) return nullptr;
     std::string err;
     auto m = ens::ks32::Machine::create(r, err);
     if (!m) {
