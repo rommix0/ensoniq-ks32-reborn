@@ -21,9 +21,11 @@ Duart::Duart(uint32_t x1Hz) : x1Hz_(x1Hz) {}
 
 void Duart::reset() {
     // DECISION D4: the data sheet's reset state (para 2.4): SR, IMR, ISR, OPR and OPCR clear,
-    // IVR = 0x0F, OP0..OP3 high, C/T in timer mode, channels inactive and TxD marking. It is
-    // silent on MR, CSR, ACR, CTUR/CTLR and the counter, which also clear; the output pins are
-    // the complement of OPR, so OPR = 0 puts all of OP7..OP0 high. The input pins are external.
+    // IVR = 0x0F, OP0..OP3 high, channels inactive and TxD marking. It is silent on MR, CSR,
+    // ACR, CTUR/CTLR and the counter, which also clear (it says the C/T is in timer mode, but
+    // ACR = 0 encodes counter mode from IP2, table 4-4: the ACR bits decide, so the C/T is idle
+    // until ACR selects a mode); the output pins are the complement of OPR, so OPR = 0 puts all of
+    // OP7..OP0 high. The input pins are external.
     const uint8_t ip = ip_;
     const uint32_t hz = x1Hz_;
     *this = Duart(hz);
@@ -203,7 +205,8 @@ void Duart::advanceCounter(uint32_t n) {
     // DECISION D5: n counts whole X1 clocks. The X1/16 prescaler phase is kept in ctPhase_, so
     // single-clock and bulk calls count alike; a start command restarts the phase.
     const uint32_t div = counterDivisor();
-    if (!ctRunning_ || !div) return;
+    // Only counter mode waits for a start command; a timer runs continuously (para 3.5.2).
+    if (!div || (!(acr_ & 0x40) && !ctRunning_)) return;
     const uint64_t total = static_cast<uint64_t>(ctPhase_) + n;
     uint64_t steps = total / div;
     ctPhase_ = static_cast<uint32_t>(total % div);
@@ -388,6 +391,16 @@ void Duart::write(uint8_t reg, uint8_t v) {
     }
     switch (reg) {
         case 4: {
+            // DECISION D6: a free-running timer has no start command to fix its phase. When ACR[6:4]
+            // changes, the count is cleared so that it loads the preload at the next advance() (a
+            // preload written after ACR but before then is seen), and the counter run state is
+            // dropped, so leaving counter mode stops it (para 3.5, 3.5.2).
+            if (((acr_ ^ v) & 0x70) != 0) {
+                ctCount_ = 0;
+                ctPhase_ = 0;
+                ctOdd_ = false;
+                ctRunning_ = false;
+            }
             acr_ = v;
             const uint8_t src = (v >> 4) & 7;  // 0, 1, 2, 4, 5: IP2 or TxC 1X sources (D3)
             if (src != 0 && src != 3 && src != 6 && src != 7) ++unsupported_;

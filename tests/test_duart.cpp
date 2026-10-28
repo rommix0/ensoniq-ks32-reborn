@@ -300,6 +300,37 @@ TEST(duart_timer_mode_period) {
     CHECK_EQ(d.read(kISR) & 0x08, 0x08);
 }
 
+TEST(duart_timer_runs_without_start_command) {
+    Duart d(kX1);
+    d.write(kACR, 0x60);  // timer, X1; the preload is written after ACR
+    d.write(kCTUR, 0x00);
+    d.write(kCTLR, 100);
+    d.advance(199);  // no read of reg 14
+    CHECK_EQ(d.read(kISR) & 0x08, 0);
+    d.advance(1);
+    CHECK_EQ(d.read(kISR) & 0x08, 0x08);
+    d.read(kStop);
+    d.advance(199);
+    CHECK_EQ(d.read(kISR) & 0x08, 0);
+    d.advance(1);
+    CHECK_EQ(d.read(kISR) & 0x08, 0x08);
+}
+
+TEST(duart_leaving_counter_mode_stops_it) {
+    Duart d(kX1);
+    d.write(kCTLR, 10);
+    d.write(kACR, 0x30);
+    d.read(kStart);
+    d.write(kACR, 0x70);  // timer
+    d.write(kACR, 0x30);  // back to counter: not started
+    d.read(kStop);
+    d.advance(10 * 16 * 5);
+    CHECK_EQ(d.read(kISR) & 0x08, 0);
+    d.read(kStart);
+    d.advance(10 * 16);
+    CHECK_EQ(d.read(kISR) & 0x08, 0x08);
+}
+
 TEST(duart_timer_new_preload_at_terminal_count) {
     Duart d(kX1);
     d.write(kACR, 0x60);
