@@ -145,3 +145,20 @@ TEST(otis_page_masking_and_decode) {
     o.write(15, 64);  // same global channel registers as page 96
     CHECK_EQ(o.read(6), 0x2468);
 }
+
+// PAR (pages 64-127, reg 9) holds the 10-bit POT conversion in [15:6] (OTIS notes §4.9) and is
+// read-only.
+TEST(otis_par_reads_pot_value) {
+    NullMem m;
+    Otis o(m);
+    o.write(15, 0x40);
+    CHECK_EQ(o.read(9), 0x0000);
+    o.setPot(0x3FF);
+    CHECK_EQ(o.read(9), 0xFFC0);
+    o.setPot(0x201);
+    CHECK_EQ(o.read(9), 0x8040);
+    o.write(9, 0x1234);
+    CHECK_EQ(o.read(9), 0x8040);
+    o.write(15, 0x05);  // a voice page: reg 9 is RVOL
+    CHECK_EQ(o.read(9), 0x0000);
+}

@@ -141,7 +141,8 @@ uint16_t Otis::read(uint8_t reg) {
         if (reg < 6) return 0;  // DECISION O11: CH0-CH2 are write-only (test), reads return 0
         if (reg < 8) return chRead(chAcc_[reg]);  // DECISION O11: CH3L/R read back last latched value
         if (reg == 8) return static_cast<uint16_t>(kSerModeRead1 | sermodeBits_);  // DECISION O9
-        return 0;  // PAR (reg 9) not modelled; other regs unlisted
+        if (reg == 9) return static_cast<uint16_t>(pot_ << 6);  // DECISION O9: PAR [15:6]
+        return 0;  // unlisted
     }
     if (page_ & 0x20) {  // pages 32-63: filter storage
         const uint16_t* p = filterReg(v, reg);

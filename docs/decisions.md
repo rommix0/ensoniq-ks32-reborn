@@ -74,10 +74,10 @@ Entry template:
 
 ## O9: Unused/reserved bits
 - Options: (a) unused bits read 0; (b) unused bits read 1 where the bit table shows "1"; (c) return the last written value.
-- Choice: CR reads `0xF000 | cr[11:0]`; SERMODE reads `0x07F8 | bits[15:11,2:0]`; PAGE keeps 7 bits; unlisted registers (voice reg 12, filter-page regs 0 and 7-12, channel-page reg 9 PAR and above) read 0 and ignore writes. Bits outside a register's justification (FC bit 0, STRT-L/END-L [4:0], K1/K2 [3:0], LVOL/RVOL [7:0], ACCH [15:13]) are not stored and read 0.
+- Choice: CR reads `0xF000 | cr[11:0]`; SERMODE reads `0x07F8 | bits[15:11,2:0]`; PAGE keeps 7 bits; unlisted registers (voice reg 12, filter-page regs 0 and 7-12, channel-page regs 10 and above) read 0 and ignore writes. PAR (channel-page reg 9) reads the POT conversion given by `setPot(v10)` as `v10 << 6` ([15:6], bits 5:0 read 0) and ignores writes; it starts at 0 and `reset()` leaves it. Bits outside a register's justification (FC bit 0, STRT-L/END-L [4:0], K1/K2 [3:0], LVOL/RVOL [7:0], ACCH [15:13]) are not stored and read 0.
 - Evidence: OTIS notes §4.5 (bit table shows "1" in unused CR/SERMODE positions, "presumably read back as 1"), §4.2-§4.4 justifications.
 - Confidence: Medium.
-- Status: Implemented in src/otis/otis.cpp (Task 2). PAR (page 64+ reg 9) is not modelled and reads 0.
+- Status: Implemented in src/otis/otis.cpp (Task 2). PAR added in Plan 6 Task 6 (`Otis::setPot`, OTIS notes §4.9 "PAR"); the KS-32 drives it from its analog multiplexer (K8). Test: otis_par_reads_pot_value.
 
 ## O10: Reset state
 - Options: (a) everything 0; (b) documented bits only; (c) CR starts with the voice stopped.
@@ -697,3 +697,176 @@ Entry template:
 - Evidence: UM 6.3.4 (a failed acknowledge goes to the spurious interrupt vector).
 - Confidence: Medium (an interface convention; no KS-32 device answers out of range).
 - Status: `// DECISION M24` at `Cpu::interrupt` (`src/m68k/m68k_cpu.cpp`) and on `Bus::interruptAcknowledge` (`src/m68k/m68k.h`, Task 7). Test: m68k_vectored_and_spurious.
+
+## DUART
+
+Evidence cites the Motorola MC68681 data sheet (MC68681/D, Sep 1985, `datasheets/MC68681_DUART.pdf`, git-ignored) by paragraph and PDF page.
+
+## D1: Serial timing
+- Options: (a) bit-level TxD/RxD lines with start-bit detection, break and error detection; (b) character level: a character is a count of 16x baud ticks.
+- Choice: (b). A character takes 1 start + data bits (MR1[1:0], 5 to 8) + a parity bit if MR1[4:3] is not 10 + the stop length of MR2[3:0] bit times. It is counted in 16x ticks so the sixteenth-bit stop lengths of table 4-5 are exact (6 to 8 bits: codes 0 to 7 give 9 to 16 sixteenths, 8 to F give 25 to 32; 5 bits: codes 0 to F give 17 to 32). The receiver uses the same length. A transmitted character finishes at the end of its last stop bit; a received one reaches the FIFO at the same point. Data is masked to the programmed length. There is no break detection and no receive parity or framing error: SR[7:5], ISR[2] and ISR[6] never set.
+- Evidence: 3.1, 3.2 (character format; PDF 22, 23); 4.2.1.4, 4.2.1.6, 4.2.2.4 and table 4-5 (length, parity, stop codes; PDF 37, 39, 32); 4.2.9.5, 4.2.9.6 (TxEMT sets after the last stop bit, TxRDY sets when THR moves to the shift register; PDF 43). 9600 baud, 8N1 is 10 bits x 16 x 24 = 3840 X1 clocks.
+- Confidence: High for the lengths; Medium for the receiver's finishing point (the real receiver samples the centre of the first stop bit, half a bit earlier).
+- Status: `// DECISION D1` at `Duart::charTicks` (`src/duart/duart.cpp`, Task 1). Tests: duart_tx_character_timing, duart_char_length_parity_and_stop_bits, duart_rx_one_char_per_char_time.
+
+## D2: Receive path
+- Options: (a) receive() puts a byte straight into the FIFO; (b) bytes wait in a queue and enter the receiver one per character time at the channel's receive rate.
+- Choice: (b). A byte given to receive() while the receiver is enabled joins a queue standing for the wire; the receiver takes them back to back, each finishing one character time (D1) after it starts, at the rate the channel's CSR (or the C/T) gives. A byte given while the receiver is disabled is lost, and so are the queued bytes and the character in progress when a disable or reset-receiver command arrives; characters already in the FIFO stay readable. The FIFO is 3 deep plus the shift register: a character finished with the FIFO full waits in the shift register; the start bit of the next character overruns it (the waiting character is lost, OE sets, `overruns()` counts), and a read of RHR moves a waiting character into the FIFO. OE stays until the reset-error-status command; reset-receiver leaves it alone (4.2.7.2: "All other registers are unaltered"). A receiver with no clock (an external IP clock pin with no clock wired, or a C/T that is not in a timer mode from X1 or X1/16) takes nothing.
+- Evidence: 3.2 (FIFO, shift register, "held in the receive shift register until a FIFO position is available", overrun on the start bit of the next character; PDF 23, 24); 4.2.9.4 (OE; PDF 43); 4.2.7.2 and 4.2.7.4 (reset receiver, disable receiver; PDF 41, 42); 4.2.9.7, 4.2.9.8 and 4.2.15.3 (FFULL and RxRDY semantics; MR1[6] selects which drives ISR[1] and ISR[5]; PDF 43, 47).
+- Confidence: High for the FIFO and overrun rules (the data sheet states them); Medium for the queue (a host convention the data sheet cannot give).
+- Status: `// DECISION D2` at `Duart::startRx` (`src/duart/duart.cpp`, Task 1). Tests: duart_rx_fifo_and_overrun, duart_reset_receiver_keeps_overrun, duart_rx_disabled_drops_bytes, duart_rx_ready_interrupt_and_ffull_select.
+
+## D3: Unmodelled features
+- Options: (a) model them; (b) leave them out and count the writes that select them.
+- Choice: (b). A register write that selects one of these increments `unsupportedWrites()` once and otherwise stores the value: automatic echo, local and remote loopback (MR2[7:6] not 00); RTS/CTS control (MR1[7], MR2[5], MR2[4]); multidrop (MR1[4:3] = 11, timed like a parity bit); the break commands start break and stop break (CR[6:4] = 110, 111; 101, "reset break-change interrupt", is supported: it clears ISR[2]/ISR[6], which never set); 1x external clocks (a CSR nibble 1111, which leaves that direction unclocked); a 16x external clock (CSR nibble 1110) on a pin with no clock wired; C/T clock sources other than X1 and X1/16 (ACR[6:4] = 001, 010, 100 or 101; 000, the reset value, is not counted, and the C/T does not count from it); any non-zero OPCR (OP7..OP0 stay the complement of OPR; the TxRDY, RxRDY, clock and C/T outputs are not driven). The C/T as a baud clock is supported in the timer modes from X1 and X1/16. External 16x clocks are modelled (amended in Plan 6 Task 3, because the KS-32 firmware writes CSRA = CSRB = 0xEE): `setExternalClock(pin, hz)` wires a rate to an IP pin, which reset() keeps; CSR code 1110 then ticks every X1 / hz X1 clocks (exact when hz divides X1, as 4 MHz / 500 kHz = 8 does). Pins per table 4-2: TxCA = IP3, RxCA = IP4, TxCB = IP5, RxCB = IP2. Also left out: the 25 to 50 microsecond filter on input-port changes.
+- Evidence: 3.3, 3.4 (echo, loopback, multidrop; PDF 25, 26); 4.2.2.1 to 4.2.2.3 (PDF 37 to 39); 4.2.7.2 (break commands; PDF 41); 4.2.11, 4.2.14 and tables 4-2, 4-3, 4-4 (PDF 44, 46, 29, 30, 31).
+- Confidence: Medium. They are features the KS-32's MIDI and panel-link use is not expected to need; the later tasks that run the ROM show whether `unsupportedWrites()` stays 0.
+- Status: `// DECISION D3` at `Duart::writeMode`, `Duart::tick16` and the counting sites in `Duart::write` and `Duart::command` (`src/duart/duart.cpp`, Task 1; external 16x clocks and command 101 in Plan 6 Task 3). Tests: duart_unsupported_mode_counted, duart_external_16x_clock.
+
+## D4: Reset state
+- Options: (a) only what the data sheet lists; (b) also clear the registers it does not mention.
+- Choice: (b), with the sheet's listed values taken verbatim: SRA, SRB, IMR, ISR, OPR and OPCR clear, IVR = 0x0F, OP7..OP0 pins high (the pin is the complement of OPR, so OPR = 0), channels inactive and TxD marking (transmitter and receiver disabled, so TxRDY = 0). MR1/MR2 (pointer at MR1), CSR, ACR, CTUR/CTLR and the counter also clear; the data sheet is silent on them. The sheet also says the C/T is in timer mode after reset (2.4, 3.5), but ACR = 0 encodes counter mode from IP2 (table 4-4): the model follows the ACR bits, so the C/T does nothing until ACR selects a mode (a counter also waits for its start command, D5; a timer runs, D6). The input pins are external: `reset()` keeps their levels, and they start high (unconnected TTL inputs).
+- Evidence: 2.4 (PDF 17); 4.2.15 ("ISR initialized to 00"; PDF 46); 4.2.19 (IVR = 0F; PDF 48); 3.5 (timer mode after reset; PDF 26) against table 4-4 (ACR[6:4] = 000 is counter mode; PDF 31); 4.1 (mode register pointer set to MR1 by RESET; PDF 31).
+- Confidence: High for the listed values; Medium for the unlisted ones.
+- Status: `// DECISION D4` at `Duart::reset` (`src/duart/duart.cpp`, Task 1). Test: duart_reset_state.
+
+## D5: Time base
+- Options: (a) advance() in baud ticks; (b) in whole X1 clocks, with the C/T's X1/16 prescaler counted exactly.
+- Choice: (b). `advance(n)` counts n X1 clocks. The C/T keeps the X1 clocks already spent on the current count (`ctPhase_`), so one call of n clocks and n calls of one clock count alike; a start command restarts the phase (in either mode). Counter mode, which counts only after a start command and stops when ACR leaves counter mode (D6): terminal count `preload` counts after the start, ISR[3] sets, the count rolls over from 0 to 0xFFFF and runs on; the stop command clears ISR[3] and stops it. Timer mode: terminal count every `preload` counts (square wave period 2 x preload); ISR[3] sets on every second terminal count (the sheet's "every other time"), counted from the start command or, without one, from D6's phase, so with preload 100 from X1 it sets 200 clocks after the start; the stop command clears ISR[3] but the timer runs on; a new preload is picked up at the terminal count; the minimum preload is 2. Baud rates use the fixed integer X1 divisors of table 4-6's 3.6864 MHz column: 9600 baud is 24 X1 clocks per 16x tick at any X1 (the rates scale with X1); the C/T as baud source gives 2 x preload x (1 or 16) X1 clocks per 16x tick.
+- Evidence: 3.5.1 and 3.5.2 (PDF 26, 27); 4.2.15.5 (PDF 47); table 4-4 (PDF 31); tables 4-5 and 4-6 (PDF 33, 45: the 110, 134.5 and 1050 baud 16x clocks of 1.759, 2.153 and 16.756 kHz give the divisors 2096, 1712 and 220, and 2000 baud at 32.056 kHz gives 115).
+- Confidence: High for the periods; Medium for the exact phase of a first terminal count on real hardware (the prescaler is free-running there; a start command is assumed to align it).
+- Status: `// DECISION D5` at `Duart::advanceCounter` (`src/duart/duart.cpp`, Task 1). Tests: duart_counter_mode_ready, duart_counter_prescaler_exact_across_calls, duart_counter_reads_and_rollover, duart_timer_mode_period, duart_timer_new_preload_at_terminal_count, duart_rx_bit_clocks, duart_baud_table.
+
+## D6: Free-running timer phase
+- Options: (a) the timer runs only after a start command; (b) it runs from the moment ACR selects a timer mode, counting from the preload; (c) it runs from reset with an unknown count.
+- Choice: (b). The sheet says the timer "runs continuously and cannot be started or stopped by the CPU" (3.5, 3.5.2) and gives no phase for a timer that has not been started; a start command (read of reg 14) reloads the preload, restarts the phase and the terminal-count parity (D5). Without one, a write that changes ACR[6:4] clears the count; the next advance() loads the preload then (so a preload written after ACR, before the first advance, counts), and ISR[3] sets at the second terminal count, 2 x preload source clocks later. The same write drops the counter run state, so a counter left and re-entered must be started again. Only counter mode needs the start command.
+- Evidence: 3.5 and 3.5.2 (PDF 26, 27: "runs continuously", the start command "terminates the current countdown sequence ... reinitializes itself"); 4.2.13.2 (ACR[6:4]; PDF 46). The sheet's advice to issue the start command before routing the timer to OP3 (3.5.2, PDF 27; OPCR[3:2] note, PDF 44) is about configuration order and does not make the start a precondition for running.
+- Confidence: Medium (the real phase of an unstarted timer depends on its prescaler and the count at power-up; any ROM that starts the timer explicitly, as the sheet recommends, is unaffected).
+- Status: `// DECISION D6` at the ACR write in `Duart::write` (`src/duart/duart.cpp`, Task 1 fix round). Tests: duart_timer_runs_without_start_command, duart_leaving_counter_mode_stops_it.
+
+## D7: Disabling the transmitter with a character in THR
+- Options: (a) a disable lets only the shift-register character finish and drops one waiting in THR; (b) it lets both finish.
+- Choice: (a). The disable-transmitter command resets TxRDY, TxEMT and THR (the loaded character is lost), and a character already in the shift register completes. The reset-transmitter command drops both.
+- Evidence: the sheet is ambiguous. For (a): 3.1 says the RTS output negates "one bit time after the character in the transmit shift register is completely transmitted" (PDF 23), and 4.2.7.3 (CRA[3:2] = 10) says "if a character is being transmitted when the transmitter is disabled, the transmission of the character is completed before assuming the inactive state" (PDF 41). For (b): 4.2.2.2, the MR2A[5] text, says OPR[0] clears "one bit time after the characters in the channel A transmit shift register and in the transmit holding register, if any, are completely transmitted" (PDF 38), which implies a THR character is sent; but that text describes the automatic-RTS mode, not the command. 4.2.9.5 (PDF 43) says TxEMT clears when the transmitter is disabled.
+- Confidence: Low to Medium (the two passages cannot both be taken as a statement about the command).
+- Status: `// DECISION D7` at the disable-transmitter branch of `Duart::command` (`src/duart/duart.cpp`, Plan 6 final fix wave). No test pins it.
+
+## KS-32 machine
+
+Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them provisionally; Task 3 settled K1-K3, K6, K9 and K14-K16 by running the OS ROM (v3.01), Tasks 4 and 5 settled K7, Task 6 settled K8 and K13, Task 7 confirmed K3 by MIDI in and examined K2 with notes playing, and Task 8 settled K10-K12. The evidence for those is in `docs/ks32-hardware-interface.md`, one section per fact. K4 and K5 remain Task 2's choices.
+
+## K1: Memory map
+- Options: (a) Task 2's map: 64 KB of RAM at 0xFF0000, mirrored at 0-0xFFFF only; (b) 64 KB mirrored over 0x000000-0x03FFFF and at 0xFF0000; (c) 128 KB or 256 KB at 0x000000-0x03FFFF. For the vectors: the ROM overlay of 0-7 ends at the first write into 0-7, or at the first access outside 0-7; or a RAM at 0x000000 separate from the one at 0xFF0000.
+- Choice: (b). ROM at 0xC00000-0xC3FFFF: the upper EPROM supplies the even bytes, the lower EPROM the odd bytes, mirrored every 0x20000. 64 KB of RAM with A16/A17 not decoded: 0x000000-0x03FFFF (four mirrors) and 0xFF0000-0xFFFFFF. Reads of 0-7 come from ROM until the first write into 0-7. OTIS at 0x200000-0x20001F (words, reg = A4..A1), ESP at 0x260000-0x2601FF (odd bytes, reg = A8..A1), DUART at 0x280000-0x28001F (odd bytes, reg = A4..A1). Wrong-width accesses are handled as in Task 2 (a byte access to OTIS, an even byte of the ESP or the DUART); the boot makes none.
+- Evidence: `docs/ks32-hardware-interface.md` "Memory map". The firmware clears 0x000000-0x03FFFF, then probes for 64 KB (word writes to 0x8000 and 0x18000, read back). Under (a) it reports event 130 (divide by zero) and touches 0x010000-0x04891C unmapped. Under (b) and (c) the boot completes with 0 unmapped accesses: 128 KB and 256 KB also boot, to the same outcome, because the firmware adapts to its probe. The service manual says "64K of RAM" (PDF p4), so (b). The overlay ending at the first access outside 0-7 makes no device access at all; a separate RAM at 0 gives the same trace hash as the shared one (one chip pair, U28/U33).
+- Confidence: High for the windows and the overlay; Medium for the RAM size.
+- Status: settled, Task 3. `// DECISION K1` at `isRam` and `Machine::romByte` (`src/ks32/machine.cpp`). Tests: ks32_machine_ram_write, ks32_machine_low_overlay_and_rom_mirror, ks32_machine_wrong_width_accesses_are_traced, ks32_firmware_boot_is_fully_mapped.
+
+## K2: Interrupt map
+- Options: the OTIS IRQ and the DUART INTR on levels 1-6 (7 for completeness); the DUART acknowledge answered by `duart.ivr()` or by autovector.
+- Choice: the DUART is vectored (IVR) on level 3 (`kDuartIrqLevel`), and OTIS is on level 1 with autovector (`kOtisIrqLevel`). The firmware writes IVR = 0x40 (vector 64). Task 7 played notes to settle the levels, and the evidence cannot tell them apart, so they are kept (ruling T7-2). Their only basis is a recollection of MAME's esq5505 driver (DUART on IRQ 3, OTIS on IRQ 1), recalled and not checked. The IPL is the highest level of the asserting devices. Each acknowledge is traced as Device::Iack (addr = level, value = the vector answered).
+- Evidence: `docs/ks32-hardware-interface.md` "Interrupts".
+  - Boot (Task 3): autovector gives event 138 (spurious interrupt, at level 1) or 139 (unused vector, at level 4); the IVR answer gives neither. DUART levels 1-6 behave identically (exception counts, kinds of access, display text), and 7 breaks the boot. Outside its handlers the firmware runs at masks 0, 5 (6 instructions) and 7, so the DUART level is bounded to 1-5. IMR values written: 0x08, 0x00, 0x2B, 0x00.
+  - Notes (Task 7): a 64-message MIDI burst, 24 held notes then 100 quick ones, and a note on each of the 16 channels. OS v3.01 never writes an OTIS CR with IRQE set (0 of 764 writes) and never reads IRQV, so OTIS never interrupts and its level is unobservable; the runs at OTIS levels 1 and 5 match, and the other levels are inferred. DUART levels 1-6 give the same PCM hash, exception counts and displays under each load. There are no autovectored or spurious interrupts and no unexpected event, and there are 0 MIDI overruns. Inside the level-L handler the masks are L and L - 1, relative to the handler's level, so they add no bound. Mask 5 does not appear with notes playing.
+- Confidence: High for the IVR answer; Low for both levels.
+- Status: IVR answer settled (Task 3). Levels examined in Task 7 and kept: the DUART is bounded to 1-5 and OTIS is unobservable with OS v3.01. `// DECISION K2` at `kOtisIrqLevel`/`kDuartIrqLevel` (`src/ks32/machine.h`) and `Machine::updateLines` (`src/ks32/machine.cpp`). Test: ks32_firmware_midi_burst_no_overrun (every acknowledge is the DUART's vector 64).
+
+## K3: Clocks
+- Options: (a) MAME's clocks; (b) values derived from the schematic crystals.
+- Choice: (a), confirmed. The CPU and OTIS run at 15 238 090 Hz (30 476 180 / 2). A voice slot is 16 CPU clocks. The DUART X1 is 4 000 000 Hz. The ESP runs 89 instruction periods per frame (P1). The MIDI channel (DUART A) is clocked by an external 16x clock of 500 kHz on IP3 (TxCA) and IP4 (RxCA), 16 MHz / 32, which gives 31 250 baud (128 X1 clocks per bit). The panel channel is K16.
+- Evidence: `docs/ks32-hardware-interface.md` "Clocks". The boot clock test (ACR = 0x30, counter X1/16, preload 2500, IMR = 0x08) leaves OTIS at 32 voices, so the ratio of the two clocks passes the firmware's own test (findings.md section B). The firmware writes CSRA = 0xEE (external 16x clocks), and channel A sends MIDI (control changes in running status, pitch bend), so it runs at the MIDI rate. The 16 MHz crystal is in findings.md section B.
+- Confirmed by MIDI in (Task 7): after the boot `rxBitClocks(0)` is 128 (31 250 baud). A note-on on channel A sounds, and a program change selects ROM 05. A 64-message burst queued at once is received with no overrun. `kMidiChannel` = 0 (channel A). The firmware receives in omni mode: its System/MIDI defaults are "Base Channel= 01" and "MIDI Mode=OMNI", and every channel sounds. `docs/ks32-hardware-interface.md` "MIDI".
+- Confidence: Medium for the CPU/OTIS and X1 values (the test constrains only their ratio); High for the MIDI clock, confirmed by MIDI in.
+- Status: settled, Task 3; MIDI confirmed, Task 7. `// DECISION K3` at `kCpuHz`, `kDuartHz`, `kSerialClockHz` and `kMidiChannel` (`src/ks32/machine.h`) and the `setExternalClock` calls in the `Machine` constructor. Tests: ks32_firmware_boot_keeps_32_voices, ks32_firmware_midi_rate, ks32_firmware_midi_note_sounds, ks32_firmware_midi_burst_no_overrun, ks32_firmware_program_change_changes_display.
+
+## K4: Scheduler
+- Options: (a) per voice slot: the CPU runs 16 clocks, then OTIS, DUART and ESP steps; (b) run the CPU a whole frame, then the devices.
+- Choice: (a). Each slot runs `cpu.run(16 - carry)` and carries the overshoot of the last instruction; a carry of 16 or more skips the CPU for that slot. Then `otis.stepVoice()`; the DUART advances by an exact rational X1 accumulator (16 x 4 000 000 / 15 238 090 X1 clocks per slot, the remainder kept); the ESP per K5; the IPL is recomputed. The IPL is also recomputed after every device access. The 40 reset cycles count in `cycles()` and are not carry. A frame ends when OTIS latches it (slot ACT).
+- Evidence: K3. (b) would let a device see a stale CPU state for a whole frame (about 1 ms) and make the DUART timing coarse.
+- Confidence: Medium.
+- Status: provisional, Task 3. `// DECISION K4` at `Machine::slot` (`src/ks32/machine.cpp`, Task 2). Test: ks32_machine_frame_cadence.
+
+## K5: ESP cadence
+- Options: (a) always `esp.advance(89)` at frame end; (b) at frame end while running, and while halted spread the idle steps over the slots.
+- Choice: (b). While running, `Board::route` calls `esp.advance(89)` at frame end (as `Board::frame`). While halted, slot i of an N-slot frame (N = ACT + 1) gets floor(89(i+1)/N) - floor(89 i/N) `idleStep()` calls, and `route` is given 0 slots so it does not advance the halted ESP a second time. The ESP's host accesses go straight to `hostRead`/`hostWrite`, so the firmware's loads land on the idle steps between its own writes.
+- Evidence: `Esp::idleStep` cadence contract (about one per 300 ns); findings.md section B.
+- Confidence: Medium.
+- Status: provisional, Task 3. `// DECISION K5` at `Machine::slot` (`src/ks32/machine.cpp`, Task 2). Test: ks32_machine_halted_esp_idle_spread.
+
+## K6: Unmapped accesses
+- Options: (a) bus error; (b) reads 0 and writes ignored, with a trace event.
+- Choice: (b) (the 68000 core takes no bus errors, M5). Every unmapped access is traced as Device::Unmapped with its size. With the K1 map the boot makes none.
+- Evidence: M5 (`src/m68k/m68k.h`); `docs/ks32-hardware-interface.md` "Unmapped accesses".
+- Confidence: High.
+- Status: settled, Task 3. `// DECISION K6` at the unmapped fallthrough of `Machine::read8` (`src/ks32/machine.cpp`). Tests: ks32_machine_unmapped_is_traced, ks32_firmware_boot_is_fully_mapped.
+
+## K7: Panel protocol
+- Options: the channel (DUART A or B); a start-up handshake that the panel must answer, or none; for each command byte, its parameter count and effect; what the cursor does past the last position; how out-of-range parameters are handled. For the buttons: the byte form of a press, whether a release exists and its form (for example code | 0x80, a second code, or a different second byte), or no release with a hold expressed some other way; the code of each control.
+- Choice (first part, firmware to panel): the panel is on DUART channel B (`kPanelChannel`). The machine gives `Panel::fromCpu` the bytes that finished leaving TxDB in each slot, and queues `Panel::takeToCpu()` on RxDB, with no processing delay of its own; the bytes enter at the line rate (D2). There is no handshake: `takeToCpu` returns only button events (second part). The display is 2 x 16 (positions 0x00-0x1F) with 15 LEDs (0x00-0x0E). Bytes 0x00-0x7F are characters. The commands are `87 pp` (cursor), `8C` (blank and home), `8D/8E/8F nn` (LED on/off/blink) and `90`/`91` (blink marking on/off). These take their parameters and change nothing modelled: `80`, `81`, `83`, `92`, `98`, `86 xx`, `94 xx`, `95 xx` and `93` with 9 bytes (Task 4 also had `88 xx` and `89 xx` here; see the second part). Past position 0x1F the cursor wraps to 0. Other command bytes, `87` with 0x20 or more and LED numbers of 0x0F or more are counted in `PanelState::unknown` and ignored.
+- Choice (second part, panel to firmware, Task 5): `Panel::button(b, down)` queues `code | 0x80, 00` for a press and `code, 00` for a release; `Machine::button` passes it on, and the bytes reach RxDB from the next slot at the line rate. `Button` holds the 43 controls found (codes 0x04-0x39); Record, Stop and Play are open. Task 5 also settles `88 nn` / `89 nn` as saving the cursor in slot nn and moving it back (slots 0 and 1; others counted in `unknown`), and adds `85` with one parameter and no modelled effect.
+- Evidence: `docs/ks32-hardware-interface.md` "Front panel: display and LEDs" (command table, with evidence per row). Channel B carries the display text. Before IMR enables RxRDYB the firmware never reads RHRB. A byte received during start-up is ignored and then discarded by the receiver reset at 598 ms. No single byte at 700 ms or 2000 ms changes the stream. Row 1 starts at 0x10: `87 10` is followed by 16 characters that form the second row. The wrap is never exercised (the firmware does not write past 0x1F). Buttons: "Front panel: buttons". Held Down/No repeats until `0C 00` and no other byte form stops it. Bank 9 + Screen 1/9/0 open the version, reinitialize and Analog Tests screens only while Bank 9 is held, and a press and release in one slot acts like a 100 ms press. Each code's screen matches Figure 2's labels and the inventory. Without a release, Select Sound stays held and blocks the combinations. The service manual's "Press Edit Seq/Preset" means press and release: holding it through the combination gives the Locate page.
+- Confidence: High for the channel, the geometry, `87`, text, the LED numbering, "no handshake", the press and release forms and the codes marked High in the button table. Medium for `8C` blanking, on/off polarity, `90`/`91`, `88`/`89` and the codes marked Medium. Low for `8F` = blink and for the parameter counts of `85`, `86`, `93`, `94` and `95`. The effects of `80`, `81`, `83`, `92` and `98` are unknown.
+- Status: settled, Tasks 4 and 5; Record, Stop and Play remain open. `// DECISION K7` at `kPanelChannel` (`src/ks32/machine.h`), the panel calls in `Machine::slot` (`src/ks32/machine.cpp`), and `paramCount`, the cursor wrap, `Panel::button` and the out-of-range rule in `Panel::run` (`src/ks32/panel.cpp`). Tests: panel_* (`tests/test_ks32_panel.cpp`), ks32_firmware_boot_shows_play_screen, ks32_firmware_version_screen, ks32_firmware_release_ends_the_hold, ks32_firmware_reinit_prompt, ks32_firmware_analog_test_page, ks32_firmware_quick_tap_is_seen.
+
+## K8: Analog inputs
+- Options: the path of the sliders, wheels, CV pedal, pressure and battery: (a) the OTIS POT converter (PAR) behind a multiplexer selected by DUART output bits; (b) the DUART input port; (c) another mapped device. For (a), the conversion completes at once when the selection changes, or after the datasheet's 1.6 ms.
+- Choice: (a), at once. DUART OP3..OP0 select one of 16 inputs, and `Machine::updateLines` sets `Otis::setPot` to the selected input's raw value after every device access and every slot. Selects: 0 pitch wheel, 1 pressure, 2 mod wheel, 3 data entry, 4 CV pedal, 5 volume, 6 battery, 15 reference; 7-14 are never selected. `Machine::setAnalog(Analog, raw)` sets an input's raw 10-bit conversion, 0..0x3FF (masked).
+- Evidence: `docs/ks32-hardware-interface.md` "Analog inputs". Every 4 ms the firmware reads PAR (page 0x40, reg 9) and then writes OPR set = 0x0F and OPR reset = n; no other OPR write touches OP3..OP0. Setting one select to 0x3FF or 0 moves exactly one Analog Test reading. The DUART input port reads 0xFF throughout and no reading follows it; the page makes no other device or unmapped access. The firmware reads 4 ms after each select, so a 1.6 ms conversion cannot be told from an instant one.
+- Confidence: High for the path and the select table; Medium for "at once" (not observable).
+- Status: settled, Task 6. `// DECISION K8` at `kAnalogSelect` and `Machine::updateLines` (`src/ks32/machine.cpp`). Tests: otis_par_reads_pot_value, ks32_firmware_analog_resting_values, ks32_firmware_slider_extremes.
+
+## K9: Wait states
+- Options: (a) none; (b) wait states on ROM, RAM or device accesses.
+- Choice: (a). Every bus cycle takes the 68000's 4 clocks.
+- Evidence: `docs/ks32-hardware-interface.md` "Wait states". No failure in the boot points to timing; the boot clock test, which times OTIS against the DUART, passes with none (design open item F).
+- Confidence: Medium (no evidence of wait states; a timing failure in a later task reopens it).
+- Status: settled, Task 3. Nothing to mark in the code: `Machine` adds no clocks to an access.
+
+## K10: Memory card
+- Options: the card-detect input (a DUART input pin, a probe of a mapped or unmapped region, or none) and its "empty" level; whether to emulate the card.
+- Choice: DUART IP1 is the card detect, active low. The slot is always empty, so IP1 is high: the `Machine` constructor sets the input pins to 0x3F (the DUART's reset level). IP0 has no observable effect and rests high. The card window at 0x2E0000 (odd bytes) is not modelled; with IP1 high the firmware never touches it, and with IP1 low it reads 0 there (K6). There is no card interface (design open item E).
+- Evidence: `docs/ks32-hardware-interface.md` "Memory card". The input port is read about every 28 ms and reads 0xFF. IPCR is never read, and no input-change interrupt is enabled. With IP1 low, the boot and a card operation read 0x2E0001 and 0x2E0003, write 0xFF to 0x2E0001 and read it back; with IP1 high there is no such access. On the empty slot, a copy to the card shows "SORRY! Install a RAM card first." IP0 low changes neither the boot, BankSet nor the release of a note. After the K1 probe, no RAM access falls in the mirrors at 0x010000-0x03FFFF.
+- Confidence: High that the slot reads empty; Medium that IP1 is the card-detect line itself.
+- Status: settled, Task 8. `// DECISION K10` in the `Machine` constructor (`src/ks32/machine.cpp`). Test: ks32_firmware_card_slot_empty.
+
+## K11: Battery RAM image
+- Options: what the image holds (the 64 KB RAM, or more state); what loading it resets (nothing, the CPU only, or the CPU and every device); whether the analog inputs are kept.
+- Choice: the image is the whole 64 KB RAM (K1), raw. `loadRamImage` checks the size ("RAM image" in the error), then resets the CPU, OTIS, the ESP, the DUART and the panel, and brings back the 0-7 overlay: a power cycle with the battery connected. The RAM and the analog inputs are kept. A cold start is zero-filled RAM (`Machine::create`). `ks32emu --ram <file>` loads the file if it exists and writes it back on a clean exit (boot and render at the end, play on q).
+- Evidence: `docs/ks32-hardware-interface.md` "Battery RAM". A boot from the saved image is a warm start: the RAM is not cleared, and Master Tune +02 survives. OS v3.01 powers on to ROM 00 from a cold or a warm start, whatever was selected, and MIDI out ends `C0 00` (ruling T8-1). A forced level-7 interrupt gives event 139, so there is no power-fail save. About 6 power-ons in a row of under about 2 s each reinitialize the RAM: the manual's system reset sequence (PDF p5, ruling T8-2), the real unit's behaviour, with no workaround.
+- Confidence: High.
+- Status: settled, Task 8. `// DECISION K11` at `Machine::loadRamImage` (`src/ks32/machine.cpp`). Tests: ks32_machine_ram_image_size_checked, ks32_firmware_ram_image_keeps_settings.
+
+## K12: Local keyboard
+- Options: the keys' path to the 68000: the panel link, the analog inputs, a DUART input pin, or a device the machine does not model. If modelled: the byte form, the key-to-note mapping and the velocity value.
+- Choice: the panel link (DUART channel B). `Machine::key(note, down, velocity)` calls `Panel::key`, which queues `code | 0x80` (down) or `code` (up), with code = note - 28, then the strike value clamped to 1-127. A 0 there would make it a button event. Notes outside the 76 keys, 28-103 (E1 to G7), are ignored. Mono pressure stays analog input 1 (K8).
+- Evidence: `docs/ks32-hardware-interface.md` "Keyboard". Every byte 0x80-0xFF followed by a nonzero byte plays a note, and `code, nonzero` releases it; `code, 00` and `code | 0x80, 00` are the button events. The firmware sends the key on MIDI out as note code + 28 (code 0x20 gives `90 3C`), and the measured pitches agree (codes 18-78, within 0.5 semitone). Its touch curve maps the strike value to the MIDI velocity: 127 gives 127, 64 gives 20, and 1-4 give 1. Values of 0x80 and up are erratic. The 76 keys are the span of a 76-note E-to-G keyboard; the firmware also plays codes 76-127.
+- Confidence: High for the path, the byte forms and the note mapping; Medium for the key range; Low for the physical meaning of the strike value.
+- Status: settled, Task 8. `// DECISION K12` at `Panel::key` (`src/ks32/panel.cpp`). Tests: panel_key_bytes, ks32_firmware_key_sounds.
+
+## K13: Resting analog values
+- Options: for each input, the raw value that gives the plan's resting state (pitch wheel at centre, mod wheel 0, CV pedal unplugged, volume at maximum so headless renders are audible, data entry at mid, pressure 0, battery nominal); for the reference (select 15), which the manual does not give, any value.
+- Choice: `kAnalogRest` = pitch wheel 0x200, mod wheel 0x3FF, CV pedal 0, volume 0x3FF, data entry 0x16E, pressure 0, battery 0x298; reference 0x180 (`kReferenceRest`); inputs 7-14 rest at 0 (`mux_{}`). They read PW=064, Mod=000, CV=127, Vol=127, Knob=127, Pressure=000, Bat=164 and Reference=095.
+- Evidence: `docs/ks32-hardware-interface.md` "Analog inputs". The battery reading is raw x 255 / 1023, and the boot warns below about 125 (raw 0x1E0 warns, 0x200 does not), the manual's lower bound (PDF p13: 125-205); 0x298 is the middle of the band. The pitch wheel's centre is its value at power-on, so any value reads 64; 0x200 leaves room both ways. Mod= is 0 from 0x300, Vol= 127 from about 0x2E8, Pressure= 0 up to 0x200. CV= reads 127 for raws below about 0xA0, apart from the pedal's travel (0 at 0xC0): the manual's unplugged reading (PDF p20). The reference changes nothing at or below 0x180; above it the firmware subtracts (reference - 0x180) from the other readings. Inputs 7-14 are never selected in the boot, on the play screen or on the Analog Test page, so their value is unobservable.
+- Confidence: High for the battery band and the readings; Low for the reference value (any of 0-0x180 behaves the same).
+- Status: settled, Task 6. `// DECISION K13` at `kAnalogRest` (`src/ks32/machine.h`), `mux_` (`src/ks32/machine.h`), `kReferenceRest` and the `Machine` constructor (`src/ks32/machine.cpp`). Tests: ks32_firmware_cold_boot_is_clean, ks32_firmware_analog_resting_values, ks32_firmware_boot_shows_play_screen.
+
+## K14: RESET instruction
+- Options: (a) reset every device; (b) the DUART only; (c) none.
+- Choice: (b). `Machine::resetPeripherals()` resets the DUART and updates the IPL and the ESP's HALT pin; OTIS and the ESP are untouched.
+- Evidence: `docs/ks32-hardware-interface.md` "RESET line". The OS never executes RESET (0 calls in 10 s of boot), so the three options give identical traces; (b) is kept as the harmless default.
+- Confidence: High that the OS does not use it; what the line reaches is unobservable.
+- Status: settled, Task 3. `// DECISION K14` at `Machine::resetPeripherals` (`src/ks32/machine.cpp`).
+
+## K15: ESPHALT
+- Options: DUART OP6 drives `Esp::setHaltPin` with (a) the pin level (high halts) or (b) its inverse.
+- Choice: (a). The pin is high while OPR bit 6 is 0, so after reset the ESP halts at its first END, until the firmware sets OPR bit 6.
+- Evidence: `docs/ks32-hardware-interface.md` "ESP wiring". The first DUART write is register 15 = 0x40 (OP6 high), right before the ESP halt-enable writes. Under (a) the ESP runs after the boot and no unexpected event is sent; under (b) the firmware reports event 33 ("bad ESP chip") and the ESP stays halted. findings.md section B (ESPHALT = OP6).
+- Confidence: High.
+- Status: settled, Task 3. `// DECISION K15` at `Machine::updateLines` (`src/ks32/machine.cpp`). Test: ks32_firmware_boot_runs_the_esp.
+
+## K16: Panel-link serial clock
+- Options: the external 16x clock on IP5 (TxCB) and IP2 (RxCB) at 500 kHz, 1 MHz or 2 MHz.
+- Choice: 500 kHz, the same 16 MHz / 32 source as the MIDI channel (K3): 31 250 baud.
+- Evidence: the firmware writes CSRB = 0xEE; 0.5, 1 and 2 MHz boot identically (same display text and exception counts; only the timing moves). Task 4 adds a lower bound only. There is no handshake, so there is no reply timing. While it sends the low-battery warning, the firmware writes THRB on every 1 ms tick even when TxRDYB is clear, and a panel character is 11 bits (MR1B = 0x13, MR2B = 0x0F). So the link needs 11 000 baud or more: a 16x clock of 176 kHz or more. At 153.6 kHz the warning loses characters; at 250 kHz and above it is unchanged. `docs/ks32-hardware-interface.md` "Clocks".
+- Confidence: Low (500 kHz meets the bound; nothing picks it over faster clocks).
+- Status: Task 3, revisited in Task 4 (lower bound). Task 5's buttons add no bound: a press and release sent back to back are all read at 500 kHz. `// DECISION K16` at `kSerialClockHz` (`src/ks32/machine.h`) and the `Machine` constructor.

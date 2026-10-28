@@ -39,13 +39,18 @@ add_library(ens_m68k STATIC src/m68k/m68k_decode.cpp src/m68k/m68k_cpu.cpp src/m
   src/m68k/m68k_ops_logic.cpp src/m68k/m68k_ops_flow.cpp src/m68k/m68k_dis.cpp)
 target_link_libraries(ens_m68k PUBLIC ens_common)
 
+# MC68681 DUART (Plan 6): the KS-32's serial and timer chip.
+add_library(ens_duart STATIC src/duart/duart.cpp)
+target_link_libraries(ens_duart PUBLIC ens_common)
+
 # Tom Harte's per-instruction tests (.m68t reader and runner); the data itself is not in the repo.
 add_library(ens_m68k_harte STATIC src/m68k/harte_format.cpp)
 target_link_libraries(ens_m68k_harte PUBLIC ens_m68k)
 
 # KS-32 board: wave ROM layout, OTIS + ESP + delay DRAM and the frame routing.
-add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp)
-target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp)
+add_library(ens_ks32 STATIC src/ks32/wave_roms.cpp src/ks32/board.cpp src/ks32/machine.cpp
+  src/ks32/panel.cpp)
+target_link_libraries(ens_ks32 PUBLIC ens_otis ens_esp ens_m68k ens_duart)
 
 # Pure player layer (no OS code). Later tasks add sources to this list.
 add_library(ens_player STATIC src/player/resampler.cpp src/player/json.cpp src/player/sample_map.cpp
@@ -85,6 +90,16 @@ if(WIN32)
   target_link_libraries(ks32play PRIVATE winmm ole32 avrt)
 endif()
 target_compile_definitions(ks32play PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# KS-32 machine runner: boots the OS ROM in emulation and reports what it did, renders a MIDI file
+# through it; live play (WinMM MIDI in, WASAPI out, ks32play's code) on Windows.
+add_executable(ks32emu tools/ks32emu/main.cpp tools/ks32play/files.cpp)
+target_link_libraries(ks32emu PRIVATE ens_player)
+if(WIN32)
+  target_sources(ks32emu PRIVATE tools/ks32play/midi_in_win.cpp tools/ks32play/audio_out_wasapi.cpp)
+  target_link_libraries(ks32emu PRIVATE winmm ole32 avrt)
+endif()
+target_compile_definitions(ks32emu PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # 68000 per-instruction suite runner (tools/m68k_harte/convert_harte.py makes the .m68t files).
 add_executable(m68k_harte tools/m68k_harte/main.cpp)
