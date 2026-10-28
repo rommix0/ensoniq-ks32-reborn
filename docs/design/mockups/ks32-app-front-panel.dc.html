@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KS-32 front panel</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@400;600&amp;family=VT323&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d0d0e}
+a{color:#9fd4c7}a:hover{color:#c8ece3}
+button{cursor:pointer}
+</style>
+</helmet>
+<div style="width: 2040px; height: 720px; box-sizing: border-box; background: #0d0d0e; font-family: 'IBM Plex Sans Condensed', system-ui, sans-serif; color: #c9cbcf; display: flex; flex-direction: column">
+
+<div style="height: 380px; box-sizing: border-box; background: {{panel}}; border-bottom: 6px solid #08080a; padding: 28px 32px 24px; display: flex; gap: 24px; justify-content: space-between; align-items: stretch">
+
+<div style="width: 120px; display: flex; flex-direction: column; justify-content: space-between">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-size: 34px; font-weight: 600; letter-spacing: 1px; color: #e6e7ea">KS-32</span>
+<span style="font-size: 12px; color: #a7aab0">emulated front panel</span>
+</div>
+<div style="font-size: 11px; color: #a7aab0; line-height: 1.5">ROM v3.01<br>MIDI: Q25</div>
+</div>
+
+<div style="display: flex; gap: 22px; align-items: flex-end; padding-bottom: 8px">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 10px">
+<div style="position: relative; width: 26px; height: 210px; background: #08080a; border-radius: 4px; border: 1px solid #2c2e32">
+<div style="position: absolute; left: -10px; top: 18px; width: 44px; height: 30px; border-radius: 4px; background: #4a4c51; border: 1px solid #6a6d73; box-shadow: inset 0 -4px 0 #303236"></div>
+</div>
+<span style="font-size: 12px">Volume</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 10px">
+<div style="position: relative; width: 26px; height: 210px; background: #08080a; border-radius: 4px; border: 1px solid #2c2e32">
+<div style="position: absolute; left: -10px; top: 92px; width: 44px; height: 30px; border-radius: 4px; background: #4a4c51; border: 1px solid #6a6d73; box-shadow: inset 0 -4px 0 #303236"></div>
+</div>
+<span style="font-size: 12px">Data Entry</span>
+</div>
+</div>
+
+<div style="width: 330px; display: flex; flex-direction: column; gap: 22px">
+<div role="img" aria-label="Display: ROM 00, KS Grand Piano" style="background: #050403; border: 2px solid #2a2b2e; border-radius: 6px; padding: 14px 18px; box-shadow: inset 0 0 18px #000">
+<div style="font-family: 'VT323', monospace; font-size: 34px; line-height: 36px; color: {{lcd}}; text-shadow: 0 0 8px {{lcd}}; white-space: pre; letter-spacing: 2px">ROM   00
+ KS Grand Piano</div>
+</div>
+<div style="display: flex; gap: 26px; align-items: center; justify-content: center">
+<div style="display: grid; grid-template-columns: repeat(3, 50px); grid-template-rows: auto auto auto; gap: 6px 8px; justify-items: center">
+<span></span>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px"><span style="font-size: 11px">Up / Yes</span><button aria-label="Up / Yes" style="width: 50px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+<span></span>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px"><span style="font-size: 11px">Left</span><button aria-label="Left" style="width: 50px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px"><span style="font-size: 11px">&#160;</span><button aria-label="Down / No" style="width: 50px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px"><span style="font-size: 11px">Right</span><button aria-label="Right" style="width: 50px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+<span></span>
+<span style="font-size: 11px">Down / No</span>
+<span></span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px"><span style="font-size: 11px">Compare</span><button aria-label="Compare" style="width: 56px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px"><span style="font-size: 11px">Enter / Save</span><button aria-label="Enter / Save" style="width: 56px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+</div>
+</div>
+</div>
+
+<div style="display: flex; gap: 14px">
+<div style="width: 96px; display: flex; flex-direction: column; justify-content: space-between; padding: 4px 0 2px">
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 9px; height: 9px; border-radius: 2px; background: {{ledOff}}"></span><span style="font-size: 15px; font-weight: 600; color: #e6e7ea">Edit Sound</span></div>
+<button aria-label="Edit Sound" style="width: 60px; height: 40px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px">
+<span style="font-size: 12px">BankSet</span>
+<button aria-label="BankSet" style="width: 60px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 9px; height: 9px; border-radius: 2px; background: {{ledOn}}; box-shadow: 0 0 8px {{ledOn}}"></span><span style="font-size: 15px; font-weight: 600; color: #e6e7ea">Select Sound</span></div>
+<button aria-label="Select Sound" style="width: 60px; height: 40px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: grid; grid-template-columns: repeat(10, 50px); column-gap: 8px; height: 14px">
+<span style="grid-column: 6 / span 3; font-size: 10px; text-align: center; border-bottom: 1px dotted #8b8e94; line-height: 12px">Tracks</span>
+</div>
+<div style="border: 1px solid {{strip}}; border-radius: 3px; padding: 6px 0">
+<div style="display: grid; grid-template-columns: repeat(10, 50px); column-gap: 8px">
+<sc-for list="{{upper}}" as="u" hint-placeholder-count="10"><span style="font-size: 10px; text-align: center; white-space: pre-line; line-height: 12px">{{u}}</span></sc-for>
+</div>
+</div>
+<div style="border: 1px solid {{strip}}; border-radius: 3px; padding: 6px 0">
+<div style="display: grid; grid-template-columns: repeat(10, 50px); column-gap: 8px">
+<sc-for list="{{lower}}" as="l" hint-placeholder-count="10"><span style="font-size: 10px; text-align: center; white-space: pre-line; line-height: 12px">{{l}}</span></sc-for>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(10, 50px); column-gap: 8px; margin-top: 6px">
+<sc-for list="{{banks}}" as="b" hint-placeholder-count="10">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px">
+<span style="font-size: 10px; height: 12px">{{b.top}}</span>
+<button aria-label="{{b.aria}}" style="width: 50px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+<span style="font-size: 10px; height: 12px; color: #a7aab0">{{b.sub}}</span>
+</div>
+</sc-for>
+</div>
+<div style="display: grid; grid-template-columns: repeat(10, 50px); column-gap: 8px">
+<sc-for list="{{screens}}" as="s" hint-placeholder-count="10">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px">
+<span style="font-size: 13px; font-weight: 600; color: #e6e7ea">{{s.n}}</span>
+<button aria-label="{{s.aria}}" style="width: 50px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+<span style="font-size: 10px; text-align: center; white-space: pre-line; line-height: 11px; color: #a7aab0">{{s.label}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+
+<div style="width: 118px; display: flex; flex-direction: column; justify-content: space-between; padding: 4px 0 18px">
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 9px; height: 9px; border-radius: 2px; background: {{ledOff}}"></span><span style="font-size: 14px; font-weight: 600; color: #e6e7ea; line-height: 16px">Edit<br>Seq/Preset</span></div>
+<button aria-label="Edit Seq/Preset" style="width: 60px; height: 40px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 9px; height: 9px; border-radius: 2px; background: {{ledOff}}"></span><span style="font-size: 12px">Edit Track</span></div>
+<button aria-label="Edit Track" style="width: 60px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 9px; height: 9px; border-radius: 2px; background: {{ledOff}}"></span><span style="font-size: 12px">Select Seq/Preset</span></div>
+<button aria-label="Select Seq/Preset" style="width: 60px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px; padding-top: 4px">
+<span style="font-size: 12px; text-align: center; border-bottom: 1px solid #8b8e94; padding-bottom: 2px">Tracks</span>
+<div style="display: grid; grid-template-columns: repeat(4, 46px); gap: 10px 8px">
+<sc-for list="{{tracks}}" as="t" hint-placeholder-count="8">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 4px">
+<div style="display: flex; align-items: center; gap: 4px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 2px; background: {{ledOff}}"></span><span style="font-size: 12px; font-weight: 600; color: #e6e7ea">{{t.n}}</span></div>
+<button aria-label="{{t.aria}}" style="width: 46px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; gap: 8px; margin-top: 8px">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 4px"><span style="font-size: 11px">Record</span><button aria-label="Record" style="width: 56px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 4px"><span style="font-size: 11px">Stop</span><button aria-label="Stop / Continue" style="width: 56px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button><span style="font-size: 10px; color: #a7aab0">Continue</span></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 4px"><span style="font-size: 11px">Play</span><button aria-label="Play" style="width: 56px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button></div>
+</div>
+</div>
+
+<div style="width: 150px; display: flex; flex-direction: column; justify-content: space-between; padding: 4px 0 18px">
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<div style="display: flex; align-items: flex-start; gap: 6px"><span aria-hidden="true" style="margin-top: 3px; width: 9px; height: 9px; border-radius: 2px; background: {{ledOff}}"></span><span style="font-size: 12px; line-height: 14px">Replace Track Sound<br><span style="color: #a7aab0; font-size: 10px">(Replace w/FX)</span></span></div>
+<button aria-label="Replace Track Sound" style="width: 60px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<span style="font-size: 12px; line-height: 14px">Make Default Preset<br><span style="color: #a7aab0; font-size: 10px">(Clone Preset)</span></span>
+<button aria-label="Make Default Preset" style="width: 60px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 9px; height: 9px; border-radius: 2px; background: {{ledOff}}"></span><span style="font-size: 14px; font-weight: 600; color: #e6e7ea">System / MIDI</span></div>
+<button aria-label="System / MIDI" style="width: 60px; height: 32px; border-radius: 4px; background: #3b3d42; border: 1px solid #55585e; box-shadow: inset 0 -3px 0 #26272a"></button>
+</div>
+</div>
+
+</div>
+
+<div style="flex-grow: 1; display: flex; gap: 0; background: #141416; padding: 18px 32px 26px; box-sizing: border-box">
+<div style="width: 150px; display: flex; gap: 22px; justify-content: center; align-items: center; background: #1b1c1f; border-radius: 6px 0 0 6px; border: 1px solid #2a2b2e">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+<div role="img" aria-label="Pitch wheel, centred" style="width: 26px; height: 120px; border-radius: 13px; background: repeating-linear-gradient(180deg, #2b2c30 0px, #2b2c30 5px, #38393e 5px, #38393e 7px); border: 1px solid #4a4c51"></div>
+<span style="font-size: 12px">Pitch</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+<div role="img" aria-label="Mod wheel, at zero" style="width: 26px; height: 120px; border-radius: 13px; background: repeating-linear-gradient(180deg, #2b2c30 0px, #2b2c30 5px, #38393e 5px, #38393e 7px); border: 1px solid #4a4c51"></div>
+<span style="font-size: 12px">Mod</span>
+</div>
+</div>
+<div role="group" aria-label="76-key keyboard, E1 to G7" style="position: relative; width: 1826px; height: 100%; background: #08080a">
+<sc-for list="{{whites}}" as="w" hint-placeholder-count="45">
+<button aria-label="{{w.name}}" style="position: absolute; top: 0; left: {{w.left}}px; width: {{w.width}}px; height: 100%; box-sizing: border-box; background: #ecebe6; border: 1px solid #9a9993; border-radius: 0 0 4px 4px"></button>
+</sc-for>
+<sc-for list="{{blacks}}" as="k" hint-placeholder-count="31">
+<button aria-label="{{k.name}}" style="position: absolute; top: 0; left: {{k.left}}px; width: {{k.width}}px; height: 62%; background: #1a1a1c; border: 1px solid #000; border-radius: 0 0 3px 3px; box-shadow: inset 0 -5px 0 #2e2f33"></button>
+</sc-for>
+</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lcd":{"editor":"color","default":"#ffb347","options":["#ffb347","#7fe3c4","#b9f27c"]},"panel":{"editor":"color","default":"#1f2023","options":["#1f2023","#2a2a2d","#24262b"]},"strip":{"editor":"color","default":"#5fb3a1","options":["#5fb3a1","#8b8e94","#c9a35f"]},"$preview":{"width":2040,"height":720}}'>
+class Component extends DCLogic {
+renderVals() {
+const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const black = [1, 3, 6, 8, 10];
+const first = 28, last = 103, total = 1826;
+let whiteCount = 0;
+for (let n = first; n <= last; n++) if (!black.includes(n % 12)) whiteCount++;
+const ww = total / whiteCount;
+const bw = ww * 0.6;
+const whites = [], blacks = [];
+let wi = 0;
+for (let n = first; n <= last; n++) {
+const name = names[n % 12] + (Math.floor(n / 12) - 1);
+if (black.includes(n % 12)) {
+blacks.push({ name, left: (wi * ww - bw / 2).toFixed(1), width: bw.toFixed(1) });
+} else {
+whites.push({ name, left: (wi * ww).toFixed(1), width: ww.toFixed(1) });
+wi++;
+}
+}
+const subs = ['Internal', 'ROM A', 'ROM B', 'Card A', 'Card B', '', '', '', '', ''];
+const tops = ['', '', '', '', '', '', '', '', 'Drums', 'Drums'];
+const screenLabels = ['Volume\nPan', 'Output', 'Key\nRange', 'X-pos', 'Channel\nProgram', 'MIDI\nStatus', 'Pressure\nType', 'Sustain\nPedal', 'Timbre', 'Release'];
+return {
+lcd: this.props.lcd ?? '#ffb347',
+panel: this.props.panel ?? '#1f2023',
+strip: this.props.strip ?? '#5fb3a1',
+ledOn: '#ff4a3d',
+ledOff: '#4a2522',
+upper: ['Locate', 'Control', 'Click', 'Song', 'Seq', 'Event', 'Quantize', 'Mute', 'Effect', 'Store\nSeqs'],
+lower: ['Wave', 'Pitch', 'Env1', 'LFO', 'Filters', 'Env2', 'Amp', 'Output', 'Effect', 'Store\nSounds'],
+banks: subs.map((s, i) => ({ sub: s, top: tops[i], aria: 'Bank ' + i })),
+screens: screenLabels.map((l, i) => ({ n: String(i), label: l, aria: 'Screen ' + i })),
+tracks: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ n: String(n), aria: 'Track ' + n })),
+whites,
+blacks
+};
+}
+}
+</script>
+</body>
+</html>

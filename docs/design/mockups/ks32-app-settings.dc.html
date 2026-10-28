@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KS-32 settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@400;600&amp;family=IBM+Plex+Mono&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d0d0e}
+button{cursor:pointer}
+select,input{font:inherit}
+</style>
+</helmet>
+<div style="width: 760px; height: 720px; box-sizing: border-box; background: {{panel}}; font-family: 'IBM Plex Sans Condensed', system-ui, sans-serif; color: #c9cbcf; padding: 28px 32px; display: flex; flex-direction: column; gap: 22px">
+
+<div style="display: flex; justify-content: space-between; align-items: baseline">
+<span style="font-size: 26px; font-weight: 600; color: #e6e7ea">Settings</span>
+<span style="font-size: 12px; color: #a7aab0">Changes to ROMs or memory restart the machine</span>
+</div>
+
+<section aria-label="ROMs" style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 13px; font-weight: 600; color: {{strip}}; letter-spacing: 1px">ROMS</span>
+<div style="display: flex; gap: 8px">
+<input aria-label="ROM folder" value="C:\Users\you\Documents\ks-32" readonly style="flex-grow: 1; height: 32px; box-sizing: border-box; padding: 0 10px; background: #0d0d0e; color: #e6e7ea; border: 1px solid #3a3c41; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 13px">
+<button style="height: 32px; padding: 0 16px; border-radius: 4px; background: #3b3d42; color: #e6e7ea; border: 1px solid #55585e">Choose folder…</button>
+</div>
+<div role="list" style="display: grid; grid-template-columns: 22px 1fr 1fr 70px; row-gap: 4px; font-size: 13px; background: #18191b; border: 1px solid #2a2b2e; border-radius: 4px; padding: 10px 12px">
+<sc-for list="{{roms}}" as="r" hint-placeholder-count="6">
+<span aria-hidden="true" style="color: {{r.color}}">{{r.mark}}</span>
+<span role="listitem" style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #e6e7ea">{{r.file}}</span>
+<span style="color: #a7aab0">{{r.what}}</span>
+<span style="text-align: right; color: {{r.color}}">{{r.state}}</span>
+</sc-for>
+</div>
+</section>
+
+<section aria-label="MIDI" style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 13px; font-weight: 600; color: {{strip}}; letter-spacing: 1px">MIDI</span>
+<div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; align-items: center; font-size: 14px">
+<label for="midi-in">Input</label>
+<select id="midi-in" style="height: 32px; background: #0d0d0e; color: #e6e7ea; border: 1px solid #3a3c41; border-radius: 4px; padding: 0 8px"><option>Q25</option><option>None</option></select>
+<label for="midi-out">Output</label>
+<select id="midi-out" style="height: 32px; background: #0d0d0e; color: #e6e7ea; border: 1px solid #3a3c41; border-radius: 4px; padding: 0 8px"><option>None</option></select>
+</div>
+</section>
+
+<section aria-label="Audio" style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 13px; font-weight: 600; color: {{strip}}; letter-spacing: 1px">AUDIO</span>
+<div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; align-items: center; font-size: 14px">
+<label for="audio-out">Output</label>
+<select id="audio-out" style="height: 32px; background: #0d0d0e; color: #e6e7ea; border: 1px solid #3a3c41; border-radius: 4px; padding: 0 8px"><option>Speakers (default)</option></select>
+<label for="audio-buf">Buffer</label>
+<select id="audio-buf" style="height: 32px; width: 200px; background: #0d0d0e; color: #e6e7ea; border: 1px solid #3a3c41; border-radius: 4px; padding: 0 8px"><option>480 samples (10 ms)</option><option>256 samples (5.3 ms)</option><option>1024 samples (21 ms)</option></select>
+<span></span>
+<span style="font-size: 12px; color: #a7aab0">The KS-32 runs at 29 762 Hz and is resampled to 48 000 Hz. Underruns since start: 0</span>
+</div>
+</section>
+
+<section aria-label="Memory" style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 13px; font-weight: 600; color: {{strip}}; letter-spacing: 1px">MEMORY</span>
+<div style="display: grid; grid-template-columns: 120px 1fr auto; gap: 8px 12px; align-items: center; font-size: 14px">
+<label for="ram-file">Memory file</label>
+<input id="ram-file" value="ks32-memory.bin" readonly style="height: 32px; box-sizing: border-box; padding: 0 10px; background: #0d0d0e; color: #e6e7ea; border: 1px solid #3a3c41; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 13px">
+<button style="height: 32px; padding: 0 16px; border-radius: 4px; background: #3b3d42; color: #e6e7ea; border: 1px solid #55585e">Change…</button>
+<span></span>
+<span style="font-size: 12px; color: #a7aab0; grid-column: span 2">Holds what the battery keeps: settings, edited sounds and sequences. Saved when the app closes.</span>
+<span></span>
+<div style="grid-column: span 2"><button style="height: 32px; padding: 0 16px; border-radius: 4px; background: transparent; color: #ff8a7f; border: 1px solid #7a3631">Erase memory…</button></div>
+</div>
+</section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"panel":{"editor":"color","default":"#1f2023","options":["#1f2023","#2a2a2d","#24262b"]},"strip":{"editor":"color","default":"#5fb3a1","options":["#5fb3a1","#8b8e94","#c9a35f"]},"missing":{"editor":"boolean","default":false},"$preview":{"width":760,"height":720}}'>
+class Component extends DCLogic {
+renderVals() {
+const files = [
+['ks32/ks32v301upper.bin', 'OS v3.01, upper (128 KB)'],
+['ks32/ks32v301lower.bin', 'OS v3.01, lower (64 KB)'],
+['sq1-u25.bin', 'Wave ROM'],
+['sq1-u26.bin', 'Wave ROM'],
+['rom2.u39', 'Wave ROM'],
+['rom3.u38', 'Wave ROM']
+];
+const missing = this.props.missing ?? false;
+return {
+panel: this.props.panel ?? '#1f2023',
+strip: this.props.strip ?? '#5fb3a1',
+roms: files.map(([file, what], i) => {
+const ok = !(missing && i === 3);
+return { file, what, mark: ok ? '✓' : '✕', state: ok ? 'found' : 'missing', color: ok ? '#7fd3a0' : '#ff8a7f' };
+})
+};
+}
+}
+</script>
+</body>
+</html>
