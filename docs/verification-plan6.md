@@ -163,7 +163,7 @@ From the ledger (`.superpowers/sdd/2026-10-28-ks32-machine/progress.md`), each w
 - **MIDI out** from the firmware is counted and not forwarded.
 - **Voice Muting** (ON by default) mutes a note that arrives within about 30 ms of a program change. This is the firmware's behaviour. A sequencer or a player that sends a program change and a note together hears this.
 - **The RAM image** after about 6 short power-ons reinitializes; the emulator does not protect against that.
-- **Allocation in the run loop.** `Machine::runFrame` and `midiIn` allocate (the DUART and Panel take-by-swap vectors, the deque pending queue, and an unbounded pending queue); make them allocation-free and bound the queue as Plan 7's first task (final-review Important 1, ruling F-1).
+- **Allocation in the run loop.** Done (ruling F-1, Plan 7 Task 1, commit 89ec340): the DUART and Panel queues are fixed rings, MIDI in is bounded at 1024 bytes (A1, A2), `PanelState` is fixed-size, and `ens_rt_tests` checks that `runFrame` and the event calls do not allocate. It was: `Machine::runFrame` and `midiIn` allocated (the DUART and Panel take-by-swap vectors, the deque pending queue, and an unbounded pending queue) (final-review Important 1).
 - **Deferred review items.** Listed under "Deferred review items" below, because the ledger they came from is deleted when the plan finishes.
 - **Nothing here was compared with MAME.** Every value that mentions MAME is a recollection, marked as unchecked.
 - **The ROM was not studied.** By the user's ruling of 2026-10-23, the OS was run and its behaviour read from traces, never disassembled. So every "why" in the hardware document is an inference from behaviour.
