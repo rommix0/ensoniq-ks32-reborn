@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -142,4 +143,28 @@ TEST(ks32_machine_wrong_width_accesses_are_traced) {
     }
     CHECK_EQ(m->cpu().regs().d[0] & 0xFF, 0u);
     CHECK_EQ(m->cpu().regs().d[1] & 0xFFFF, 0x0Fu);  // IVR read through a word access: low byte only
+}
+
+// K5: a halted ESP gets exactly 89 idle steps per frame, spread over the frame's slots. Each idle
+// step refreshes (DBASE -= unit), so DBASE counts the steps; the CPU reads an ESP register about
+// every 26 clocks, and the trace hook samples the count at each read.
+TEST(ks32_machine_halted_esp_idle_spread) {
+    // MOVE.B $260025,D0 ; BRA.S back to it
+    auto m = machineWith({0x1039, 0x0026, 0x0025, 0x60F8});
+    ens::Esp& esp = m->board().esp();
+    esp.setHaltPin(true);
+    esp.hostWrite(0x1F, 0);       // halt enable with HALT high: halted now (E24)
+    esp.setGpr(244, 0xFF);        // MEMSIZ: unit 0x100
+    esp.setGpr(245, 0xFFFF00);    // DLENGTH
+    esp.setGpr(248, 0x800000);    // DBASE, far from the reload
+    const uint32_t d0 = esp.agen().dbase;
+    std::set<uint32_t> seen;  // idle steps done when each read is made
+    m->onBusEvent = [&](const BusEvent&) { seen.insert((d0 - esp.agen().dbase) / 0x100); };
+    int16_t l, r;
+    m->runFrame(l, r);
+    CHECK(esp.halted());
+    CHECK_EQ(d0 - esp.agen().dbase, 89u * 0x100);
+    CHECK(!seen.empty() && *seen.begin() == 0);  // the first read, in slot 0, comes before any step
+    CHECK(seen.size() >= 16);                    // the count grows slot by slot, not in one bunch
+    CHECK(!seen.empty() && *seen.rbegin() < 89);
 }

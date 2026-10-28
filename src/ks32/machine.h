@@ -40,6 +40,8 @@ class Machine : public m68k::Bus {
 public:
     // nullptr on a wrong size, with err naming the file ("OS upper", "OS lower", "u25", ...).
     static std::unique_ptr<Machine> create(const RomSet& roms, std::string& err);
+    Machine(const Machine&) = delete;  // cpu_ holds a Bus& to *this
+    Machine& operator=(const Machine&) = delete;
     void runFrame(int16_t& mainL, int16_t& mainR);  // until OTIS latches the next frame
     uint64_t cycles() const { return cpu_.totalCycles(); }  // CPU cycles since power-on
     uint16_t peek16(uint32_t addr) const;  // ROM and RAM only, devices read 0, no side effects

@@ -122,7 +122,9 @@ int boot(const Options& o) {
     uint64_t printed = 0;
     m->onBusEvent = [&](const BusEvent& e) {
         if (e.dev == Device::Unmapped) unmapped.insert(e.addr);
-        if (e.dev == Device::Duart && e.write) duartLast[(e.addr >> 1) & 0xF] = static_cast<uint8_t>(e.value);
+        // Only writes the DUART received: odd bytes and words (an even-byte write is ignored, K1).
+        if (e.dev == Device::Duart && e.write && ((e.addr & 1) || e.size == 2))
+            duartLast[(e.addr >> 1) & 0xF] = static_cast<uint8_t>(e.value);
         if (!traced.count(e.dev) || e.cycle < o.from || printed >= o.count) return;
         ++printed;
         std::printf("%llu %s %c%u %06x %0*x\n", static_cast<unsigned long long>(e.cycle), devName(e.dev),
