@@ -177,7 +177,7 @@ TEST(panel_button_table) {
     }
     CHECK_EQ(codes.size(), std::size(kButtons));
     CHECK_EQ(names.size(), std::size(kButtons));
-    CHECK_EQ(std::size(kButtons), 43u);
+    CHECK_EQ(std::size(kButtons), 45u);
 }
 
 TEST(panel_reset_clears_state) {

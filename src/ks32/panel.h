@@ -1,6 +1,6 @@
 #pragma once
 // The KS-32 keypad/display board on DUART channel B (K7): a 2 x 16 character display, 15 LEDs and
-// 43 buttons, and the 76-key keyboard whose events share the link (K12). The command set is decoded
+// 45 buttons, and the 76-key keyboard whose events share the link (K12). The command set is decoded
 // from the byte stream the OS v3.01 sends, and the button and key codes from what it shows, plays
 // and sends on MIDI out when they are sent (docs/ks32-hardware-interface.md, "Front panel",
 // "Keyboard"), never from ROM code. Pure emulation: no I/O, no statics.
@@ -20,8 +20,9 @@ constexpr int kLowestKey = 28, kKeyCount = 76;
 enum class Led : uint8_t { Off, On, Blink };
 
 // The panel's controls by key code, named after the function the firmware shows for each
-// (docs/ks32-hardware-interface.md, "Front panel: buttons"). Record, Stop and Play are not found.
+// (docs/ks32-hardware-interface.md, "Front panel: buttons"). Record is not found.
 enum class Button : uint8_t {
+    Play = 0x09, StopContinue = 0x29,  // DECISION A14: they send MIDI Start (FA) and Stop (FC)
     Screen2 = 0x04, Bank2 = 0x05, Screen4 = 0x06, Bank4 = 0x07, Track7 = 0x08, SystemMidi = 0x0A,
     DownNo = 0x0C, UpYes = 0x0D, Screen5 = 0x0E, Bank5 = 0x0F, Track1 = 0x10, Track5 = 0x11,
     Screen1 = 0x14, Bank1 = 0x15, Screen6 = 0x16, Bank6 = 0x17, Track3 = 0x18, SelectSeqPreset = 0x19,
@@ -53,6 +54,7 @@ inline constexpr ButtonName kButtons[] = {
     {Button::EditSeqPreset, "EDIT_SEQ_PRESET"}, {Button::EditTrack, "EDIT_TRACK"},
     {Button::SelectSeqPreset, "SELECT_SEQ_PRESET"}, {Button::ReplaceTrackSound, "REPLACE_TRACK_SOUND"},
     {Button::MakeDefaultPreset, "MAKE_DEFAULT_PRESET"}, {Button::SystemMidi, "SYSTEM_MIDI"},
+    {Button::Play, "PLAY"}, {Button::StopContinue, "STOP_CONTINUE"},
 };
 
 // Plain data, so the audio thread can copy it without allocating.

@@ -608,3 +608,28 @@ TEST(ks32_firmware_key_sounds) {
         CHECK(std::vector<uint8_t>(out.begin() + 12, out.begin() + 17) == (std::vector<uint8_t>{0x90, 0x67, 0x7F, 0x80, 0x67}));
     }
 }
+
+// ---- Transport buttons (Plan 7 Task 3, A14) ------------------------------------------------------
+
+// On Select Seq/Preset ("Sequence-00"), Play (0x09) sends MIDI Start (FA) and Stop/Continue (0x29)
+// sends MIDI Stop (FC), each while held 300 ms; neither changes that screen.
+TEST(ks32_firmware_transport_codes) {
+    PanelRig& r = panelKs32();
+    if (!r.m) return;
+    Machine& m = *r.m;
+    press(m, Button::SelectSound);
+    press(m, Button::SelectSeqPreset);
+    (void)midiOut(m);
+    for (const auto& [b, want] : {std::pair{Button::Play, uint8_t{0xFA}}, std::pair{Button::StopContinue, uint8_t{0xFC}}}) {
+        m.button(b, true);
+        runMs(m, 300);
+        const std::vector<uint8_t> held = midiOut(m);
+        m.button(b, false);
+        runMs(m, 300);
+        std::printf("  %02X: MIDI out while held:", static_cast<int>(b));
+        for (const uint8_t x : held) std::printf(" %02X", x);
+        std::printf("\n");
+        CHECK(held == std::vector<uint8_t>{want});
+    }
+    CHECK(shown(m.panel()).find("SEQUENCE-00") != std::string::npos);
+}

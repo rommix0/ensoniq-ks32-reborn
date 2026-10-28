@@ -914,3 +914,10 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Evidence: `kBootMs` is the measured boot (about 2121 ms) plus 50 % (`src/ks32/machine.h`). After 3000 ms of 48 kHz blocks it is false; after 3300 ms it is true and the display shows ROM 00, KS Grand Piano, with the Select Sound LED on (engine_boot_snapshot).
 - Confidence: High.
 - Status: settled, Plan 7 Task 2. `// DECISION A6` at `kBootFrames` (`src/app/engine.cpp`). Test: engine_boot_snapshot.
+
+## A14: Transport buttons
+- Options: for Record, Stop and Play, (a) a code the running firmware answers, found by one bounded hunt that watches MIDI out as well as the display and LEDs; (b) no code, and the app shows the button disabled.
+- Choice: (a) for Play (`Button::Play`, code 09, `PLAY`) and Stop/Continue (`Button::StopContinue`, code 29, `STOP_CONTINUE`); (b) for Record, which stays out of `Button`.
+- Evidence: `docs/ks32-hardware-interface.md` "Front panel: transport buttons". From Select Seq/Preset ("Sequence-00") on a cold-booted machine, each of the 85 codes 0x00-0x7F outside `Button` was held 300 ms once: 09 sends MIDI Start (`FA`) and 29 sends MIDI Stop (`FC`), with no display or LED change; no other code changed the display, the LEDs or MIDI out, apart from 0x3C-0x7F, which act like Bank and Screen buttons. No `F8` or `FB` was seen; System/MIDI has no clock-out setting. These are the two codes Plan 6 singled out by instruction count.
+- Confidence: High for the bytes sent; Medium for the names (from the bytes and the panel's labels); Record not found.
+- Status: settled, Plan 7 Task 3. `// DECISION A14` at `Button` (`src/ks32/panel.h`). Tests: ks32_firmware_transport_codes, panel_button_table.
