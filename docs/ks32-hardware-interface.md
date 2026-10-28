@@ -475,6 +475,7 @@ is `kReferenceRest` (`src/ks32/machine.cpp`).
 | Pressure | 0x000 | Pressure=000 | No key pressed (PDF p21) |
 | Battery | 0x298 | Bat=164 | Middle of 125-205 (PDF p13). Set after the boot, 0x298 settles at 165. From power-on the filter stops at 164 |
 | Reference (select 15) | 0x180 | Reference=095 | Every value from 0 to 0x180 gives the same readings (0, 0x100, 0x170, 0x17C and 0x180 tried). 0x180 is the highest of them. The manual gives no Reference= value |
+| 7-14 | 0 | None | Never selected (boot, play screen, Analog Test page), so any value is unobservable |
 
 **How it was found.** Scratch harnesses, not committed, did the following:
 - traced the OTIS and DUART accesses on the Analog Test page (PAR reads and OPR writes, with

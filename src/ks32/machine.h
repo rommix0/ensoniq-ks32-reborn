@@ -98,7 +98,8 @@ private:
     std::vector<uint8_t> ram_ = std::vector<uint8_t>(0x10000, 0);  // 64 KB (K1)
     bool overlay_ = true;  // reads of 0-7 come from ROM until the first write there
     // The POT multiplexer's inputs by select (DUART OP3..OP0, K8). 0x0F is the converter
-    // reference ("Reference=" on Analog Test screen 3); 7-14 are never selected.
+    // reference ("Reference=" on Analog Test screen 3).
+    // DECISION K13: inputs 7-14 rest at 0; OS v3.01 never selects them, so any value is unobservable.
     std::array<uint16_t, 16> mux_{};
     int carry_ = 0;        // CPU cycles run past the end of the last slot
     uint32_t duartAcc_ = 0;
