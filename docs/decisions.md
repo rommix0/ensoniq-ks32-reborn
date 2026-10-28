@@ -936,6 +936,13 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Confidence: High for the rules; the mouse checks (version chord, drag-off, Alt-Tab) are left to the user's acceptance pass (ruling R1).
 - Status: settled, Plan 7 Task 6. `// DECISION A9` at `ButtonPart` and `PanelEditor::timerCallback` (`app/source/PanelEditor.cpp`).
 
+## A10: Strike
+- Options: the strike value (1-127, `Machine::key`) of a key clicked with the mouse, which has no speed: (a) a fixed strike; (b) from where the key is clicked along its length; (c) from a modifier key.
+- Choice: (b). Strike = 1 + round(126 x y / keyLength), where y is the distance from the key's back edge and keyLength the key's drawn length (white and black keys alike): the front is loud. On a drag, each key entered takes the strike where the mouse entered it. The release sends the press's strike as its release value.
+- Evidence: design section 6.3. The firmware reads the strike through its touch curve (`docs/ks32-hardware-interface.md`, "Keyboard": strike 64 sounds at 20, 127 at 127), so the whole 1-127 range stays reachable on every key. The release value only reaches MIDI out as the note-off velocity.
+- Confidence: Medium (a choice; the feel is the user's to judge).
+- Status: settled, Plan 7 Task 7. `// DECISION A10` at `KeyPart::strikeAt` (`app/source/PanelEditor.cpp`). Louder near the front, and a glissando with no stuck notes, are left to the user's acceptance pass (ruling R1).
+
 ## A11: Memory saving
 - Options: when to write the battery memory file: (a) on close only; (b) on close and every 60 s while running, never before the machine has booted; and for Erase, (c) delete the file, (d) restart the machine with zero RAM and let the next automatic save write it, or (e) write the 64 KB zero image to the file at once and restart the machine from it.
 - Choice: (b) and (e) (ruling R7). The memory (`ks32-memory.bin` in `%APPDATA%\KS-32` unless changed) is loaded at start; a file of the wrong size is reported on the settings page and ignored, and the machine boots cold. It is saved on close from `machine().ramImage()` (audio stopped) and every 60 s through `requestRam`/`takeRam`, each time only when `Snapshot::booted` (A6). Each save writes `<file>.tmp` and then replaces the file (`File::replaceFileIn`). Erase asks first, then writes the 64 KB zero image to the memory file at once (`eraseMemoryFile`, the same `.tmp` and replace) and restarts the machine from that file, so the firmware rebuilds its memory as it boots. The boot gate covers the automatic saves (close and the 60 s save) only: Erase is an explicit act and a quick close must not undo it (R7). With no machine running, Erase still erases the file.

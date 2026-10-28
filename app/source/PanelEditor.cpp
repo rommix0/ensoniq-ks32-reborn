@@ -131,7 +131,7 @@ public:
         if (k != juce::KeyPress::spaceKey) return false;
         if (gear_) {
             ed_.openSettings();
-        } else if (!down_) {
+        } else if (!want_) {
             byKey_ = true;
             set(true);
         }
@@ -154,6 +154,20 @@ public:
         if (latchedToo) latched_ = false;
         if (!latched_) set(false);
     }
+    // Sends the wanted state until the engine takes it: a full queue (A4) delays a press or a
+    // release (the timer retries), never loses it.
+    void sync() {
+        if (want_ == down_ ||
+            !ed_.post({ens::app::Event::Kind::Button, static_cast<uint8_t>(c_.id), want_, 0}))
+            return;
+        down_ = want_;
+        repaint();
+    }
+    // A new engine: nothing is held or latched, and the new engine is not told.
+    void reset() {
+        want_ = down_ = latched_ = byMouse_ = byKey_ = false;
+        repaint();
+    }
 
     void paint(juce::Graphics& g) override {
         const auto r = getLocalBounds().toFloat();
@@ -170,21 +184,20 @@ private:
         return juce::AccessibilityActions().addAction(juce::AccessibilityActionType::press, [this] {
             if (gear_) {
                 ed_.openSettings();
-            } else if (available_ && !down_) {
+            } else if (available_ && !want_) {
                 set(true);
                 set(false);
             }
         });
     }
     void set(bool down) {
-        if (down == down_) return;
-        down_ = down;
-        ed_.post(c_.id, down);
-        repaint();
+        want_ = down;
+        sync();
     }
 
     const bool gear_;
-    bool available_ = true, down_ = false, latched_ = false, byMouse_ = false, byKey_ = false;
+    // want_: what the mouse and keys ask for; down_: what the engine has been sent.
+    bool available_ = true, want_ = false, down_ = false, latched_ = false, byMouse_ = false, byKey_ = false;
 };
 
 class LedPart : public Part {
@@ -232,21 +245,23 @@ public:
             for (int col = 0; col < 16; ++col) {
                 const juce::Rectangle<float> r(x0 + col * cell, y0 + row * rowH, cell, rowH);
                 int code = ' ';
+                bool off = false;
                 if (err.isNotEmpty()) {
                     // No engine: the reason, two rows cut to 16 columns.
                     const auto line = juce::StringArray::fromLines(err)[row];
                     if (col < line.length()) code = static_cast<int>(line[col]) & 0x7F;
                 } else {
                     code = static_cast<unsigned char>(p.rows[static_cast<size_t>(row)][static_cast<size_t>(col)]);
-                    // DECISION A8: blinking cells blink at 2 Hz, 50 % duty (blank while off).
-                    if ((p.blink >> (row * 16 + col)) & 1u && !ed_.blinkOn()) code = ' ';
+                    // DECISION A8: blinking cells blink at 2 Hz, 50 % duty (blank while off; the
+                    // overlay shows the code throughout).
+                    off = (p.blink >> (row * 16 + col)) & 1u && !ed_.blinkOn();
                 }
                 if (ed_.hexCodes()) {
                     g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 13.0f,
                                                            juce::Font::plain)));
                     g.drawText(juce::String::toHexString(code).paddedLeft('0', 2).toUpperCase(), r,
                                juce::Justification::centred, false);
-                } else if (code >= 0x20 && code <= 0x7E) {
+                } else if (!off && code >= 0x20 && code <= 0x7E) {
                     // DECISION A7: 0x20-0x7E as ASCII; 0x00-0x1F and 0x7F blank (the overlay shows them).
                     g.setFont(juce::Font(juce::FontOptions("Consolas", 32.0f, juce::Font::plain)));
                     g.drawText(juce::String::charToString(static_cast<juce::juce_wchar>(code)), r,
@@ -257,36 +272,89 @@ public:
     }
 };
 
-class SliderPart : public Part {
+// The sliders and wheels: a vertical drag moves the raw value (0-0x3FF) from where it was, over the
+// slider cap's 148 units of travel or the wheel's 122. Volume and Data Entry read higher as the raw
+// value rises, so up raises it; both wheels read inverted (docs/ks32-hardware-interface.md, "Analog
+// inputs": PW= and Mod= reach 127 at the low end), so up lowers it. The pitch wheel springs back to
+// its centre (0x200) when let go; the mod wheel stays put. Each starts at its resting value (K13).
+class AnalogPart : public Part {
 public:
-    SliderPart(PanelEditor& ed, const Control& c) : Part(ed, c) { setBounds(rect(c.r).expanded(10, 0)); }
-    void paint(juce::Graphics& g) override {
-        const auto track = getLocalBounds().toFloat().reduced(10, 0);
-        box(g, track, kGroove, kTrackEdge, 4.0f);
-        // The cap at the resting value (K13); the artboard's travel is 18 (top) to 166 units.
-        const float v = ens::ks32::kAnalogRest[static_cast<size_t>(c_.id)] / 1023.0f;
-        const juce::Rectangle<float> cap(0, 19 + (1 - v) * 148, static_cast<float>(getWidth()), 32);
-        box(g, cap, kCap, kCapEdge, 4.0f);
-        g.setColour(juce::Colour(0xff303236));
-        g.fillRect(cap.reduced(1).withTop(cap.getBottom() - 5));
+    AnalogPart(PanelEditor& ed, const Control& c)
+        : Part(ed, c),
+          wheel_(c.kind == ControlKind::Wheel),
+          rest_(ens::ks32::kAnalogRest[static_cast<size_t>(c.id)]) {
+        setBounds(wheel_ ? rect(c.r) : rect(c.r).expanded(10, 0));
     }
-};
 
-class WheelPart : public Part {
-public:
-    WheelPart(PanelEditor& ed, const Control& c) : Part(ed, c) { setBounds(rect(c.r)); }
+    void mouseDown(const juce::MouseEvent&) override {
+        dragging_ = true;
+        from_ = value_;
+    }
+    void mouseDrag(const juce::MouseEvent& e) override {
+        if (!dragging_) return;
+        const float up = (e.mouseDownPosition.y - e.position.y) * 1023.0f / (wheel_ ? 122.0f : 148.0f);
+        move(juce::jlimit(0, 1023, juce::roundToInt(from_ + (wheel_ ? -up : up))));
+    }
+    void mouseUp(const juce::MouseEvent&) override { release(); }
+    // Mouse-up, the app losing the foreground, or the editor closing.
+    void release() {
+        dragging_ = false;
+        if (c_.id == static_cast<int>(ens::ks32::Analog::PitchWheel)) move(rest_);
+    }
+    // Sends the value until the engine takes it, so the last value of a drag is never lost (A4).
+    void sync() {
+        if (value_ == sent_ ||
+            !ed_.post({ens::app::Event::Kind::Analog, static_cast<uint8_t>(c_.id), false, value_}))
+            return;
+        sent_ = value_;
+    }
+    // A new engine starts at the resting values; the new engine is not told.
+    void reset() {
+        dragging_ = false;
+        value_ = sent_ = rest_;
+        repaint();
+    }
+
     void paint(juce::Graphics& g) override {
+        const float v = value_ / 1023.0f;
+        if (!wheel_) {
+            const auto track = getLocalBounds().toFloat().reduced(10, 0);
+            box(g, track, kGroove, kTrackEdge, 4.0f);
+            // The artboard's travel is 18 (top) to 166 units.
+            const juce::Rectangle<float> cap(0, 19 + (1 - v) * 148, static_cast<float>(getWidth()), 32);
+            box(g, cap, kCap, kCapEdge, 4.0f);
+            g.setColour(juce::Colour(0xff303236));
+            g.fillRect(cap.reduced(1).withTop(cap.getBottom() - 5));
+            return;
+        }
         const auto r = getLocalBounds().toFloat();
         juce::Path shape;
         shape.addRoundedRectangle(r, 13.0f);
         juce::Graphics::ScopedSaveState s(g);
         g.reduceClipRegion(shape);
         g.fillAll(kRidge);
+        // The ridges roll with the wheel; the bar marks its position (top: wheel pushed up, raw 0).
         g.setColour(kRidgeLine);
-        for (float y = 5; y < r.getHeight(); y += 7) g.fillRect(0.0f, y, r.getWidth(), 2.0f);
+        for (float y = std::fmod(v * r.getHeight(), 7.0f) - 2; y < r.getHeight(); y += 7)
+            g.fillRect(0.0f, y, r.getWidth(), 2.0f);
+        g.setColour(kCapEdge);
+        g.fillRect(0.0f, v * (r.getHeight() - 6), r.getWidth(), 6.0f);
         g.setColour(kWheelEdge);
         g.strokePath(shape, juce::PathStrokeType(2.0f));
     }
+
+private:
+    void move(int v) {
+        if (v == value_) return;
+        value_ = static_cast<uint16_t>(v);
+        repaint();
+        sync();
+    }
+
+    const bool wheel_;
+    const uint16_t rest_;
+    uint16_t value_ = rest_, sent_ = rest_, from_ = rest_;
+    bool dragging_ = false;
 };
 
 class KeyPart : public Part {
@@ -296,13 +364,42 @@ public:
         black_ = n == 1 || n == 3 || n == 6 || n == 8 || n == 10;
         setBounds(rect(c.r));
     }
+    // The board plays the key under the mouse, so a drag moves from key to key.
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+
+    // DECISION A10: strike = 1 + round(126 x y / keyLength), y from the key's back edge: the front is loud.
+    int strikeAt(float y) const {
+        const float len = static_cast<float>(getHeight());
+        return 1 + juce::roundToInt(126.0f * juce::jlimit(0.0f, len, y) / len);
+    }
+    // A release carries the press's strike as its release value (the mouse has no release speed).
+    void set(bool down, int strike = 0) {
+        if (down) strike_ = static_cast<uint16_t>(strike);
+        want_ = down;
+        sync();
+    }
+    // As the buttons: sent until the engine takes it, so a full queue never leaves a stuck note.
+    void sync() {
+        if (want_ == down_ ||
+            !ed_.post({ens::app::Event::Kind::Key, static_cast<uint8_t>(c_.id), want_, strike_}))
+            return;
+        down_ = want_;
+        repaint();
+    }
+    void reset() {
+        want_ = down_ = false;
+        repaint();
+    }
+
     void paint(juce::Graphics& g) override {
         const auto r = getLocalBounds().toFloat();
         juce::Path shape;
         const float rad = black_ ? 3.0f : 4.0f;
         shape.addRoundedRectangle(r.getX(), r.getY(), r.getWidth(), r.getHeight(), rad, rad, false, false, true,
                                   true);
-        g.setColour(black_ ? kBlack : kWhite);
+        g.setColour(black_ ? (down_ ? kBlackShade : kBlack) : (down_ ? kWhite.darker(0.15f) : kWhite));
         g.fillPath(shape);
         if (black_) {
             g.setColour(kBlackShade);
@@ -313,7 +410,8 @@ public:
     }
 
 private:
-    bool black_ = false;
+    bool black_ = false, want_ = false, down_ = false;
+    uint16_t strike_ = 1;
 };
 
 // The artboard at its design size; the editor scales it with a transform.
@@ -341,9 +439,19 @@ public:
                     p = std::make_unique<DisplayPart>(ed, c);
                     display_ = p.get();
                     break;
-                case ControlKind::Slider: p = std::make_unique<SliderPart>(ed, c); break;
-                case ControlKind::Wheel: p = std::make_unique<WheelPart>(ed, c); break;
-                case ControlKind::Key: p = std::make_unique<KeyPart>(ed, c); break;
+                case ControlKind::Slider:
+                case ControlKind::Wheel: {
+                    auto a = std::make_unique<AnalogPart>(ed, c);
+                    analogs_.push_back(a.get());
+                    p = std::move(a);
+                    break;
+                }
+                case ControlKind::Key: {
+                    auto k = std::make_unique<KeyPart>(ed, c);
+                    keys_.push_back(k.get());
+                    p = std::move(k);
+                    break;
+                }
                 case ControlKind::Label: labels_.push_back(&c); continue;
             }
             addAndMakeVisible(*p);
@@ -353,6 +461,46 @@ public:
 
     void release(bool latchedToo) {
         for (auto* b : buttons_) b->release(latchedToo);
+        keyUp();
+        for (auto* a : analogs_) a->release();
+    }
+    // The timer: whatever the queue could not take yet (A4).
+    void sync() {
+        for (auto* b : buttons_) b->sync();
+        for (auto* k : keys_) k->sync();
+        for (auto* a : analogs_) a->sync();
+    }
+    // A new engine: nothing held, nothing latched, the analogs at rest; nothing is posted.
+    void reset() {
+        keyDrag_ = false;
+        held_ = nullptr;
+        for (auto* b : buttons_) b->reset();
+        for (auto* k : keys_) k->reset();
+        for (auto* a : analogs_) a->reset();
+    }
+
+    // The keyboard's mouse. Mouse-down plays the key under it; a drag releases the key it leaves
+    // and plays the key it enters, each with the strike where it was entered (A10); mouse-up
+    // releases, wherever the mouse is.
+    void keyDown(const juce::MouseEvent& e) {
+        keyDrag_ = true;
+        keyMove(e);
+    }
+    void keyMove(const juce::MouseEvent& e) {
+        if (!keyDrag_) return;
+        const auto p = e.getEventRelativeTo(this).position;
+        KeyPart* k = nullptr;
+        for (auto it = keys_.rbegin(); it != keys_.rend() && k == nullptr; ++it)  // blacks first: on top
+            if ((*it)->getBounds().toFloat().contains(p)) k = *it;
+        if (k == held_) return;
+        if (held_ != nullptr) held_->set(false);
+        held_ = k;
+        if (k != nullptr) k->set(true, k->strikeAt(p.y - static_cast<float>(k->getY())));
+    }
+    void keyUp() {
+        keyDrag_ = false;
+        if (held_ != nullptr) held_->set(false);
+        held_ = nullptr;
     }
     void repaintPanel() {
         display_->repaint();
@@ -405,6 +553,10 @@ private:
     std::vector<std::unique_ptr<Part>> parts_;
     std::vector<ButtonPart*> buttons_;
     std::vector<LedPart*> leds_;
+    std::vector<KeyPart*> keys_;  // the table's order: whites, then blacks
+    std::vector<AnalogPart*> analogs_;
+    KeyPart* held_ = nullptr;  // the key the mouse plays
+    bool keyDrag_ = false;
     std::vector<const Control*> labels_;
     juce::Component* display_ = nullptr;
 };
@@ -446,10 +598,14 @@ private:
 
 Board& board(juce::Component& c) { return static_cast<Board&>(c); }
 
+void KeyPart::mouseDown(const juce::MouseEvent& e) { board(*getParentComponent()).keyDown(e); }
+void KeyPart::mouseDrag(const juce::MouseEvent& e) { board(*getParentComponent()).keyMove(e); }
+void KeyPart::mouseUp(const juce::MouseEvent&) { board(*getParentComponent()).keyUp(); }
+
 }  // namespace
 
-PanelEditor::PanelEditor(Ks32Processor& p) : AudioProcessorEditor(p), proc_(p) {
-    if (auto* e = proc_.engine()) snap_ = e->snapshot();
+PanelEditor::PanelEditor(Ks32Processor& p) : AudioProcessorEditor(p), proc_(p), engine_(p.engine()) {
+    if (engine_ != nullptr) snap_ = engine_->snapshot();
     midiInput_ = findMidiInput();
     board_ = std::make_unique<Board>(*this);
     addAndMakeVisible(*board_);
@@ -469,9 +625,17 @@ void PanelEditor::resized() {
     board_->setTransform(juce::AffineTransform::scale(s));
 }
 
-void PanelEditor::post(int buttonCode, bool down) {
-    if (auto* e = proc_.engine())
-        e->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(buttonCode), down, 0});
+bool PanelEditor::post(const ens::app::Event& e) { return sameEngine() && engine_ != nullptr && engine_->post(e); }
+
+// Erase and a ROM folder change replace the engine (the new one is made before the old one is
+// freed, so the pointer differs). The new machine starts with nothing held and the analogs at rest:
+// the parts forget the old engine's state, and nothing is sent to the new one.
+bool PanelEditor::sameEngine() {
+    auto* e = proc_.engine();
+    if (e == engine_) return true;
+    engine_ = e;
+    board(*board_).reset();
+    return false;
 }
 
 juce::String PanelEditor::romError() const { return proc_.engine() ? juce::String() : proc_.romError(); }
@@ -507,8 +671,10 @@ juce::String PanelEditor::findMidiInput() const {
 
 void PanelEditor::timerCallback() {
     auto& b = board(*board_);
+    sameEngine();
+    b.sync();  // presses, releases and values the full queue turned away (A4)
     const auto old = snap_;
-    if (auto* e = proc_.engine()) snap_ = e->snapshot();
+    if (engine_ != nullptr) snap_ = engine_->snapshot();
     // DECISION A8: blink at 2 Hz, 50 % duty, from the message-thread clock.
     const bool blink = (juce::Time::getMillisecondCounter() / 250) % 2 == 0;
     bool blinking = snap_.panel.blink != 0;
