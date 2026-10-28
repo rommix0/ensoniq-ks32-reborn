@@ -64,6 +64,9 @@ TEST(ks32_machine_ram_write) {
     m->runFrame(l, r);
     CHECK_EQ(m->peek16(0xFF0100), 0x1234);
     CHECK_EQ(m->peek16(0x000100), 0x1234);
+    CHECK_EQ(m->peek16(0x010100), 0x1234);  // K1: 64 KB mirrored over 0-0x3FFFF
+    CHECK_EQ(m->peek16(0x030100), 0x1234);
+    CHECK_EQ(m->peek16(0x040100), 0);  // unmapped
 }
 
 TEST(ks32_machine_duart_write_is_traced) {

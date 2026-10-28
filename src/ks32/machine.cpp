@@ -11,14 +11,15 @@ namespace {
 
 constexpr uint32_t kMask24 = 0xFFFFFF;
 constexpr uint32_t kRomBase = 0xC00000, kRomSize = 0x40000;
-constexpr uint32_t kRamTop = 0xFF0000;  // RAM at 0xFF0000-0xFFFFFF, mirrored at 0-0xFFFF
+constexpr uint32_t kRamTop = 0xFF0000;
 constexpr uint32_t kOtisBase = 0x200000, kOtisSize = 0x20;
 constexpr uint32_t kEspBase = 0x260000, kEspSize = 0x200;
 constexpr uint32_t kDuartBase = 0x280000, kDuartSize = 0x20;
 
 bool inWindow(uint32_t a, uint32_t base, uint32_t size) { return a >= base && a < base + size; }
 bool isRom(uint32_t a) { return a >= kRomBase && a < kRomBase + kRomSize; }
-bool isRam(uint32_t a) { return a >= kRamTop || a < 0x10000; }
+// DECISION K1: 64 KB RAM, A16/A17 not decoded: mirrored four times over 0-0x3FFFF and at 0xFF0000.
+bool isRam(uint32_t a) { return a >= kRamTop || a < 0x40000; }
 
 bool sizeOk(const std::vector<uint8_t>& v, size_t want, const char* name, std::string& err) {
     if (v.size() == want) return true;
@@ -30,7 +31,9 @@ bool sizeOk(const std::vector<uint8_t>& v, size_t want, const char* name, std::s
 }  // namespace
 
 Machine::Machine(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1)
-    : board_(std::move(bank0), std::move(bank1)) {}
+    : board_(std::move(bank0), std::move(bank1)) {
+    for (int pin = 2; pin <= 5; ++pin) duart_.setExternalClock(pin, kSerialClockHz);  // DECISION K3, K16
+}
 
 std::unique_ptr<Machine> Machine::create(const RomSet& roms, std::string& err) {
     if (!sizeOk(roms.osUpper, 0x20000, "OS upper", err) || !sizeOk(roms.osLower, 0x10000, "OS lower", err))
@@ -44,12 +47,12 @@ std::unique_ptr<Machine> Machine::create(const RomSet& roms, std::string& err) {
     m->board_.esp().reset();
     m->duart_.reset();
     m->cpu_.reset();  // the 40 reset cycles count in cycles() and are not slot carry
-    m->updateIpl();
+    m->updateLines();
     return m;
 }
 
-// DECISION K1: provisional map. ROM 0xC00000-0xC3FFFF: upper EPROM = even bytes, lower EPROM = odd
-// bytes mirrored every 0x20000. RAM 64 KB at 0xFF0000, mirrored at 0; 0-7 read ROM until the first
+// DECISION K1: ROM 0xC00000-0xC3FFFF: upper EPROM = even bytes, lower EPROM = odd bytes mirrored
+// every 0x20000. RAM 64 KB at 0-0x3FFFF (four mirrors) and 0xFF0000; 0-7 read ROM until the first
 // write there. OTIS 0x200000 (words), ESP 0x260000 and DUART 0x280000 (odd bytes). A byte access to
 // OTIS is traced with size 1 (read: the addressed byte of the register; write: ignored); an even-
 // byte access to the ESP or DUART reads 0 and its write is ignored, traced with its even address;
@@ -61,8 +64,7 @@ uint8_t Machine::romByte(uint32_t off) const {
 uint8_t Machine::memByte(uint32_t a, bool& mapped) const {
     mapped = true;
     if (isRom(a)) return romByte(a - kRomBase);
-    if (a >= kRamTop) return ram_[a - kRamTop];
-    if (a < 0x10000) return (overlay_ && a < 8) ? romByte(a) : ram_[a];  // DECISION K1: 0-7 overlay
+    if (isRam(a)) return (overlay_ && a < 8) ? romByte(a) : ram_[a & 0xFFFF];  // DECISION K1: 0-7 overlay
     mapped = false;
     return 0;
 }
@@ -79,12 +81,14 @@ void Machine::trace(uint32_t addr, uint16_t value, uint8_t size, bool write, Dev
     if (onBusEvent) onBusEvent({cpu_.totalCycles(), addr, value, size, write, dev});
 }
 
-// DECISION K2: the IPL is the highest level of the asserting devices; both are level 0 (off) until Task 3.
-void Machine::updateIpl() {
+// DECISION K2: the IPL is the highest level of the asserting devices.
+// DECISION K15: DUART OP6 is ESPHALT, active high (the pin is high while OPR bit 6 is 0).
+void Machine::updateLines() {
     int level = 0;
     if (board_.otis().irqAsserted()) level = std::max(level, kOtisIrqLevel);
     if (duart_.irq()) level = std::max(level, kDuartIrqLevel);
     cpu_.setIpl(level);
+    board_.esp().setHaltPin((duart_.outputPins() & 0x40) != 0);
 }
 
 int Machine::interruptAcknowledge(int level) {
@@ -95,10 +99,10 @@ int Machine::interruptAcknowledge(int level) {
     return vec;
 }
 
-// DECISION K14: the RESET instruction resets the DUART only.
+// DECISION K14: the RESET instruction resets the DUART only (the OS never executes RESET).
 void Machine::resetPeripherals() {
     duart_.reset();
-    updateIpl();
+    updateLines();
 }
 
 uint8_t Machine::read8(uint32_t a) {
@@ -120,7 +124,7 @@ uint8_t Machine::read8(uint32_t a) {
         dev = Device::Duart;
     }
     trace(a, v, 1, false, dev);
-    updateIpl();
+    updateLines();
     return v;
 }
 
@@ -142,7 +146,7 @@ uint16_t Machine::read16(uint32_t a) {
         dev = Device::Duart;
     }
     trace(a, v, 2, false, dev);
-    updateIpl();
+    updateLines();
     return v;
 }
 
@@ -151,7 +155,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
     if (isRom(a)) return;
     if (isRam(a)) {
         if (a < 8) overlay_ = false;
-        ram_[a >= kRamTop ? a - kRamTop : a] = v;
+        ram_[a & 0xFFFF] = v;
         return;
     }
     Device dev = Device::Unmapped;
@@ -165,7 +169,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
         dev = Device::Duart;
     }
     trace(a, v, 1, true, dev);
-    updateIpl();
+    updateLines();
 }
 
 void Machine::write16(uint32_t a, uint16_t v) {
@@ -187,7 +191,7 @@ void Machine::write16(uint32_t a, uint16_t v) {
         dev = Device::Duart;
     }
     trace(a, v, 2, true, dev);
-    updateIpl();
+    updateLines();
 }
 
 // DECISION K4: one voice slot = 16 CPU clocks, with the overshoot of the last instruction carried
@@ -213,7 +217,7 @@ void Machine::slot(int i, int n) {
         const int idle = kEspSlotsPerFrame * b / n - kEspSlotsPerFrame * a / n;
         for (int k = 0; k < idle; ++k) esp.idleStep();
     }
-    updateIpl();
+    updateLines();
 }
 
 void Machine::runFrame(int16_t& mainL, int16_t& mainR) {

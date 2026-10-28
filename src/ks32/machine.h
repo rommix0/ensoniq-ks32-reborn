@@ -1,6 +1,6 @@
 #pragma once
 // The KS-32 as a machine: the 68000, the MC68681 DUART and the OTIS/ESP board joined by the
-// provisional address map (K1), run slot by slot against the OTIS voice scan (K4). Pure emulation:
+// address map (K1), run slot by slot against the OTIS voice scan (K4). Pure emulation:
 // no file I/O (the caller reads the ROM files). Integer-only; state is bit-identical across builds.
 #include <cstdint>
 #include <functional>
@@ -31,10 +31,17 @@ struct BusEvent {
 };
 
 constexpr uint32_t kCpuHz = 15'238'090, kDuartHz = 4'000'000;  // DECISION K3
-constexpr int kSlotClocks = 16;                                // DECISION K3, K4
-// DECISION K2: interrupt levels, 0 = not connected. Task 3 settles both.
-constexpr int kOtisIrqLevel = 0;
-constexpr int kDuartIrqLevel = 0;
+// DECISION K3, K16: the DUART's 16x serial clocks on IP2..IP5 (16 MHz / 32): 31 250 baud.
+constexpr uint32_t kSerialClockHz = 500'000;
+constexpr int kSlotClocks = 16;  // DECISION K3, K4
+// The emulated time the OS v3.01 takes from power-on to its steady state, about 1917 ms (the
+// last display byte sent; docs/ks32-hardware-interface.md), plus 50 %. With no panel model yet
+// the steady state is the idle loop after the start-up text, waiting for the panel (Task 4).
+constexpr uint32_t kBootMs = 2900;
+// DECISION K2: the DUART answers the acknowledge with its IVR; both levels are provisional
+// (the boot cannot tell them apart) and are settled in Task 7.
+constexpr int kOtisIrqLevel = 1;
+constexpr int kDuartIrqLevel = 3;
 
 class Machine : public m68k::Bus {
 public:
@@ -63,14 +70,14 @@ private:
     uint8_t romByte(uint32_t off) const;
     uint8_t memByte(uint32_t a, bool& mapped) const;  // ROM and RAM
     void trace(uint32_t addr, uint16_t value, uint8_t size, bool write, Device dev);
-    void updateIpl();
+    void updateLines();  // IPL and the ESP's HALT pin
     void slot(int i, int n);
 
     Board board_;
     duart::Duart duart_{kDuartHz};
     m68k::Cpu cpu_{*this};
     std::vector<uint8_t> osUpper_, osLower_;
-    std::vector<uint8_t> ram_ = std::vector<uint8_t>(0x10000, 0);
+    std::vector<uint8_t> ram_ = std::vector<uint8_t>(0x10000, 0);  // 64 KB (K1)
     bool overlay_ = true;  // reads of 0-7 come from ROM until the first write there
     int carry_ = 0;        // CPU cycles run past the end of the last slot
     uint32_t duartAcc_ = 0;
