@@ -886,3 +886,31 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Evidence: a slot is 16 CPU clocks (about 1 us), and one character takes about 300 slots at 31 250 baud, so the panel rings never hold more than a few bytes; 256 bytes of MIDI out is about 80 ms of the line. The order is the old FIFO's, so the boot trace, render and smoke PCM hashes are unchanged (d2afd0fed8861cbd, 2bae46b3acc34cd0, a479ba867298cc55).
 - Confidence: High.
 - Status: settled, Plan 7 Task 1. `// DECISION A2` at `Channel::sent` (`src/duart/duart.h`), `Panel::toCpu_` (`src/ks32/panel.h`) and `Machine::slot` (`src/ks32/machine.cpp`). Tests: duart_pop_transmitted_in_order, panel_pop_to_cpu, rt_machine_runframe_does_not_allocate.
+
+## A3: MIDI timing in a block
+- Options: (a) every byte of a block enters at its start; (b) a byte at output offset `o` enters before machine frame `floor(o * 29762 / outRate)` of the block, with a fixed store per block.
+- Choice: (b). `Engine::midi` stores up to 1024 bytes a block with their machine frame; `render` feeds them before that frame runs, and any left after the block's last frame enter at its end. Bytes beyond 1024 are dropped and counted in `Snapshot::midiDropped`, with the DUART's own drops (A1).
+- Evidence: the design (§6.2) asks for sample-accurate MIDI within a block. A note at offset 479 sounds 478 output frames after one at offset 0 (engine_midi_offset_places_note). 1024 bytes is the DUART's whole receive queue (A1), so the store never loses what the wire could still hold.
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A3` at `Engine::midi` (`src/app/engine.cpp`) and `kMidiStore` (`src/app/engine.h`). Tests: engine_midi_offset_places_note, engine_midi_overflow_is_counted.
+
+## A4: GUI event timing
+- Options: (a) the GUI calls the machine under a lock; (b) a fixed single-producer queue the audio thread drains at the start of each block.
+- Choice: (b). `Engine::post` pushes into a 256-event `SpscRing` and returns false when it is full; `render` applies the events at the start of the next block, in post order. A button or key goes on the panel link only while `Machine::panelRoom()` has room for both of its bytes (the panel's ring and the DUART channel B queue it drains into), so an event is never split; the rest wait for a later block, still in order. Analog events apply at once.
+- Evidence: the real-time constraint (no locks on the audio thread). A block is 10 ms or less at usual settings, below what a mouse press can resolve. 256 events at once all arrive whole (engine_posts_never_split_a_panel_event: no panel or channel B drops). The Bank 9 + Screen 1 chord, posted with 100 ms of blocks between, opens the version screen (engine_chord_reaches_version_screen).
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A4` at `Engine::post` and `Engine::render` (`src/app/engine.cpp`) and `kEventQueue` (`src/app/engine.h`). Tests: spsc_ring_fifo_and_full, engine_chord_reaches_version_screen, engine_posts_never_split_a_panel_event.
+
+## A5: Snapshot hand-off
+- Options: (a) a sequence counter the GUI retries on (design §6.2); (b) a mutex the audio side takes with `try_lock`, skipping the block when the GUI holds it, while the GUI locks normally.
+- Choice: (b). After each block the engine copies the panel state, `booted`, the frame count and the MIDI counters into `Snapshot` under `try_lock`; `Engine::snapshot()` returns a copy under the lock.
+- Evidence: simpler than (a) and race-free; the audio side never waits. A skipped block only delays the display by one block. `PanelState` is plain data, so the copy does not allocate (rt_engine_render_does_not_allocate).
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A5` at `Engine::render` (`src/app/engine.cpp`). Tests: engine_boot_snapshot, rt_engine_render_does_not_allocate.
+
+## A6: Booted
+- Options: (a) watch the display for the play screen; (b) a fixed emulated time since power-on.
+- Choice: (b). `Snapshot::booted` is true once the engine has run `kBootMs` (3200 ms) of machine frames since `create` or `loadRam`.
+- Evidence: `kBootMs` is the measured boot (about 2121 ms) plus 50 % (`src/ks32/machine.h`). After 3000 ms of 48 kHz blocks it is false; after 3300 ms it is true and the display shows ROM 00, KS Grand Piano, with the Select Sound LED on (engine_boot_snapshot).
+- Confidence: High.
+- Status: settled, Plan 7 Task 2. `// DECISION A6` at `kBootFrames` (`src/app/engine.cpp`). Test: engine_boot_snapshot.

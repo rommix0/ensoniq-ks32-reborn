@@ -58,6 +58,10 @@ add_library(ens_player STATIC src/player/resampler.cpp src/player/json.cpp src/p
   src/player/smf.cpp src/player/wav.cpp)
 target_link_libraries(ens_player PUBLIC ens_common ens_ks32)
 
+# The JUCE-free engine between the machine and an audio callback (Plan 7): no file I/O, no OS calls.
+add_library(ens_app STATIC src/app/engine.cpp)
+target_link_libraries(ens_app PUBLIC ens_ks32 ens_player)
+
 # Trace format + runner. The parser and PCM compare are chip-free (reused by the MAME harness).
 add_library(ens_trace_parse STATIC src/trace/trace_parse.cpp)
 target_include_directories(ens_trace_parse PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

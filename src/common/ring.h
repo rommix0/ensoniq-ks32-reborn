@@ -26,6 +26,7 @@ public:
         return true;
     }
     bool empty() const { return size_ == 0; }
+    std::size_t size() const { return size_; }
     void clear() { head_ = size_ = 0; }  // the dropped count stays
     uint32_t dropped() const { return dropped_; }
 

@@ -78,6 +78,9 @@ public:
     void key(int note, bool down, uint8_t strike);
     const PanelState& state() const { return s_; }
     bool popToCpu(uint8_t& b) { return toCpu_.pop(b); }  // the oldest queued byte (no start-up handshake, K7)
+    std::size_t toCpuQueued() const { return toCpu_.size(); }
+    uint32_t dropped() const { return toCpu_.dropped(); }  // A2: bytes for the firmware lost to a full ring
+    static constexpr std::size_t kToCpuSize = 256;
 
 private:
     void run(uint8_t cmd, uint8_t param);
@@ -85,7 +88,7 @@ private:
     PanelState s_;
     uint8_t cursor_ = 0;    // next write position, 0..31
     std::array<uint8_t, 2> saved_{};  // cursor slots of 0x88/0x89
-    ByteRing<256> toCpu_;  // DECISION A2: 256 bytes for the firmware; when full the newest is dropped
+    ByteRing<kToCpuSize> toCpu_;  // DECISION A2: 256 bytes for the firmware; when full the newest is dropped
     bool blinkOn_ = false;  // inside 0x90 ... 0x91
     uint8_t cmd_ = 0;       // command waiting for parameter bytes (0 = none)
     uint8_t param_ = 0;     // its first parameter
