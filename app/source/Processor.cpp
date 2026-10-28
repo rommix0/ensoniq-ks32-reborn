@@ -14,6 +14,16 @@ juce::String romProblem(const std::vector<RomFileStatus>& list) {
     return {};
 }
 
+// Why file cannot be the memory file, or empty. Not in the ROM folder (ks32v301lower.bin is 64 KB
+// too, and the 60 s save would overwrite it), and a file that can be written.
+juce::String memoryTargetProblem(const juce::File& file, const juce::File& roms) {
+    if (roms != juce::File() && file.isAChildOf(roms))
+        return "The memory file cannot be in the ROM folder: " + file.getFullPathName();
+    if (file.isDirectory() || !file.hasWriteAccess())  // a new file: its folder's access
+        return "The memory file cannot be written: " + file.getFullPathName();
+    return {};
+}
+
 }  // namespace
 
 Ks32Processor::Ks32Processor()
@@ -45,6 +55,8 @@ bool Ks32Processor::setRomFolder(const juce::File& dir) {
 }
 
 bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
+    err = memoryTargetProblem(file, settings_.romFolder());
+    if (err.isNotEmpty()) return false;
     if (file.existsAsFile()) {
         loadMemoryFile(file, err);
         if (err.isNotEmpty()) return false;
@@ -57,11 +69,22 @@ bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
 
 // DECISION A11, R7: erase writes the 64 KB zero image to the memory file at once (an explicit act,
 // not held back by the boot gate) and restarts the machine from it, so the firmware rebuilds its
-// memory as it boots. With no machine, only the file is erased.
+// memory as it boots. With no machine, only the file is erased. If the write fails, nothing is
+// erased and the machine runs on; the settings page says so.
 void Ks32Processor::eraseMemory() {
-    eraseMemoryFile(settings_.memoryFile());
+    if (!saved(eraseMemoryFile(settings_.memoryFile()))) return;
     memoryError_ = {};
     if (engine_) restart(Ram::File);
+}
+
+// A failed save is shown on the settings page (memoryError) until a save succeeds.
+bool Ks32Processor::saved(bool ok) {
+    const auto msg = "Memory not saved: " + settings_.memoryFile().getFullPathName();
+    if (!ok)
+        memoryError_ = msg;
+    else if (memoryError_ == msg)
+        memoryError_ = {};
+    return ok;
 }
 
 bool Ks32Processor::restart(Ram ram) {
@@ -95,7 +118,7 @@ void Ks32Processor::timerCallback() {
     if (ramPending_) {
         if (engine_->takeRam(ramBuf_)) {
             ramPending_ = false;
-            saveMemoryFile(settings_.memoryFile(), ramBuf_);
+            saved(saveMemoryFile(settings_.memoryFile(), ramBuf_));
         }
     } else if (++ticks_ >= 60 && engine_->snapshot().booted) {
         ticks_ = 0;

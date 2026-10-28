@@ -24,7 +24,7 @@ public:
     void childBoundsChanged(juce::Component* child) override;
 
 private:
-    void timerCallback() override { repaint(rateLine_); }
+    void timerCallback() override;  // the underrun count, and a memory error raised since (a failed save)
     int layout();    // places the children and the painted rows; returns the page height
     void refresh();  // re-reads the settings, the ROM folder and the memory note
     void changed();

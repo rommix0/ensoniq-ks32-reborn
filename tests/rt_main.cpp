@@ -143,6 +143,8 @@ TEST(rt_engine_render_does_not_allocate) {
     e->prepare(48000, kBlock);
     float l[kBlock], r[kBlock];
     for (int b = 0; b < 330; ++b) e->render(l, r, kBlock);  // 3.3 s: booted
+    e->prepare(44100, 512);   // a device rate change, as prepareToPlay makes on a running machine
+    e->render(l, r, kBlock);  // the first block at the new rate
     using ens::app::Event;
     const uint8_t on[] = {0x90, 0x3C, 0x64}, off[] = {0x80, 0x3C, 0x40};
     std::vector<uint8_t> ram(0x10000);

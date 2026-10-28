@@ -31,14 +31,14 @@ The ROMs are not in the repository. The app needs six files in one folder:
 | `ks32/ks32v301upper.bin`, `ks32/ks32v301lower.bin` | The OS v3.01 (in a `ks32` subfolder) |
 | `sq1-u25.bin`, `sq1-u26.bin`, `rom2.u39`, `rom3.u38` | The wave ROMs |
 
-On the first start no folder is chosen. The display reads `No ROM folder:` / `open Settings`. Click the gear under the "ROM v3.01" and "MIDI" lines on the left, then **Choose folder…** in ROMS. The list marks each file found, missing or wrong size. When all six are good the machine starts, and the firmware boots in real time, as the instrument does: the start-up screens for about two seconds, then `ROM   00` / ` KS Grand Piano` with the Select Sound LED lit. If a file is missing or the wrong size, the display names it (for example `ROM missing:` / `sq1-u26.bin`). Choosing another good folder later restarts the machine and keeps its memory.
+On the first start no folder is chosen. The display reads `No ROM folder:` / `open Settings`. Click the gear under the "ROM v3.01" and "MIDI" lines on the left, then **Choose folder…** in ROMS. The list marks each file found, missing or wrong size. When all six are good the machine starts, and the firmware boots in real time, as the instrument does: the start-up screens for about two seconds, then `ROM   00` / ` KS Grand Piano` with the Select Sound LED lit. If a file is missing or the wrong size, the display names it (for example `ROM missing:` / `sq1-u26.bin`). With the ROMs good but no audio device open (the machine only runs with one), it reads `No audio device`. Choosing another good folder later restarts the machine and keeps its memory.
 
 ## Where the settings and the memory live
 
 - **`%APPDATA%\KS-32\settings.xml`**: the ROM folder and the memory file. Each change is saved at once. The Standalone and the VST3 share it.
-- **`%APPDATA%\KS-32\ks32-memory.bin`** (the default; **Change…** on the settings page picks another file): the battery memory, the whole 64 KB RAM, so the firmware's settings, edited sounds and sequences survive a restart. It is loaded at start (a file of the wrong size is reported on the settings page and ignored, and the machine starts cold). It is saved on close and every 60 s, but only once the machine has booted (A11). Each save writes `<file>.tmp` and then replaces the file, so a crash in the middle of a save keeps the old image.
-- **Erase memory…** asks first, then writes 64 KB of zeros to the memory file at once and restarts the machine from it: the firmware rebuilds its memory as it boots (A11, ruling R7).
-- **`%APPDATA%\KS-32.settings`**: the Standalone wrapper's own file (JUCE's), with the audio device, buffer size and MIDI inputs.
+- **`%APPDATA%\KS-32\ks32-memory.bin`** (the default; **Change…** on the settings page picks another file): the battery memory, the whole 64 KB RAM, so the firmware's settings, edited sounds and sequences survive a restart. It is loaded at start (a file of the wrong size is reported on the settings page and ignored, and the machine starts cold). It is saved on close and every 60 s, but only once the machine has booted (A11). Each save writes `<file>.tmp` and then replaces the file, so a crash in the middle of a save keeps the old image. **Change…** refuses a file in the ROM folder (`ks32v301lower.bin` is 64 KB too) and one that cannot be written; a save that fails is reported on the settings page (`Memory not saved: <file>`).
+- **Erase memory…** asks first, then writes 64 KB of zeros to the memory file at once and restarts the machine from it: the firmware rebuilds its memory as it boots (A11, ruling R7). If the file cannot be written, nothing is erased, the machine keeps running and the settings page says so.
+- **`%APPDATA%\KS-32\KS-32.settings`**: the Standalone wrapper's own file (JUCE's), with the audio device, buffer size and MIDI inputs.
 - **Several VST3 instances share one memory file.** Each loads it at start and saves it on close and every 60 s, with no lock, so the last one to write wins. Open one instance per project if the memory matters.
 
 ## Audio and MIDI
@@ -72,7 +72,7 @@ These are OS v3.01's own behaviour (found in Plan 6). The app does not work arou
 
 Two environment variables, read when the app starts. Neither is needed for normal use.
 
-- **`KS32_SETTINGS_DIR=<folder>`** uses that folder instead of `%APPDATA%\KS-32` for `settings.xml` and the default memory file. The checks use it so they never touch your own settings and memory; it is handy for trying a fresh first start too. (The Standalone wrapper's `KS-32.settings` is not moved.)
+- **`KS32_SETTINGS_DIR=<folder>`** uses that folder instead of `%APPDATA%\KS-32` for `settings.xml` and the default memory file. The checks use it so they never touch your own settings and memory; it is handy for trying a fresh first start too. (The Standalone wrapper's `%APPDATA%\KS-32\KS-32.settings` is not moved.)
 - **`KS32_SNAPSHOT=<file.png>`** makes the panel editor write a PNG of itself 3 s after it opens. It is how the layout was checked without a person looking.
 
 ## Open items

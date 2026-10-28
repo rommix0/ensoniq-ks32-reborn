@@ -83,9 +83,9 @@ SettingsPage::SettingsPage(Ks32Processor& p)
                                                                             false, true, false);
             addAndMakeVisible(*devices_);
             devices_->setSize(kWidth - 2 * kPadX, 600);  // it shrinks itself to what it shows
-            startTimer(1000);  // the underrun count
         }
 #endif
+    startTimer(1000);
     refresh();
     setSize(kWidth, layout());
 }
@@ -99,6 +99,11 @@ void SettingsPage::refresh() {
     roms_ = checkRomFolder(dir, nullptr);
     memField_.setText(proc_.settings().memoryFile().getFullPathName(), juce::dontSendNotification);
     memNote_ = proc_.memoryError();
+}
+
+void SettingsPage::timerCallback() {
+    if (devices_ != nullptr) repaint(rateLine_);
+    if (proc_.memoryError() != memNote_) changed();  // the 60 s save failed (or recovered) while open
 }
 
 void SettingsPage::changed() {

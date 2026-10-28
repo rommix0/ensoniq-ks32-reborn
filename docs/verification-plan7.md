@@ -4,7 +4,7 @@ Closing check of Plan 7 (the KS-32 app: the real-time-safe machine, the JUCE-fre
 
 The usage is in `docs/ks32app.md`. The decisions are `A1` to `A14` in `docs/decisions.md` (`# KS-32 app`). The facts the app relies on are in `docs/ks32-hardware-interface.md`, and the panel inventory in `docs/reference/ks32-front-panel.md`.
 
-All the figures below are from runs on the final tree of the branch (the commit before the documents commit, `6ea1b55`, whose code the documents commit does not change), on 2026-10-28.
+All the figures below are from runs on the final tree of the branch (the commit before the documents commit, `6ea1b55`, whose code the documents commit does not change), on 2026-10-28. The final-review fixes changed only the app and `tests/rt_main.cpp` (not `src/`); `app_tests` and `ens_rt_tests` were run again on both toolchains after them, and their figures below are from those runs.
 
 ## Test counts
 
@@ -26,7 +26,7 @@ Plan 6 ended at 357 tests; Plan 7 added 19 to `ens_tests` (the DUART and panel r
 |---|---|---|
 | `rt_allocation_counter_counts` (the counter sees an allocation) | OK | OK |
 | `rt_machine_runframe_does_not_allocate` (`runFrame` and the event calls, after the boot) | allocations: 0 | allocations: 0 |
-| `rt_engine_render_does_not_allocate` (`Engine::render` with MIDI and posted events, after the boot) | allocations: 0, frames 157738 | allocations: 0, frames 157738 |
+| `rt_engine_render_does_not_allocate` (`Engine::render` with MIDI and posted events, after the boot and a rate change, `prepare(44100, 512)` and one block) | allocations: 0, frames 163326 | allocations: 0, frames 163326 |
 
 The engine's other locks are `try_lock` only (A5); the GUI reads the published snapshot, never the machine.
 
@@ -49,6 +49,7 @@ The smoke render printed "103 MIDI events, 230654 frames (7.750 s at 29762 Hz), 
 
 - **The ROM folder** (dummy files of the right sizes, never ROM content): six found, a renamed wave ROM reported missing, a short file reported wrong size, no folder chosen.
 - **The memory file**: no file is a cold boot with no error, save and load, save over an existing file, no `.tmp` left, Erase leaves 64 KB of zeros (R7), a wrong-size file reported and ignored.
+- **The processor's memory-file guards** (dummy ROMs, so a machine is made but never run; a temporary `KS32_SETTINGS_DIR`): **Change…** refuses `ks32/ks32v301lower.bin` in the ROM folder and a read-only file; with the memory file read-only, Erase sets `Memory not saved: <file>` and does not restart the machine; writable again, Erase clears the error and restarts.
 - **The VST3** (ruling R8), below.
 
 ## VST3 (ruling R8)
@@ -60,6 +61,7 @@ The VST3 was checked headlessly, in the way a DAW loads it, by `app_tests`:
 3. `createInstanceFromDescription` at 48 kHz, 480-sample blocks, loads it; `prepareToPlay`.
 4. 3.3 s of blocks (the boot, `kBootMs` 3200 ms), then a note-on (channel 1, note 60, velocity 100) and 1 s more.
 5. The editor is created through the host (`createEditorAndMakeActive`), which makes the plugin's view and its panel editor, and is deleted; then the plugin is released.
+6. The plugin's close save (A11, after the boot) wrote `ks32-memory.bin` into the temporary folder: the plugin used it, not `%APPDATA%\KS-32`.
 
 Result: **passed**. The note's peak was 0.1601 left and 0.1780 right (both channels sound); the editor came up at 1360 x 480 (the A13 default). The whole `app_tests` run takes about 1.2 s. It skips the VST3 part with `skip: VST3 or ROMs not found` when either is missing.
 
@@ -113,10 +115,12 @@ These need a person (seeing, hearing, the Q25, a DAW), so by ruling R1 they were
 - **Reopening the VST3 editor** draws the sliders and wheels at rest, while the machine keeps the values the last editor sent; the next drag jumps (Task 7).
 - **The settings window** is about 876 px tall on a device with 8 outputs, taller than the 720 artboard; smaller screens get a scroll bar (Task 5).
 - **The View menu** for the display codes is the display's right-click menu, not a menu bar (A7).
+- **Keyboard focus** (final review): the keys, sliders and wheels cannot take keyboard focus, though design section 6.3 says every control has focus; the plan narrowed it to the buttons. Not changed.
+- **`No audio device`** (final review): the display shows it while the machine exists but `prepareToPlay` has not run (design section 6.3, before the machine runs). Checked by code only; every run had a device, and the Standalone with one still boots to `ROM   00`.
 
 ### Deferred review items
 
-Every minor item the task reviews deferred, one line each. Items carried into a later task and fixed there are not listed (Task 1: the aligned and nothrow `new` overloads, the split panel event and the panel drop count, fixed in Task 2; Task 4: the failed ROM change dropping the running machine, suspending inside the ROM change and the compiled-in ROM path, fixed in Task 5; Task 6: the ignored `post()` result, the button state across an engine change and the blink-off cells in the hex overlay, fixed in Task 7).
+Every minor item the task reviews deferred, one line each. Items carried into a later task and fixed there are not listed (Task 1: the aligned and nothrow `new` overloads, the split panel event and the panel drop count, fixed in Task 2; Task 4: the failed ROM change dropping the running machine, suspending inside the ROM change and the compiled-in ROM path, fixed in Task 5; Task 6: the ignored `post()` result, the button state across an engine change and the blink-off cells in the hex overlay, fixed in Task 7; Task 5: the silent save failures and Erase's ignored write result, fixed by the final review).
 
 **Task 1 (real-time machine)**
 - `rowText` does not check `row` (out of range is undefined). Code.
@@ -135,12 +139,10 @@ Every minor item the task reviews deferred, one line each. Items carried into a 
 - The name `STOP_CONTINUE` claims Continue, though no `FB` was seen. Name.
 
 **Task 5 (settings and memory)**
-- `saveMemoryFile` failures are ignored silently (`Processor.cpp`, the close and timer saves). Behavioural: a failed save is not reported.
 - `setRomFolder` stores the folder before checking it. Behavioural, minor.
 - "Change…" on the memory file does not save the running RAM to the old file first. Behavioural.
 - A wrong-size file at the default path is overwritten by the first autosave (unstated in A11). Behavioural.
 - A failed `loadFileAsData` is ignored (harmless).
-- `eraseMemory` ignores `eraseMemoryFile`'s result: a failed write means Erase silently does nothing to the file. Behavioural.
 - A failed restart keeps `ramPending_`, so the next tick could save the old RAM over the zeros. Behavioural, after a failure only.
 - Several VST3 instances share one memory file (above).
 

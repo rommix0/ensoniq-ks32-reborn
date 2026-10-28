@@ -1,5 +1,5 @@
 // KS-32 app checks: checkRomFolder on a temp folder of dummy files the right size (never ROM
-// content), the memory file's load and save, and (ruling R8) the built KS-32.vst3 loaded,
+// content), the memory file's load and save, the processor's memory-file guards, and (ruling R8) the built KS-32.vst3 loaded,
 // played and its editor opened through JUCE's own VST3 host, as a DAW would.
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -9,6 +9,7 @@
 
 #include "../source/AppSettings.h"
 #include "../source/MemoryFile.h"
+#include "../source/Processor.h"
 #include "../source/RomFolder.h"
 
 namespace {
@@ -34,11 +35,16 @@ int count(const std::vector<RomFileStatus>& list, RomFileStatus::State s) {
     return n;
 }
 
-void romFolder(const juce::File& dir) {
+// The six ROM files as zeros of the right sizes.
+void dummyRoms(const juce::File& dir) {
     const std::pair<const char*, size_t> files[] = {
         {"ks32/ks32v301upper.bin", 0x20000}, {"ks32/ks32v301lower.bin", 0x10000}, {"sq1-u25.bin", 0x80000},
         {"sq1-u26.bin", 0x80000},            {"rom2.u39", 0x100000},             {"rom3.u38", 0x100000}};
     for (const auto& [name, size] : files) write(dir.getChildFile(name), size);
+}
+
+void romFolder(const juce::File& dir) {
+    dummyRoms(dir);
 
     ens::ks32::RomSet roms;
     auto list = checkRomFolder(dir, &roms);
@@ -83,6 +89,39 @@ void memoryFile(const juce::File& dir) {
 
     mem.replaceWithData(img.data(), 100);  // the wrong size: reported and ignored
     CHECK(loadMemoryFile(mem, err).empty() && err.isNotEmpty());
+}
+
+// The processor's memory-file guards, on dummy ROMs (a machine is made but never run) in a temp
+// settings folder.
+void processor(const juce::File& dir) {
+    const auto roms = dir.getChildFile("roms");
+    dummyRoms(roms);
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    AppSettings().setRomFolder(roms);
+    Ks32Processor p;
+    CHECK(p.engine() != nullptr);
+
+    // A ROM is never the memory file, though ks32v301lower.bin is 64 KB: the 60 s save would overwrite it.
+    juce::String err;
+    const auto lower = roms.getChildFile("ks32/ks32v301lower.bin");
+    CHECK(!p.setMemoryFile(lower, err) && err.isNotEmpty() && p.settings().memoryFile() != lower);
+
+    // A file that cannot be written is refused.
+    const auto mem = dir.getChildFile("mem.bin");
+    CHECK(eraseMemoryFile(mem) && mem.setReadOnly(true));
+    CHECK(!p.setMemoryFile(mem, err) && err.isNotEmpty() && p.settings().memoryFile() != mem);
+
+    // Taken while writable (a restart from it). Then, read-only, Erase fails: the memory error says
+    // so and the machine is not restarted.
+    CHECK(mem.setReadOnly(false) && p.setMemoryFile(mem, err) && p.memoryError().isEmpty());
+    const auto* engine = p.engine();
+    CHECK(mem.setReadOnly(true));
+    p.eraseMemory();
+    CHECK(p.memoryError().startsWith("Memory not saved") && p.engine() == engine);
+    // Writable again: Erase saves, clears the error and restarts.
+    CHECK(mem.setReadOnly(false));
+    p.eraseMemory();
+    CHECK(p.memoryError().isEmpty() && p.engine() != engine);
 }
 
 // Ruling R8: KS32_SETTINGS_DIR points the plugin at a temp settings file naming the ROM folder,
@@ -143,6 +182,8 @@ void vst3(const juce::File& dir) {
     ed.reset();
     plugin->releaseResources();
     plugin.reset();
+    // The plugin used the temp folder: its close save (A11, after the boot) landed here.
+    CHECK(dir.getChildFile("ks32-memory.bin").existsAsFile());
 }
 
 }  // namespace
@@ -153,6 +194,7 @@ int main() {
                          .getNonexistentChildFile("ks32_app_tests", "", false);
     romFolder(dir.getChildFile("roms"));
     memoryFile(dir);
+    processor(dir.getChildFile("proc"));
     vst3(dir.getChildFile("vst3"));
     dir.deleteRecursively();
     std::printf(failures == 0 ? "app_tests: all passed\n" : "app_tests: %d failed\n", failures);

@@ -638,7 +638,12 @@ bool PanelEditor::sameEngine() {
     return false;
 }
 
-juce::String PanelEditor::romError() const { return proc_.engine() ? juce::String() : proc_.romError(); }
+// Design section 6.3: before the machine runs the display gives the reason. A machine with no
+// audio device open (prepareToPlay not yet run) does not run.
+juce::String PanelEditor::romError() const {
+    if (!proc_.engine()) return proc_.romError();
+    return proc_.prepared() ? juce::String() : juce::String("No audio device");
+}
 
 void PanelEditor::toggleHexCodes() {
     hexCodes_ = !hexCodes_;
