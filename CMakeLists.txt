@@ -39,6 +39,10 @@ add_library(ens_m68k STATIC src/m68k/m68k_decode.cpp src/m68k/m68k_cpu.cpp src/m
   src/m68k/m68k_ops_logic.cpp src/m68k/m68k_ops_flow.cpp src/m68k/m68k_dis.cpp)
 target_link_libraries(ens_m68k PUBLIC ens_common)
 
+# MC68681 DUART (Plan 6): the KS-32's serial and timer chip.
+add_library(ens_duart STATIC src/duart/duart.cpp)
+target_link_libraries(ens_duart PUBLIC ens_common)
+
 # Tom Harte's per-instruction tests (.m68t reader and runner); the data itself is not in the repo.
 add_library(ens_m68k_harte STATIC src/m68k/harte_format.cpp)
 target_link_libraries(ens_m68k_harte PUBLIC ens_m68k)
