@@ -195,8 +195,8 @@ only their ratio). High for channel A, confirmed by MIDI in. Low for channel B.
   The firmware writes CSRA = 0xEE: both directions from the external 16x clocks on IP4 (RxCA)
   and IP3 (TxCA) at 500 kHz. That is 31 250 baud, `rxBitClocks(0) == 128` after the boot. The
   DUART already models this clock (D3, Task 3), so the DUART is unchanged.
-- `Machine::midiIn(byte)` queues a byte on RxDA. It enters at the line rate, 320 us per byte (D2).
-  `Machine::takeMidiOut()` returns the bytes that left TxDA since the last call.
+- `Machine::midiIn(byte)` queues a byte on RxDA (up to 1024, A1). It enters at the line rate, 320 us
+  per byte (D2). `Machine::popMidiOut(b)` pops the bytes that left TxDA, oldest first (up to 256, A2).
 - **Receive channel.** The firmware receives on every channel: the System/MIDI pages show its
   defaults as "Base Channel= 01", "Status = BOTH" (Screen 4) and "MIDI Mode=OMNI" (Screen 6). A
   middle C on each of the 16 channels sounds at the same level (peak 5835 to 5844), and each

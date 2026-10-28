@@ -21,8 +21,8 @@ namespace {
 // The display as one line: rows joined, upper case, runs of spaces collapsed.
 std::string shown(const PanelState& p) {
     std::string s;
-    for (const std::string& row : p.rows)
-        for (const char c : row + " ") {
+    for (int row = 0; row < kPanelRows; ++row)
+        for (const char c : rowText(p, row) + " ") {
             const char u = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             if (u != ' ' || (!s.empty() && s.back() != ' ')) s += u;
         }
@@ -134,11 +134,8 @@ TEST(ks32_firmware_boot_shows_play_screen) {
     Machine* m = bootedKs32();
     if (!m) return;
     const PanelState& p = m->panel();
-    CHECK_EQ(p.rows.size(), 2u);
-    if (p.rows.size() == 2) {
-        CHECK(p.rows[0] == "ROM   00        ");
-        CHECK(p.rows[1] == " KS Grand Piano ");
-    }
+    CHECK(rowText(p, 0) == "ROM   00        ");
+    CHECK(rowText(p, 1) == " KS Grand Piano ");
     for (int i = 0; i < kPanelLeds; ++i) CHECK(p.leds[i] == (i == 8 ? Led::On : Led::Off));
     CHECK_EQ(p.blink, 0u);
     CHECK_EQ(p.unknown, 0u);  // every byte the boot sends is in the decoded table (K7)
@@ -433,6 +430,13 @@ void sendMidi(Machine& m, std::initializer_list<uint8_t> bytes) {
     for (const uint8_t b : bytes) m.midiIn(b);
 }
 
+// What the firmware sent on MIDI out since the last call, oldest first.
+std::vector<uint8_t> midiOut(Machine& m) {
+    std::vector<uint8_t> out;
+    for (uint8_t b = 0; m.popMidiOut(b);) out.push_back(b);
+    return out;
+}
+
 // One booted machine for the MIDI checks, run in sequence at construction (one boot, suite
 // runtime). The firmware's default sound (ROM 00) and MIDI settings (System/MIDI shows "Base
 // Channel= 01", "MIDI Mode=OMNI"), so channel 1 is played:
@@ -446,7 +450,7 @@ struct MidiRig {
     uint32_t overruns = 0;
     bool saw144 = false, sawEvent = false;
     uint32_t otherAcks = 0;  // interrupt acknowledges not answered with the DUART's vector 64 (K2)
-    std::vector<std::string> beforeProgram, afterProgram;
+    PanelState beforeProgram, afterProgram;
 };
 
 MidiRig& midiKs32() {
@@ -456,7 +460,7 @@ MidiRig& midiKs32() {
         if (!x.m) return x;
         Machine& m = *x.m;
         runMs(m, kBootMs);
-        x.bootOut = m.takeMidiOut();
+        x.bootOut = midiOut(m);
         m.onBusEvent = [&x](const BusEvent& e) {
             if (e.dev == Device::Iack && e.value != 64) ++x.otherAcks;
         };
@@ -477,10 +481,10 @@ MidiRig& midiKs32() {
         x.overruns = m.duart().overruns(kMidiChannel);
         runMs(m, 2000);
         x.released = peakMs(m, 200);
-        x.beforeProgram = m.panel().rows;
+        x.beforeProgram = m.panel();
         sendMidi(m, {0xC0, 0x05});
         runMs(m, 500);
-        x.afterProgram = m.panel().rows;
+        x.afterProgram = m.panel();
         m.onBusEvent = nullptr;
         return x;
     }();
@@ -527,12 +531,9 @@ TEST(ks32_firmware_midi_burst_no_overrun) {
 TEST(ks32_firmware_program_change_changes_display) {
     MidiRig& r = midiKs32();
     if (!r.m) return;
-    PanelState before, after;
-    before.rows = r.beforeProgram;
-    after.rows = r.afterProgram;
-    std::printf("  %s -> %s\n", shown(before).c_str(), shown(after).c_str());
-    CHECK(r.afterProgram != r.beforeProgram);
-    CHECK(shown(after).find("ROM 05") != std::string::npos);
+    std::printf("  %s -> %s\n", shown(r.beforeProgram).c_str(), shown(r.afterProgram).c_str());
+    CHECK(r.afterProgram.rows != r.beforeProgram.rows);
+    CHECK(shown(r.afterProgram).find("ROM 05") != std::string::npos);
 }
 
 namespace {
@@ -581,7 +582,7 @@ TEST(ks32_firmware_key_sounds) {
     if (!r.m) return;
     Machine& m = *r.m;
     press(m, Button::SelectSound);
-    (void)m.takeMidiOut();
+    (void)midiOut(m);
     const int silence = peakMs(m, 100);
     m.key(60, true, 127);
     const int on = peakMs(m, 300);
@@ -594,7 +595,7 @@ TEST(ks32_firmware_key_sounds) {
         runMs(m, 100);
     }
     runMs(m, 1500);
-    const std::vector<uint8_t> out = m.takeMidiOut();
+    const std::vector<uint8_t> out = midiOut(m);
     std::printf("  peak: silence %d, key %d; MIDI out:", silence, on);
     for (const uint8_t b : out) std::printf(" %02X", b);
     std::printf("\n");

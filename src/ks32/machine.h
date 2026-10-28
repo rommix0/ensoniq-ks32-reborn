@@ -82,9 +82,10 @@ public:
     void setAnalog(Analog a, uint16_t raw);  // raw 0..0x3FF (masked); PAR follows at once (K8)
     // A byte on MIDI in: it joins the channel's receive queue and enters at the line rate (D2).
     void midiIn(uint8_t byte) { duart_.receive(kMidiChannel, byte); }
-    std::vector<uint8_t> takeMidiOut() { return duart_.takeTransmitted(kMidiChannel); }  // sent since the last call
+    // The oldest byte the firmware sent on MIDI out and not yet popped (A2: 256 are kept).
+    bool popMidiOut(uint8_t& b) { return duart_.popTransmitted(kMidiChannel, b); }
     // The battery-backed RAM (K1, K11): 64 KB, raw bytes, the CPU's view at 0xFF0000-0xFFFFFF.
-    std::vector<uint8_t> ramImage() const { return ram_; }
+    const std::vector<uint8_t>& ramImage() const { return ram_; }
     // Replaces the RAM and powers the machine on again with it: the CPU, OTIS, the ESP, the DUART
     // and the panel are reset, so the next runFrame boots from the loaded RAM. false with err
     // naming "RAM image" on a wrong size, and nothing changes.

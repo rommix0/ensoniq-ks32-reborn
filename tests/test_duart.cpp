@@ -24,6 +24,13 @@ void setupA(Duart& d) {
     d.write(kCR, 0x05);
 }
 
+// The characters that finished leaving TxD on channel ch, oldest first.
+std::vector<uint8_t> sent(Duart& d, int ch) {
+    std::vector<uint8_t> out;
+    for (uint8_t b = 0; d.popTransmitted(ch, b);) out.push_back(b);
+    return out;
+}
+
 }  // namespace
 
 TEST(duart_reset_state) {
@@ -67,13 +74,13 @@ TEST(duart_tx_character_timing) {
     d.write(kHR, 0x55);
     CHECK_EQ(d.read(kSR) & 0x0C, 0x04);  // TxRDY = 1, TxEMT = 0
     d.advance(kChar9600 - 1);
-    CHECK(d.takeTransmitted(0).empty());
+    CHECK(sent(d, 0).empty());
     d.advance(1);
-    const std::vector<uint8_t> out = d.takeTransmitted(0);
+    const std::vector<uint8_t> out = sent(d, 0);
     CHECK_EQ(out.size(), 1u);
     CHECK_EQ(out[0], 0x55);
     CHECK_EQ(d.read(kSR) & 0x0C, 0x0C);
-    CHECK(d.takeTransmitted(0).empty());
+    CHECK(sent(d, 0).empty());
 }
 
 TEST(duart_tx_double_buffer) {
@@ -85,7 +92,7 @@ TEST(duart_tx_double_buffer) {
     d.advance(kChar9600);
     CHECK_EQ(d.read(kSR) & 0x0C, 0x04);  // 0x22 moved to the shift register: TxRDY again
     d.advance(kChar9600);
-    const std::vector<uint8_t> out = d.takeTransmitted(0);
+    const std::vector<uint8_t> out = sent(d, 0);
     CHECK_EQ(out.size(), 2u);
     CHECK_EQ(out[0], 0x11);
     CHECK_EQ(out[1], 0x22);
@@ -100,13 +107,13 @@ TEST(duart_tx_disabled_ignores_writes) {
     d.write(kHR, 0x77);  // transmitter disabled
     d.write(kCR, 0x04);  // enable TX now
     d.advance(10 * kChar9600);
-    CHECK(d.takeTransmitted(0).empty());
+    CHECK(sent(d, 0).empty());
     // A disable lets the character in the shift register finish and clears TxRDY, TxEMT.
     d.write(kHR, 0x66);
     d.write(kCR, 0x08);
     CHECK_EQ(d.read(kSR) & 0x0C, 0x00);
     d.advance(kChar9600);
-    CHECK_EQ(d.takeTransmitted(0).size(), 1u);
+    CHECK_EQ(sent(d, 0).size(), 1u);
     CHECK_EQ(d.read(kSR) & 0x0C, 0x00);
 }
 
@@ -118,18 +125,18 @@ TEST(duart_char_length_parity_and_stop_bits) {
     d.write(kCR, 0x04);
     d.write(kHR, 0xAA);
     d.advance(12 * 16 * 24 - 1);  // start + 8 + parity + 2 stop = 12 bits
-    CHECK(d.takeTransmitted(0).empty());
+    CHECK(sent(d, 0).empty());
     d.advance(1);
-    CHECK_EQ(d.takeTransmitted(0).size(), 1u);
+    CHECK_EQ(sent(d, 0).size(), 1u);
     // 5 bits, no parity, stop code 0 = 1.063 bits: (1 + 5) * 16 + 17 = 113 ticks.
     d.write(kCR, 0x10);
     d.write(kMR, 0x10);
     d.write(kMR, 0x00);
     d.write(kHR, 0xFF);  // masked to 5 bits
     d.advance(113 * 24 - 1);
-    CHECK(d.takeTransmitted(0).empty());
+    CHECK(sent(d, 0).empty());
     d.advance(1);
-    const std::vector<uint8_t> out = d.takeTransmitted(0);
+    const std::vector<uint8_t> out = sent(d, 0);
     CHECK_EQ(out.size(), 1u);
     CHECK_EQ(out[0], 0x1F);
 }
@@ -172,7 +179,7 @@ TEST(duart_tx_rate_change_mid_character_finishes) {
     d.advance(kChar9600 - 1);  // one 16x tick left, 23 of its 24 clocks spent
     d.write(kCSR, 0xCC);       // 38400 baud: a 6-clock tick, shorter than the spent phase
     d.advance(6);
-    const std::vector<uint8_t> out = d.takeTransmitted(0);
+    const std::vector<uint8_t> out = sent(d, 0);
     CHECK_EQ(out.size(), 1u);
     CHECK_EQ(out[0], 0x55);
 }
@@ -486,15 +493,15 @@ TEST(duart_external_16x_clock) {
     d.receive(0, 0x5A);
     d.receive(1, 0xA5);
     d.advance(1279);
-    CHECK(d.takeTransmitted(0).empty());
+    CHECK(sent(d, 0).empty());
     CHECK_EQ(d.read(kSR) & 0x01, 0);
     d.advance(1);
-    const std::vector<uint8_t> out = d.takeTransmitted(0);
+    const std::vector<uint8_t> out = sent(d, 0);
     CHECK_EQ(out.size(), 1u);
     CHECK_EQ(d.read(kHR), 0x5A);
     CHECK_EQ(d.read(11), 0xA5);
     d.advance(100000);
-    CHECK(d.takeTransmitted(1).empty());  // TxCB (IP5) has no clock
+    CHECK(sent(d, 1).empty());  // TxCB (IP5) has no clock
     d.write(kCSR, 0xFF);                  // 1x external clocks are not modelled
     CHECK_EQ(d.unsupportedWrites(), 2u);
 }
@@ -508,10 +515,10 @@ TEST(duart_channel_b_independent) {
     d.write(11, 0xA5);
     d.receive(1, 0x5A);
     d.advance(kChar9600);
-    const std::vector<uint8_t> out = d.takeTransmitted(1);
+    const std::vector<uint8_t> out = sent(d, 1);
     CHECK_EQ(out.size(), 1u);
     CHECK_EQ(out[0], 0xA5);
-    CHECK(d.takeTransmitted(0).empty());
+    CHECK(sent(d, 0).empty());
     CHECK_EQ(d.read(9) & 0x01, 0x01);
     CHECK_EQ(d.read(11), 0x5A);
     CHECK_EQ(d.read(kSR) & 0x01, 0);  // channel A untouched
@@ -524,4 +531,40 @@ TEST(duart_ivr_register) {
     d.write(kIVR, 0x4C);
     CHECK_EQ(d.ivr(), 0x4C);
     CHECK_EQ(d.read(kIVR), 0x4C);
+}
+
+// DECISION A1: the receive queue holds 1024 bytes; later ones are dropped and counted.
+TEST(duart_rx_queue_is_bounded) {
+    Duart d(kX1);
+    setupA(d);
+    for (int i = 0; i < 1100; ++i) d.receive(0, static_cast<uint8_t>(i));
+    CHECK_EQ(d.rxDropped(0), 76u);
+    bool inOrder = true;
+    for (int i = 0; i < 1024; ++i) {
+        d.advance(kChar9600);
+        inOrder = inOrder && d.read(kHR) == static_cast<uint8_t>(i);
+    }
+    CHECK(inOrder);
+    CHECK_EQ(d.overruns(0), 0u);
+    d.advance(kChar9600);
+    CHECK_EQ(d.read(kSR) & 0x01, 0);  // nothing after byte 1023
+}
+
+TEST(duart_pop_transmitted_in_order) {
+    Duart d(kX1);
+    setupA(d);
+    d.write(kHR, 0x11);
+    d.write(kHR, 0x22);
+    d.advance(kChar9600);
+    d.write(kHR, 0x33);
+    d.advance(2 * kChar9600);
+    uint8_t b = 0;
+    CHECK(d.popTransmitted(0, b));
+    CHECK_EQ(b, 0x11);
+    CHECK(d.popTransmitted(0, b));
+    CHECK_EQ(b, 0x22);
+    CHECK(d.popTransmitted(0, b));
+    CHECK_EQ(b, 0x33);
+    CHECK(!d.popTransmitted(0, b));
+    CHECK_EQ(d.txDropped(0), 0u);
 }

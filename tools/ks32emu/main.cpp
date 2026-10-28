@@ -308,7 +308,8 @@ void sendMidi(Machine& m, uint8_t status, uint8_t d1, uint8_t d2) {
 void runBoot(Machine& m) {
     int16_t l, r;
     for (uint64_t f = 0; f < static_cast<uint64_t>(kBootMs) * kWavRate / 1000; ++f) m.runFrame(l, r);
-    (void)m.takeMidiOut();  // what the boot sends on MIDI out is not reported
+    for (uint8_t b = 0; m.popMidiOut(b);) {
+    }  // what the boot sends on MIDI out is not reported
 }
 
 int boot(const Options& o) {
@@ -343,16 +344,18 @@ int boot(const Options& o) {
 
     const uint64_t frames = o.ms * kWavRate / 1000;
     int16_t l, r;
-    std::vector<std::string> rows = m->panel().rows;
+    auto rows = m->panel().rows;
     std::string leds = ledText(m->panel());
+    std::vector<uint8_t> tx;  // channel A's bytes (channel B's went to the panel)
     for (uint64_t f = 0; f < frames; ++f) {
         applyDue(*m, events, f * 1000 / kWavRate);
         m->runFrame(l, r);
+        for (uint8_t b = 0; m->popMidiOut(b);) tx.push_back(b);
         const PanelState& p = m->panel();
         const auto ms = static_cast<unsigned long long>((f + 1) * 1000 / kWavRate);
         if (p.rows != rows) {
             rows = p.rows;
-            for (const std::string& row : rows) std::printf("%llu |%s|\n", ms, printable(row).c_str());
+            for (int i = 0; i < kPanelRows; ++i) std::printf("%llu |%s|\n", ms, printable(rowText(p, i)).c_str());
         }
         if (ledText(p) != leds) {
             leds = ledText(p);
@@ -393,7 +396,6 @@ int boot(const Options& o) {
     std::printf("%s\n", duartLast.empty() ? " none" : "");
     std::printf("OTIS active voices: %d\n", m->board().otis().activeVoices());
     std::printf("ESP halted: %s\n", m->board().esp().halted() ? "yes" : "no");
-    const std::vector<uint8_t> tx = m->duart().takeTransmitted(0);  // channel B's bytes went to the panel
     std::printf("DUART A transmitted: %zu bytes\n", tx.size());
     if (!tx.empty()) printBytes(tx);
     std::printf("panel: %s, unknown bytes %u\n", ledText(m->panel()).c_str(), m->panel().unknown);
@@ -437,12 +439,14 @@ int render(const Options& o) {
     pcm.reserve(static_cast<size_t>(frames) * 2);
     size_t next = 0;
     int peak = 0;
+    size_t midiOut = 0;
     int16_t l, r;
     for (uint64_t f = 0; f < frames; ++f) {
         applyDue(*m, events, f * 1000 / kWavRate);
         for (; next < midi.size() && midi[next].frame <= f; ++next)
             sendMidi(*m, midi[next].status, midi[next].d1, midi[next].d2);
         m->runFrame(l, r);
+        for (uint8_t b = 0; m->popMidiOut(b);) ++midiOut;
         pcm.push_back(l);
         pcm.push_back(r);
         peak = std::max({peak, std::abs(static_cast<int>(l)), std::abs(static_cast<int>(r))});
@@ -452,7 +456,7 @@ int render(const Options& o) {
     saveRam(*m, o.ram);
     std::printf("%zu MIDI events, %llu frames (%.3f s at %u Hz), peak %d, MIDI out %zu bytes\n", midi.size(),
                 static_cast<unsigned long long>(frames), static_cast<double>(frames) / kWavRate, kWavRate, peak,
-                m->takeMidiOut().size());
+                midiOut);
     std::printf("pcm hash %016llx\n", static_cast<unsigned long long>(pcmHash(pcm)));
     return 0;
 }
@@ -539,7 +543,8 @@ struct LiveEngine {
             out[static_cast<size_t>(f) * channels + 1] = fifo[2 * static_cast<size_t>(f) + 1];
         }
         fifo.erase(fifo.begin(), fifo.begin() + 2 * static_cast<std::ptrdiff_t>(frames));  // keeps capacity
-        const size_t sent = m.takeMidiOut().size();
+        size_t sent = 0;
+        for (uint8_t b = 0; m.popMidiOut(b);) ++sent;
         std::lock_guard<std::mutex> lock(mu);
         panel = m.panel();
         midiOut += sent;
@@ -605,7 +610,7 @@ int listDevices() {
 }
 
 void printPanel(const PanelState& p) {
-    for (const std::string& row : p.rows) std::printf("|%s|\n", printable(row).c_str());
+    for (int i = 0; i < kPanelRows; ++i) std::printf("|%s|\n", printable(rowText(p, i)).c_str());
     std::printf("%s\n", ledText(p).c_str());
     std::fflush(stdout);
 }

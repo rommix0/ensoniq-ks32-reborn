@@ -7,7 +7,9 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <vector>
+#include <type_traits>
+
+#include "common/ring.h"
 
 namespace ens::ks32 {
 
@@ -53,12 +55,17 @@ inline constexpr ButtonName kButtons[] = {
     {Button::MakeDefaultPreset, "MAKE_DEFAULT_PRESET"}, {Button::SystemMidi, "SYSTEM_MIDI"},
 };
 
+// Plain data, so the audio thread can copy it without allocating.
 struct PanelState {
-    std::vector<std::string> rows;  // kPanelRows strings of kPanelCols character codes (0x00-0x7F)
+    std::array<std::array<char, kPanelCols>, kPanelRows> rows{};  // character codes (0x00-0x7F)
     uint32_t blink = 0;             // bit p: position p (row * 16 + column) written inside 0x90 ... 0x91
     std::array<Led, kPanelLeds> leds{};  // by LED number, the parameter of 0x8D/0x8E/0x8F
     uint32_t unknown = 0;           // command bytes outside the decoded table and out-of-range parameters
 };
+static_assert(std::is_trivially_copyable_v<PanelState>);
+
+// Row 0 or 1 as a string of kPanelCols characters, for tools and tests.
+inline std::string rowText(const PanelState& p, int row) { return std::string(p.rows[row].data(), kPanelCols); }
 
 class Panel {
 public:
@@ -70,7 +77,7 @@ public:
     // sends, 1-127 (clamped), which the firmware maps through its touch curve; it is not a MIDI velocity.
     void key(int note, bool down, uint8_t strike);
     const PanelState& state() const { return s_; }
-    std::vector<uint8_t> takeToCpu();  // the queued bytes, oldest first (no start-up handshake, K7)
+    bool popToCpu(uint8_t& b) { return toCpu_.pop(b); }  // the oldest queued byte (no start-up handshake, K7)
 
 private:
     void run(uint8_t cmd, uint8_t param);
@@ -78,7 +85,7 @@ private:
     PanelState s_;
     uint8_t cursor_ = 0;    // next write position, 0..31
     std::array<uint8_t, 2> saved_{};  // cursor slots of 0x88/0x89
-    std::vector<uint8_t> toCpu_;
+    ByteRing<256> toCpu_;  // DECISION A2: 256 bytes for the firmware; when full the newest is dropped
     bool blinkOn_ = false;  // inside 0x90 ... 0x91
     uint8_t cmd_ = 0;       // command waiting for parameter bytes (0 = none)
     uint8_t param_ = 0;     // its first parameter

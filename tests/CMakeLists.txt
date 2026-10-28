@@ -37,3 +37,10 @@ target_compile_definitions(ens_tests PRIVATE ENS_TEST_DATA_DIR="${CMAKE_CURRENT_
   ENS_DATA_DIR="${CMAKE_SOURCE_DIR}/docs/rom-investigation/data" ENS_ROM_DIR="${ENS_ROM_DIR}"
   _CRT_SECURE_NO_WARNINGS)
 add_test(NAME ens_tests COMMAND ens_tests)
+
+# Real-time checks: replaces global operator new/delete to count allocations, so it is its own
+# executable with its own main.
+add_executable(ens_rt_tests rt_main.cpp)
+target_link_libraries(ens_rt_tests PRIVATE ens_ks32)
+target_compile_definitions(ens_rt_tests PRIVATE ENS_ROM_DIR="${ENS_ROM_DIR}")
+add_test(NAME ens_rt_tests COMMAND ens_rt_tests)

@@ -4,8 +4,8 @@
 // 8-bit output port. Character-level serial timing (D1); features the KS-32 does not need are
 // counted, not modelled (D3). Instantiable: no globals, no statics, no OS calls.
 #include <cstdint>
-#include <deque>
-#include <vector>
+
+#include "common/ring.h"
 
 namespace ens::duart {
 
@@ -23,8 +23,10 @@ public:
     // External 16x clock on input pin 0..5 (0 Hz = none), used by CSR code 1110 (D3): TxCA = IP3,
     // RxCA = IP4, TxCB = IP5, RxCB = IP2. Board wiring: reset() keeps it.
     void setExternalClock(int ipPin, uint32_t hz);
-    void receive(int ch, uint8_t byte);     // ch 0 = A, 1 = B: queue a character on RxD (D2)
-    std::vector<uint8_t> takeTransmitted(int ch);  // characters that finished leaving TxD
+    void receive(int ch, uint8_t byte);     // ch 0 = A, 1 = B: queue a character on RxD (D2, A1)
+    bool popTransmitted(int ch, uint8_t& b);  // the oldest character that finished leaving TxD (A2)
+    uint32_t rxDropped(int ch) const { return ch_[ch & 1].pending.dropped(); }  // A1, since reset
+    uint32_t txDropped(int ch) const { return ch_[ch & 1].sent.dropped(); }     // A2, since reset
     uint32_t rxBitClocks(int ch) const;     // X1 clocks per receive bit, 0 if unclocked
     uint32_t overruns(int ch) const { return ch_[ch & 1].overruns; }  // lost to overrun since reset
     uint32_t unsupportedWrites() const { return unsupported_; }        // D3
@@ -46,9 +48,11 @@ private:
         bool txReady = false, txEmpty = false, thrFull = false;
         uint8_t thr = 0, txByte = 0;
         Shifter tx;
-        std::vector<uint8_t> sent;
+        // DECISION A2: 256 sent characters wait to be popped; when full the newest is dropped.
+        ByteRing<256> sent;
         // Receiver: characters on the wire, the shift register, the 3-deep FIFO.
-        std::deque<uint8_t> pending;
+        // DECISION A1: the wire holds 1024 characters; later ones are dropped and counted.
+        ByteRing<1024> pending;
         Shifter rx;
         uint8_t rxByte = 0;
         bool held = false;  // a finished character waiting in the shift register for a FIFO slot
