@@ -274,7 +274,8 @@ zero wait states.
 ## Unmapped accesses (K6)
 
 With the K1 map the boot makes no unmapped access, so the "reads 0, writes ignored, traced" rule
-never applies.
+never applies. The only unmapped window the firmware is known to use is the memory card at
+0x2E0000. It touches that window only while the card detect (IP1) is low ("Memory card").
 
 ## Front panel: display and LEDs (K7)
 
@@ -460,9 +461,10 @@ Confidence: High for the tracks and for LEDs 0, 1, 7, 8 and 9; Medium for 6 and 
   - 0xFE does nothing, and 0xFF acts like Select Seq/Preset.
 
   They are not separate controls and are not in `Button`.
-- **A second byte other than `00`** after a press byte does nothing. Task 4's sweeps covered
-  press bytes 0x80, 0x81, 0xC0 and 0xFF. Here, every second byte 0x01–0xFF was sent after each
-  code that does nothing, from the sound screen.
+- **A second byte other than `00`** after a press byte changes nothing on the display. Task 4's
+  sweeps covered press bytes 0x80, 0x81, 0xC0 and 0xFF. Here, every second byte 0x01–0xFF was sent
+  after each code that does nothing, from the sound screen. Task 8 found that such a pair is a key
+  event, which plays a note ("Keyboard").
 - **The sliders and wheels** are in "Analog inputs".
 
 **How it was found.** A scratch harness, not committed, booted the machine and put bytes on RxB
@@ -584,6 +586,167 @@ ks32_firmware_boot_shows_play_screen.
 **MAME.** Not compared. The Task 6 implementer recalls, without checking, that MAME's esq5505
 driver feeds the OTIS pot input from a table indexed by DUART output bits. The evidence above
 settles the path.
+
+## Battery RAM (K11)
+
+**Fact.**
+- The battery holds the whole 64 KB RAM (K1). `Machine::ramImage()` returns it as raw bytes, the
+  CPU's view at 0xFF0000-0xFFFFFF.
+- `Machine::loadRamImage(img, err)` takes an image of exactly 0x10000 bytes. A wrong size fails
+  with "RAM image: expected 65536 bytes, got n" and changes nothing.
+- Loading an image is a power cycle with the battery connected:
+  - the CPU, OTIS, the ESP, the DUART and the panel are reset, and the 0-7 vector overlay comes
+    back;
+  - the RAM and the analog inputs are kept (the inputs are the player's controls, not machine
+    state);
+  - the next `runFrame` boots from the loaded RAM.
+
+  A cold start is blank RAM, which is what `Machine::create` gives.
+- **A boot from saved RAM is a warm start.** The firmware does not clear the RAM, and the settings
+  survive. Master Tune set to +02 (System/MIDI, Up/Yes twice) still reads "Master Tune= +02" after
+  a boot from the saved image. The warm boot reaches the play screen within 2 s, against 2.1 s for
+  the cold boot, with no warning and no unexpected event.
+- **OS v3.01 powers on to ROM 00.** From a cold or a warm start it always shows "ROM 00 / KS Grand
+  Piano" with LED 8 lit, whatever was selected when the image was saved.
+  - ROM 01, ROM 55, INT 34 and preset mode (PRESET 00 Loc=30) were tried.
+  - BankSet then shows INT 00, not the INT sound that was selected.
+  - MIDI out after each boot ends `C0 00`, a program change to 0.
+
+  So the selected sound is not part of what the battery restores (ruling T8-1).
+- **There is no power-fail save.** A level-7 interrupt forced before saving the image gives
+  "Unexpected Event ID = 139" (unused vector), and the warm boot still shows ROM 00. The firmware
+  has no handler there that could store its state as the power fails.
+- **Repeated short power-ons reinitialize the RAM** (ruling T8-2). This is the manual's system
+  reset sequence (PDF p5): turn the unit off and on slowly, at 2 s intervals, seven times, and the
+  eighth power-on reinitializes.
+  - The image was booted again and again for 1 s each, each run's RAM feeding the next. After the
+    6th short power-on, the next boot reinitializes the RAM: Master Tune falls back to +00.
+  - At 2 s per power-on, the warm boot reaches the play screen and the count clears. Ten cycles
+    keep +02.
+  - The manual's "eighth time" against the 7th boot seen here is a matter of how the power-ons
+    are counted, not of the mechanism.
+  - This is the real unit's behaviour, and the emulator adds no workaround. With
+    `ks32emu --ram`, many `boot --ms` runs of under about 2 s, each written back, will
+    reinitialize the RAM.
+- **`ks32emu --ram <file>`** (boot, render and play):
+  - it loads the file if it exists;
+  - a wrong size gives `error: RAM image: ...` and exit 2;
+  - it writes the RAM back on a clean exit: boot and render at the end, play on `q` (not on
+    Ctrl+C).
+
+**How it was found.** Scratch harnesses, not committed, saved `ramImage()` after button presses.
+They booted fresh machines from the image and read the display, MIDI out and the RAM itself: the
+count of non-zero bytes every 5 ms of the boot, and the byte differences against a cold boot. The
+firmware was run, never studied.
+
+**Tests.** ks32_machine_ram_image_size_checked, ks32_firmware_ram_image_keeps_settings.
+
+**Confidence.** High.
+**MAME.** Not compared.
+
+## Memory card (K10)
+
+**Fact.**
+- **DUART IP1 is the card detect, active low.** The slot is empty, so IP1 is high. That is the
+  DUART's reset level, and the `Machine` constructor sets it explicitly. With IP1 high the
+  firmware never touches the card window.
+- **With IP1 low, the firmware probes the card,** in the boot and on a card operation. It reads
+  0x2E0001 and 0x2E0003, writes 0xFF to 0x2E0001 and reads it back. That window is not modelled,
+  so it reads 0 (K6). The boot still ends on the play screen with nothing about a card on the
+  display, and a copy to the card is refused: "SORRY! Install a RAM card first."
+- **The empty slot, step by step:**
+  1. Edit Sound, then Bank 9: "Press ENTER to Store Sounds".
+  2. Enter: "Storage Type = MEMORY CARD".
+  3. Enter: "Operation = COPY INT TO CARD A".
+  4. Enter: "SORRY! Install a RAM card first." for 1.5 s, then the page returns to "Press ENTER
+     to Store Sounds".
+
+  No access falls outside the K1 map.
+- **The card itself is not emulated** (design open item E). That covers the window at 0x2E0000
+  (odd bytes; its extent is unknown), the card RAM, and the card's low-battery warning. The
+  manual says that warning, when a card is in, "is referring to the battery in the card" (PDF p12
+  and p29).
+- **The input port.** The firmware reads it about every 28 ms, and it reads 0xFF:
+  - bit 7 is 1;
+  - bit 6 is IACK;
+  - IP5..IP2 carry the serial clocks.
+
+  The firmware never reads IPCR, and ACR (0x30, then 0x60) enables no input-change interrupt.
+- **IP0 has no observable effect.** Low from power-on or after the boot, it changes neither the
+  boot, the play screen, BankSet nor the release of a note (so it is not the sustain pedal). It
+  rests high. The foot switches (PDF p19) are not found.
+
+**How it was found.** Scratch harnesses, not committed:
+- set IP0 and IP1 low, apart and together, from power-on and after the boot;
+- traced the unmapped accesses, the DUART reads by register and the RAM accesses by window (a
+  scratch copy of the machine);
+- walked the Store Sounds pages.
+
+After the K1 RAM probe, every RAM access in the boot and on the play screen is in
+0x000000-0x00FFFF or 0xFF0000-0xFFFFFF. Nothing touches the mirrors at 0x010000-0x03FFFF.
+
+**Test.** ks32_firmware_card_slot_empty.
+
+**Confidence.** High that the slot reads empty and that IP1 low starts the card probe. Medium that
+IP1 is the card-detect line itself, which follows from that behaviour.
+**MAME.** Not compared.
+
+## Keyboard (K12)
+
+**Fact.**
+- **The local keyboard rides the panel link** (DUART channel B, RxB) and shares the buttons' 7-bit
+  code space. The second byte tells them apart: 00 makes a button event, a nonzero byte makes a
+  key event.
+  - Key down: `code | 0x80`, then the strike value (1-0x7F).
+  - Key up: `code`, then a nonzero value.
+
+  The firmware plays the note and sends it on MIDI out as note = code + 28, so code 0x20 is middle
+  C (0x3C).
+- **The 76 keys** are E1 to G7: MIDI notes 28-103, codes 0-75. That is the span of a 76-note
+  keyboard. The firmware also plays codes 76-127 (notes up to 155), but no key sends them, and
+  `Panel::key` ignores notes outside 28-103.
+- **Velocity.** The strike value goes through the firmware's touch curve: the "Touch=" setting on
+  System/MIDI Screen 1, at its default. Measured as the MIDI out velocity of middle C:
+
+  | Strike value | 1-4 | 8 | 16 | 32 | 48 | 64 | 80 | 96 | 112 | 127 |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | MIDI out velocity | 1 | 2 | 2 | 4 | 9 | 20 | 33 | 58 | 90 | 127 |
+
+  - Values of 0x80 and up give erratic velocities (160 gives 15, 200 gives 1, 255 gives 127), so
+    `Panel::key` clamps the value to 1-127.
+  - The service manual says the keyboard times the gap between a key's back and front contacts
+    (PDF p14). How the strike value relates to that time (inverted, scaled) is not known.
+    `key()` takes the value as the firmware reads it.
+- **The release value** is sent on MIDI out as the note-off velocity, through a similar curve:
+  64 gives 20 (0x14) and 127 gives 127.
+- **Mono pressure** is analog input 1 (K8, `Analog::Pressure`). There is no per-key pressure.
+- **Task 5's unnamed codes are not key events.** A press code followed by 00 is a button event,
+  whatever the code. Task 5's note that "a second byte other than 00 after a press byte does
+  nothing" holds for the display only: every such pair plays a note.
+- **The cables.** The keyboard's cables go to the main board (PDF p5), not to the keypad/display
+  board. So whatever scans the keys puts its events on the same RxB line as the panel, or passes
+  them through the panel. The firmware cannot tell which, and neither can the emulation.
+- `Machine::key(note, down, velocity)` queues the two bytes through `Panel::key`. They reach RxDB
+  from the next slot at the line rate, in order with the buttons.
+
+**How it was found.** Scratch harnesses, not committed:
+- From the play screen, a sweep sent every first byte 0x00-0xFF with the second bytes 00, 01, 40
+  and 7F, and measured the output peak. Every byte of 0x80 and up sounds with a nonzero second
+  byte; bytes below 0x80 do not.
+- Release forms were tried on a sustaining organ (ROM 50). `code, 40` and `code, 01` release the
+  note, `code, 00` does not, and `code | 0x80, 00` is the button.
+- The pitch of codes 18-78 was measured on Pulse Wave (ROM 66), and five codes again on the piano.
+  Matched against MIDI notes by autocorrelation, note = code + 28 within 0.5 semitone. MIDI out
+  confirms the mapping exactly.
+
+**Tests.** panel_key_bytes; ks32_firmware_key_sounds (middle C sounds and goes out as `90 3C 7F`,
+`80 3C`; the lowest and highest keys go out as notes 0x1C and 0x67).
+
+**Confidence.** High for the byte forms, the note mapping and the path. Medium for the 76-key
+range: the firmware accepts more, and the range rests on the manual's 76 keys and the E-to-G
+span. Low for what the strike value is physically.
+**MAME.** Not compared. Recalled, unchecked: MAME's esq5505 driver sends keyboard notes over the
+panel serial line for the SQ-1 family.
 
 ## Line-A and TRAP use
 

@@ -746,7 +746,7 @@ Evidence cites the Motorola MC68681 data sheet (MC68681/D, Sep 1985, `datasheets
 
 ## KS-32 machine
 
-Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them provisionally; Task 3 settled K1-K3, K6, K9 and K14-K16 by running the OS ROM (v3.01), Tasks 4 and 5 settled K7, Task 6 settled K8 and K13, and Task 7 confirmed K3 by MIDI in and examined K2 with notes playing. The evidence for those is in `docs/ks32-hardware-interface.md`, one section per fact. K4 and K5 remain Task 2's choices.
+Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them provisionally; Task 3 settled K1-K3, K6, K9 and K14-K16 by running the OS ROM (v3.01), Tasks 4 and 5 settled K7, Task 6 settled K8 and K13, Task 7 confirmed K3 by MIDI in and examined K2 with notes playing, and Task 8 settled K10-K12. The evidence for those is in `docs/ks32-hardware-interface.md`, one section per fact. K4 and K5 remain Task 2's choices.
 
 ## K1: Memory map
 - Options: (a) Task 2's map: 64 KB of RAM at 0xFF0000, mirrored at 0-0xFFFF only; (b) 64 KB mirrored over 0x000000-0x03FFFF and at 0xFF0000; (c) 128 KB or 256 KB at 0x000000-0x03FFFF. For the vectors: the ROM overlay of 0-7 ends at the first write into 0-7, or at the first access outside 0-7; or a RAM at 0x000000 separate from the one at 0xFF0000.
@@ -814,6 +814,27 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Evidence: `docs/ks32-hardware-interface.md` "Wait states". No failure in the boot points to timing; the boot clock test, which times OTIS against the DUART, passes with none (design open item F).
 - Confidence: Medium (no evidence of wait states; a timing failure in a later task reopens it).
 - Status: settled, Task 3. Nothing to mark in the code: `Machine` adds no clocks to an access.
+
+## K10: Memory card
+- Options: the card-detect input (a DUART input pin, a probe of a mapped or unmapped region, or none) and its "empty" level; whether to emulate the card.
+- Choice: DUART IP1 is the card detect, active low. The slot is always empty, so IP1 is high: the `Machine` constructor sets the input pins to 0x3F (the DUART's reset level). IP0 has no observable effect and rests high. The card window at 0x2E0000 (odd bytes) is not modelled; with IP1 high the firmware never touches it, and with IP1 low it reads 0 there (K6). There is no card interface (design open item E).
+- Evidence: `docs/ks32-hardware-interface.md` "Memory card". The input port is read about every 28 ms and reads 0xFF. IPCR is never read, and no input-change interrupt is enabled. With IP1 low, the boot and a card operation read 0x2E0001 and 0x2E0003, write 0xFF to 0x2E0001 and read it back; with IP1 high there is no such access. On the empty slot, a copy to the card shows "SORRY! Install a RAM card first." IP0 low changes neither the boot, BankSet nor the release of a note. After the K1 probe, no RAM access falls in the mirrors at 0x010000-0x03FFFF.
+- Confidence: High that the slot reads empty; Medium that IP1 is the card-detect line itself.
+- Status: settled, Task 8. `// DECISION K10` in the `Machine` constructor (`src/ks32/machine.cpp`). Test: ks32_firmware_card_slot_empty.
+
+## K11: Battery RAM image
+- Options: what the image holds (the 64 KB RAM, or more state); what loading it resets (nothing, the CPU only, or the CPU and every device); whether the analog inputs are kept.
+- Choice: the image is the whole 64 KB RAM (K1), raw. `loadRamImage` checks the size ("RAM image" in the error), then resets the CPU, OTIS, the ESP, the DUART and the panel, and brings back the 0-7 overlay: a power cycle with the battery connected. The RAM and the analog inputs are kept. A cold start is zero-filled RAM (`Machine::create`). `ks32emu --ram <file>` loads the file if it exists and writes it back on a clean exit (boot and render at the end, play on q).
+- Evidence: `docs/ks32-hardware-interface.md` "Battery RAM". A boot from the saved image is a warm start: the RAM is not cleared, and Master Tune +02 survives. OS v3.01 powers on to ROM 00 from a cold or a warm start, whatever was selected, and MIDI out ends `C0 00` (ruling T8-1). A forced level-7 interrupt gives event 139, so there is no power-fail save. About 6 power-ons in a row of under about 2 s each reinitialize the RAM: the manual's system reset sequence (PDF p5, ruling T8-2), the real unit's behaviour, with no workaround.
+- Confidence: High.
+- Status: settled, Task 8. `// DECISION K11` at `Machine::loadRamImage` (`src/ks32/machine.cpp`). Tests: ks32_machine_ram_image_size_checked, ks32_firmware_ram_image_keeps_settings.
+
+## K12: Local keyboard
+- Options: the keys' path to the 68000: the panel link, the analog inputs, a DUART input pin, or a device the machine does not model. If modelled: the byte form, the key-to-note mapping and the velocity value.
+- Choice: the panel link (DUART channel B). `Machine::key(note, down, velocity)` calls `Panel::key`, which queues `code | 0x80` (down) or `code` (up), with code = note - 28, then the strike value clamped to 1-127. A 0 there would make it a button event. Notes outside the 76 keys, 28-103 (E1 to G7), are ignored. Mono pressure stays analog input 1 (K8).
+- Evidence: `docs/ks32-hardware-interface.md` "Keyboard". Every byte 0x80-0xFF followed by a nonzero byte plays a note, and `code, nonzero` releases it; `code, 00` and `code | 0x80, 00` are the button events. The firmware sends the key on MIDI out as note code + 28 (code 0x20 gives `90 3C`), and the measured pitches agree (codes 18-78, within 0.5 semitone). Its touch curve maps the strike value to the MIDI velocity: 127 gives 127, 64 gives 20, and 1-4 give 1. Values of 0x80 and up are erratic. The 76 keys are the span of a 76-note E-to-G keyboard; the firmware also plays codes 76-127.
+- Confidence: High for the path, the byte forms and the note mapping; Medium for the key range; Low for the physical meaning of the strike value.
+- Status: settled, Task 8. `// DECISION K12` at `Panel::key` (`src/ks32/panel.cpp`). Tests: panel_key_bytes, ks32_firmware_key_sounds.
 
 ## K13: Resting analog values
 - Options: for each input, the raw value that gives the plan's resting state (pitch wheel at centre, mod wheel 0, CV pedal unplugged, volume at maximum so headless renders are audible, data entry at mid, pressure 0, battery nominal); for the reference (select 15), which the manual does not give, any value.

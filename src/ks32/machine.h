@@ -76,10 +76,18 @@ public:
     duart::Duart& duart() { return duart_; }
     const PanelState& panel() const { return panel_.state(); }
     void button(Button b, bool down) { panel_.button(b, down); }  // reaches RxDB from the next slot
+    // A key of the local keyboard, note 28-103 (K12): it rides the panel link like a button.
+    void key(int note, bool down, uint8_t velocity) { panel_.key(note, down, velocity); }
     void setAnalog(Analog a, uint16_t raw);  // raw 0..0x3FF (masked); PAR follows at once (K8)
     // A byte on MIDI in: it joins the channel's receive queue and enters at the line rate (D2).
     void midiIn(uint8_t byte) { duart_.receive(kMidiChannel, byte); }
     std::vector<uint8_t> takeMidiOut() { return duart_.takeTransmitted(kMidiChannel); }  // sent since the last call
+    // The battery-backed RAM (K1, K11): 64 KB, raw bytes, the CPU's view at 0xFF0000-0xFFFFFF.
+    std::vector<uint8_t> ramImage() const { return ram_; }
+    // Replaces the RAM and powers the machine on again with it: the CPU, OTIS, the ESP, the DUART
+    // and the panel are reset, so the next runFrame boots from the loaded RAM. false with err
+    // naming "RAM image" on a wrong size, and nothing changes.
+    bool loadRamImage(const std::vector<uint8_t>& img, std::string& err);
 
     // m68k::Bus
     uint8_t read8(uint32_t addr) override;
@@ -91,6 +99,7 @@ public:
 
 private:
     Machine(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1);
+    void powerOn();  // resets every device and the CPU; RAM and the analog inputs are kept
     uint8_t romByte(uint32_t off) const;
     uint8_t memByte(uint32_t a, bool& mapped) const;  // ROM and RAM
     void trace(uint32_t addr, uint16_t value, uint8_t size, bool write, Device dev);

@@ -187,3 +187,16 @@ TEST(panel_reset_clears_state) {
     CHECK(p.state().leds[1] == Led::Off);
     CHECK_EQ(p.state().blink, 0u);
 }
+
+// K12: a key event is code | 0x80 or code (code = note - 28), then the strike value, never 0
+// (that would be a button event). Notes outside the 76 keys (28-103) send nothing.
+TEST(panel_key_bytes) {
+    Panel p;
+    p.key(60, true, 100);
+    p.key(60, false, 0);
+    p.key(28, true, 255);
+    p.key(103, true, 1);
+    p.key(27, true, 64);
+    p.key(104, true, 64);
+    CHECK(p.takeToCpu() == (std::vector<uint8_t>{0xA0, 100, 0x20, 1, 0x80, 127, 0xCB, 1}));
+}

@@ -1,5 +1,7 @@
 #include "ks32/panel.h"
 
+#include <algorithm>
+
 namespace ens::ks32 {
 
 namespace {
@@ -71,6 +73,17 @@ void Panel::button(Button b, bool down) {
     const auto code = static_cast<uint8_t>(b);
     toCpu_.push_back(down ? static_cast<uint8_t>(code | 0x80) : code);
     toCpu_.push_back(0x00);
+}
+
+// DECISION K12: a key event is code | 0x80 (down) or code (up), code = note - 28, then a nonzero
+// byte, the strike value: 0 there would make it a button event. The firmware plays the note and
+// sends it on MIDI out (note = code + 28; strike 127 gives velocity 127, 64 gives 20). Notes 28-103
+// are the 76 keys; the firmware also plays codes 76-127, which no key sends.
+void Panel::key(int note, bool down, uint8_t velocity) {
+    if (note < kLowestKey || note >= kLowestKey + kKeyCount) return;
+    const auto code = static_cast<uint8_t>(note - kLowestKey);
+    toCpu_.push_back(down ? static_cast<uint8_t>(code | 0x80) : code);
+    toCpu_.push_back(std::clamp<uint8_t>(velocity, 1, 127));
 }
 
 std::vector<uint8_t> Panel::takeToCpu() {

@@ -1,8 +1,10 @@
 // ks32emu: runs the emulated KS-32 (its OS ROM on the 68000 with the DUART and the OTIS/ESP board).
 //   ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] [--count <n>] [--last <n>]
 //                [--display-only] [--press <ms>:<name>[+<name>...]]... [--analog <name>=<raw>]...
+//                [--ram <file>]
 //   ks32emu render <in.mid> <out.wav> [--roms <dir>] [--tail <s>] [--press ...]... [--analog ...]...
-//   ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]...
+//                  [--ram <file>]
+//   ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]... [--ram <file>]
 // --press presses the named buttons (kButtons names, e.g. EDIT_SEQ_PRESET, BANK9) in order at
 // <ms>, holds them 100 ms and releases them in reverse order; it may be repeated. In boot <ms>
 // counts from power-on, in render from the end of the boot (the start of the WAV).
@@ -14,6 +16,11 @@
 // MIDI in takes channel messages only: system messages (0xF0 and up) are not sent.
 // --analog sets an analog input (PITCH_WHEEL, MOD_WHEEL, CV_PEDAL, VOLUME, DATA_ENTRY, PRESSURE,
 // BATTERY) to a raw 10-bit conversion, 0..1023 (decimal), from power-on; it may be repeated.
+// --ram <file> is the battery RAM (64 KB, raw): loaded at power-on if the file exists (otherwise
+// the RAM starts blank, a cold start) and written back on a clean exit: boot and render at the
+// end, play on q. OS v3.01 powers on to ROM 00 whatever was selected; settings such as Master Tune
+// are kept. About 6 power-ons in a row of under about 2 s each reinitialize the RAM, as on the
+// real unit (service manual PDF p5), so many short `boot --ms` runs written back will too.
 // The panel display is printed as "<ms> |<row>|" lines each time it changes (bytes outside
 // 0x20-0x7E as \xNN), the LEDs as "<ms> LEDs ..." each time they change; --display-only leaves
 // out the summary.
@@ -26,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <set>
@@ -66,6 +74,7 @@ struct Failure {
 struct Options {
     std::vector<std::string> positional;  // render: <in.mid> <out.wav>
     std::string roms = "ks-32";
+    std::string ram;  // --ram: the battery RAM image file
     uint64_t ms = 3000;
     std::string trace;  // comma list of otis,esp,duart,unmapped,iack
     uint64_t from = 0, count = UINT64_MAX;
@@ -150,6 +159,7 @@ Options parseOptions(int argc, char** argv) {
         if (a == "--roms") o.roms = v;
         else if (a == "--ms") o.ms = parseNum(a, v);
         else if (a == "--trace") o.trace = v;
+        else if (a == "--ram") o.ram = v;
         else if (a == "--from") o.from = parseNum(a, v);
         else if (a == "--count") o.count = parseNum(a, v);
         else if (a == "--last") o.last = static_cast<uint32_t>(parseNum(a, v));
@@ -234,7 +244,21 @@ std::string ledText(const PanelState& p) {
     return s == "LEDs" ? "LEDs off" : s;
 }
 
-// The ROMs from o.roms, with the --analog settings applied from power-on.
+// --ram: the image, if the file exists; a wrong size is an error.
+void loadRam(Machine& m, const std::string& path) {
+    if (path.empty() || !std::filesystem::exists(path)) return;
+    std::vector<uint8_t> img;
+    std::string err;
+    if (!readFile(path, img, err) || !m.loadRamImage(img, err)) fail(err + " '" + path + "'");
+}
+
+// --ram: the RAM back to the file, on a clean exit.
+void saveRam(const Machine& m, const std::string& path) {
+    std::string err;
+    if (!path.empty() && !writeFile(path, m.ramImage(), err)) fail(err + " '" + path + "'");
+}
+
+// The ROMs from o.roms, with the --analog settings applied from power-on and the --ram image.
 std::unique_ptr<Machine> makeMachine(const Options& o) {
     RomSet roms;
     roms.osUpper = load(o.roms + "/ks32", "ks32v301upper.bin");
@@ -247,6 +271,7 @@ std::unique_ptr<Machine> makeMachine(const Options& o) {
     auto m = Machine::create(roms, err);
     if (!m) fail(err);
     for (const auto& [a, raw] : o.analogs) m->setAnalog(a, raw);
+    loadRam(*m, o.ram);
     return m;
 }
 
@@ -327,6 +352,7 @@ int boot(const Options& o) {
             std::printf("%llu %s\n", ms, leds.c_str());
         }
     }
+    saveRam(*m, o.ram);
     if (o.displayOnly) return 0;
 
     std::printf("ran %llu frames (%llu ms), %llu CPU cycles%s\n", static_cast<unsigned long long>(frames),
@@ -416,6 +442,7 @@ int render(const Options& o) {
     }
     if (!writeFile(o.positional[1], ens::player::makeWav16(pcm, 2, kWavRate), err))
         fail(err + " '" + o.positional[1] + "'");
+    saveRam(*m, o.ram);
     std::printf("%zu MIDI events, %llu frames (%.3f s at %u Hz), peak %d, MIDI out %zu bytes\n", midi.size(),
                 static_cast<unsigned long long>(frames), static_cast<double>(frames) / kWavRate, kWavRate, peak,
                 m->takeMidiOut().size());
@@ -629,6 +656,7 @@ int play(const Options& o) {
                 static_cast<unsigned long long>(midi.received()), static_cast<unsigned long long>(midi.dropped()),
                 static_cast<unsigned long long>(engine.midiOut));
     if (audio.failed()) fail(audio.error());
+    if (quit) saveRam(*m, o.ram);  // q only: Ctrl+C does not save
     return 0;
 }
 
@@ -646,10 +674,10 @@ int main(int argc, char** argv) {
         if (cmd != "boot" && cmd != "render" && cmd != "play")
             fail("usage:\n  ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] "
                  "[--count <n>] [--last <n>] [--display-only] [--press <ms>:<name>[+<name>...]]... "
-                 "[--analog <name>=<raw>]...\n"
+                 "[--analog <name>=<raw>]... [--ram <file>]\n"
                  "  ks32emu render <in.mid> <out.wav> [--roms <dir>] [--tail <s>] [--press ...]... "
-                 "[--analog ...]...\n"
-                 "  ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]...");
+                 "[--analog ...]... [--ram <file>]\n"
+                 "  ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]... [--ram <file>]");
         const Options o = parseOptions(argc, argv);
         if (cmd == "render") return render(o);
         if (cmd == "play") return play(o);

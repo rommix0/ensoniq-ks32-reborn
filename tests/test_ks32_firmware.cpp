@@ -33,6 +33,7 @@ std::string shown(const PanelState& p) {
 struct BootSeen {
     bool lowBattery = false;       // "LOW" together with "BATTERY"
     bool unexpectedEvent = false;  // "Unexpected Event ID = n" (service manual PDF p11)
+    bool card = false;             // "CARD" anywhere ("SORRY! Install a RAM card first.", K10)
 };
 BootSeen bootSeen;
 
@@ -51,6 +52,7 @@ Machine* bootedKs32() {
             if (s.find("LOW") != std::string::npos && s.find("BATTERY") != std::string::npos)
                 bootSeen.lowBattery = true;
             if (s.find("EVENT") != std::string::npos) bootSeen.unexpectedEvent = true;
+            if (s.find("CARD") != std::string::npos) bootSeen.card = true;
         }
         return b;
     }();
@@ -268,6 +270,73 @@ TEST(ks32_firmware_quick_tap_is_seen) {
     CHECK(r.afterReplace.leds[14] == Led::Blink);
     CHECK(m->panel().rows == r.afterReplace.rows);
     CHECK(m->panel().leds == r.afterReplace.leds);
+}
+
+// K11 (ruling T8-1): the battery RAM keeps the settings. Master Tune is set to +02 on the shared
+// panel machine (System/MIDI, Up/Yes twice), the RAM is saved and the setting put back. A fresh
+// machine booted from the image ends on the play screen with no warning or unexpected event and
+// shows Master Tune= +02. OS v3.01 powers on to ROM 00 whatever was selected (warm or cold), so
+// the play screen is the cold boot's.
+TEST(ks32_firmware_ram_image_keeps_settings) {
+    PanelRig& r = panelKs32();
+    if (!r.m) return;
+    press(*r.m, Button::SelectSound);
+    press(*r.m, Button::SystemMidi);
+    press(*r.m, Button::UpYes);
+    press(*r.m, Button::UpYes);
+    const std::string set = shown(r.m->panel());
+    const std::vector<uint8_t> img = r.m->ramImage();
+    press(*r.m, Button::DownNo);
+    press(*r.m, Button::DownNo);
+    press(*r.m, Button::SelectSound);
+
+    auto m = loadKs32();
+    std::string err;
+    CHECK(m->loadRamImage(img, err));
+    bool warned = false;
+    for (uint32_t ms = 0; ms < kBootMs; ms += 100) {
+        runMs(*m, 100);
+        const std::string s = shown(m->panel());
+        warned |= s.find("EVENT") != std::string::npos || s.find("LOW") != std::string::npos;
+    }
+    const std::string booted = shown(m->panel());
+    press(*m, Button::SystemMidi);
+    const std::string tune = shown(m->panel());
+    std::printf("  saved: %s; booted: %s; %s\n", set.c_str(), booted.c_str(), tune.c_str());
+    CHECK(set.find("MASTER TUNE= +02") != std::string::npos);
+    CHECK(!warned);
+    CHECK(booted.find("ROM 00 KS GRAND PIANO") != std::string::npos);
+    CHECK(tune.find("MASTER TUNE= +02") != std::string::npos);
+}
+
+// K10: the slot is empty. The boot to the play screen shows nothing about a card, and a copy to the
+// card is refused with "SORRY! Install a RAM card first." without the firmware touching the card
+// window (0x2E0000, probed only while DUART IP1, the card detect, is low).
+TEST(ks32_firmware_card_slot_empty) {
+    Machine* b = bootedKs32();
+    if (!b) return;
+    CHECK(!bootSeen.card);
+    CHECK(!bootSeen.unexpectedEvent);
+    CHECK_EQ(b->duart().read(13) & 0x02, 0x02);  // IP1 high: no card (reading IP has no side effect)
+    PanelRig& r = panelKs32();
+    if (!r.m) return;
+    Machine& m = *r.m;
+    uint32_t unmapped = 0;
+    m.onBusEvent = [&unmapped](const BusEvent& e) { unmapped += e.dev == Device::Unmapped; };
+    press(m, Button::SelectSound);
+    press(m, Button::EditSound);
+    press(m, Button::Bank9);      // "Press ENTER to Store Sounds"
+    press(m, Button::EnterSave);  // "Storage Type = MEMORY CARD"
+    press(m, Button::DownNo);     // stays on MEMORY CARD, the first type
+    press(m, Button::EnterSave);  // "Operation = COPY INT TO CARD A"
+    press(m, Button::EnterSave);
+    const std::string s = shown(m.panel());
+    m.onBusEvent = nullptr;
+    std::printf("  display: %s\n", s.c_str());
+    CHECK(s.find("INSTALL A RAM CARD") != std::string::npos);
+    CHECK_EQ(unmapped, 0u);
+    runMs(m, 1600);  // the message goes back to "Press ENTER to Store Sounds"
+    press(m, Button::SelectSound);
 }
 
 namespace {
@@ -498,4 +567,41 @@ TEST(ks32_firmware_render_is_deterministic) {
     const uint64_t b = renderTwoSeconds();
     std::printf("  render hash %016llx\n", static_cast<unsigned long long>(a));
     CHECK_EQ(a, b);
+}
+
+// ---- Local keyboard (Task 8) --------------------------------------------------------------------
+
+// K12: the keyboard rides the panel link. A key sounds on the sound screen, and the firmware sends
+// it on MIDI out with note = code + 28: middle C at strike 127 is 90 3C 7F, then its release
+// 80 3C; the lowest key (E1, 28) and the highest (G7, 103) go out as notes 0x1C and 0x67.
+TEST(ks32_firmware_key_sounds) {
+    PanelRig& r = panelKs32();
+    if (!r.m) return;
+    Machine& m = *r.m;
+    press(m, Button::SelectSound);
+    (void)m.takeMidiOut();
+    const int silence = peakMs(m, 100);
+    m.key(60, true, 127);
+    const int on = peakMs(m, 300);
+    m.key(60, false, 64);
+    runMs(m, 100);
+    for (const int note : {kLowestKey, kLowestKey + kKeyCount - 1}) {
+        m.key(note, true, 127);
+        runMs(m, 100);
+        m.key(note, false, 127);
+        runMs(m, 100);
+    }
+    runMs(m, 1500);
+    const std::vector<uint8_t> out = m.takeMidiOut();
+    std::printf("  peak: silence %d, key %d; MIDI out:", silence, on);
+    for (const uint8_t b : out) std::printf(" %02X", b);
+    std::printf("\n");
+    CHECK(silence < 64);
+    CHECK(on > 1000);
+    CHECK_EQ(out.size(), 18u);
+    if (out.size() == 18) {
+        CHECK(std::vector<uint8_t>(out.begin(), out.begin() + 5) == (std::vector<uint8_t>{0x90, 0x3C, 0x7F, 0x80, 0x3C}));
+        CHECK(std::vector<uint8_t>(out.begin() + 6, out.begin() + 11) == (std::vector<uint8_t>{0x90, 0x1C, 0x7F, 0x80, 0x1C}));
+        CHECK(std::vector<uint8_t>(out.begin() + 12, out.begin() + 17) == (std::vector<uint8_t>{0x90, 0x67, 0x7F, 0x80, 0x67}));
+    }
 }

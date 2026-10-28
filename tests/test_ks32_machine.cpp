@@ -171,3 +171,28 @@ TEST(ks32_machine_halted_esp_idle_spread) {
     CHECK(seen.size() >= 16);                    // the count grows slot by slot, not in one bunch
     CHECK(!seen.empty() && *seen.rbegin() < 89);
 }
+
+// K11: the image is the whole 64 KB RAM (K1). A wrong size is rejected and changes nothing; a
+// right one replaces the RAM and powers the machine on again: the CPU restarts from the reset
+// vectors, which read from ROM again (the 0-7 overlay is back).
+TEST(ks32_machine_ram_image_size_checked) {
+    // MOVE.W #$1234,$FF0100 ; MOVE.W #$5555,$000002 ; BRA.S *
+    auto m = machineWith({0x33FC, 0x1234, 0x00FF, 0x0100, 0x33FC, 0x5555, 0x0000, 0x0002, kBraSelf});
+    int16_t l, r;
+    m->runFrame(l, r);
+    std::vector<uint8_t> img = m->ramImage();
+    CHECK_EQ(img.size(), 0x10000u);
+    CHECK_EQ(img[0x100], 0x12);
+    CHECK_EQ(img[0x101], 0x34);
+    std::string err;
+    CHECK(!m->loadRamImage(std::vector<uint8_t>(0x8000, 0), err));
+    CHECK(err.find("RAM image") != std::string::npos);
+    CHECK_EQ(m->peek16(0xFF0100), 0x1234);
+    img[0x100] = 0xAB;
+    err.clear();
+    CHECK(m->loadRamImage(img, err));
+    CHECK(err.empty());
+    CHECK_EQ(m->peek16(0xFF0100), 0xAB34);
+    CHECK_EQ(m->peek16(0x000002), 0xFF00);  // the reset vector from ROM, not RAM's 0x5555
+    CHECK_EQ(m->cpu().regs().pc, 0xC00100u);
+}

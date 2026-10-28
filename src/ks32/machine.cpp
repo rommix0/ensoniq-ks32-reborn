@@ -41,6 +41,10 @@ bool sizeOk(const std::vector<uint8_t>& v, size_t want, const char* name, std::s
 Machine::Machine(std::vector<uint16_t> bank0, std::vector<uint16_t> bank1)
     : board_(std::move(bank0), std::move(bank1)) {
     for (int pin = 2; pin <= 5; ++pin) duart_.setExternalClock(pin, kSerialClockHz);  // DECISION K3, K16
+    // DECISION K10: IP1 is the card detect, low = card in; the slot is empty, so it is high. IP0
+    // shows no effect and rests high. The card window (0x2E0000) is not modelled: with IP1 high the
+    // firmware never touches it.
+    duart_.setInputPins(0x3F);
     for (int a = 0; a < 7; ++a) mux_[kAnalogSelect[a]] = kAnalogRest[a];  // DECISION K13
     mux_[0x0F] = kReferenceRest;
 }
@@ -58,12 +62,30 @@ std::unique_ptr<Machine> Machine::create(const RomSet& roms, std::string& err) {
     std::unique_ptr<Machine> m(new Machine(std::move(bank0), std::move(bank1)));
     m->osUpper_ = roms.osUpper;
     m->osLower_ = roms.osLower;
-    m->board_.otis().reset();
-    m->board_.esp().reset();
-    m->duart_.reset();
-    m->cpu_.reset();  // the 40 reset cycles count in cycles() and are not slot carry
-    m->updateLines();
+    m->powerOn();
     return m;
+}
+
+void Machine::powerOn() {
+    board_.otis().reset();
+    board_.esp().reset();
+    duart_.reset();
+    panel_.reset();
+    overlay_ = true;
+    carry_ = 0;
+    duartAcc_ = 0;
+    cpu_.reset();  // the 40 reset cycles count in cycles() and are not slot carry
+    updateLines();
+}
+
+// DECISION K11: the image is the whole 64 KB RAM, raw. Loading it is a power cycle with the
+// battery holding the RAM: every device and the CPU are reset, and the analog inputs keep their
+// values (they are the player's controls, not machine state).
+bool Machine::loadRamImage(const std::vector<uint8_t>& img, std::string& err) {
+    if (!sizeOk(img, ram_.size(), "RAM image", err)) return false;
+    ram_ = img;
+    powerOn();
+    return true;
 }
 
 // DECISION K1: ROM 0xC00000-0xC3FFFF: upper EPROM = even bytes, lower EPROM = odd bytes mirrored

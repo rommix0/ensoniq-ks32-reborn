@@ -1,8 +1,9 @@
 #pragma once
 // The KS-32 keypad/display board on DUART channel B (K7): a 2 x 16 character display, 15 LEDs and
-// 43 buttons. The command set is decoded from the byte stream the OS v3.01 sends, and the button
-// codes from what it shows when they are sent (docs/ks32-hardware-interface.md, "Front panel"),
-// never from ROM code. Pure emulation: no I/O, no statics.
+// 43 buttons, and the 76-key keyboard whose events share the link (K12). The command set is decoded
+// from the byte stream the OS v3.01 sends, and the button and key codes from what it shows, plays
+// and sends on MIDI out when they are sent (docs/ks32-hardware-interface.md, "Front panel",
+// "Keyboard"), never from ROM code. Pure emulation: no I/O, no statics.
 #include <array>
 #include <cstdint>
 #include <string>
@@ -11,6 +12,8 @@
 namespace ens::ks32 {
 
 constexpr int kPanelRows = 2, kPanelCols = 16, kPanelLeds = 15;
+// The keyboard: 76 keys, E1 to G7 (MIDI notes 28-103); key code = note - kLowestKey (K12).
+constexpr int kLowestKey = 28, kKeyCount = 76;
 
 enum class Led : uint8_t { Off, On, Blink };
 
@@ -63,6 +66,9 @@ public:
     void reset();                  // blank display, LEDs off, cursor at 0
     void fromCpu(uint8_t byte);    // one byte the firmware sent to the panel
     void button(Button b, bool down);  // queues the press or release bytes for the firmware
+    // Queues a key event: note 28-103 (others are ignored); velocity is the strike value the
+    // keyboard sends, 1-127 (clamped), which the firmware maps through its touch curve.
+    void key(int note, bool down, uint8_t velocity);
     const PanelState& state() const { return s_; }
     std::vector<uint8_t> takeToCpu();  // the queued bytes, oldest first (no start-up handshake, K7)
 
