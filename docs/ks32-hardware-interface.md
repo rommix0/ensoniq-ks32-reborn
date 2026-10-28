@@ -96,7 +96,7 @@ Nothing else is touched in the boot: 0 unmapped accesses.
     the level-L handler.
   - The firmware idles at mask 0, so any level from 1 up is serviced. The short mask-5 section
     fits a device at level 5 or below. Nothing bounds the level further.
-  - Level 3 is provisional.
+  - Level 3 is provisional. The evidence bounds only the DUART level (1-5) and says nothing about OTIS. DUART 3 and OTIS 1 came from the Task 3 implementer's unverified recollection of MAME's esq5505 driver (DUART on IRQ 3, OTIS on IRQ 1). MAME was not opened to check it, so the values are not confirmed by evidence or by MAME until Task 7.
 - **OTIS.** OTIS never raises its IRQ during the boot (no voice ends with IRQE set). Its level
   cannot be observed until notes play.
 
@@ -104,7 +104,7 @@ Nothing else is touched in the boot: 0 unmapped accesses.
 in the boot.
 
 **Confidence.** High for the IVR answer. Low for both levels.
-**MAME.** Not compared.
+**MAME.** Not compared. The provisional levels equal the recalled MAME values, unchecked (see above).
 
 ## Clocks (K3, K16)
 
