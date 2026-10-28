@@ -8,10 +8,10 @@ The facts and how each was found are in `docs/ks32-hardware-interface.md`. The d
 
 | Toolchain | Configure | Result |
 |---|---|---|
-| MinGW-w64 g++ 14.2.0, i686, Ninja, Release | `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENS_ROM_DIR=...` | `ctest --test-dir build`: **2/2 passed** (`m68k_suite`, `ens_tests`; 30.7 s). `build\ens_tests.exe`: **355 passed, 0 failed**, 28.8 s |
-| MSVC 19.44 (Visual Studio 2022), x64, Release | `cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64 -DENS_ROM_DIR=...` | `ctest --test-dir build-msvc -C Release`: **2/2 passed** (29.3 s). `build-msvc\Release\ens_tests.exe`: **355 passed, 0 failed**, 27.1 s |
+| MinGW-w64 g++ 14.2.0, i686, Ninja, Release | `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENS_ROM_DIR=...` | `ctest --test-dir build`: **2/2 passed** (`m68k_suite`, `ens_tests`; 30.7 s). `build\ens_tests.exe`: **357 passed, 0 failed**, 28.8 s |
+| MSVC 19.44 (Visual Studio 2022), x64, Release | `cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64 -DENS_ROM_DIR=...` | `ctest --test-dir build-msvc -C Release`: **2/2 passed** (29.3 s). `build-msvc\Release\ens_tests.exe`: **357 passed, 0 failed**, 27.1 s |
 
-Both builds were configured with `-DENS_ROM_DIR="C:/Users/abart/Desktop/Ensoniq KS-32/ks-32"`, so every firmware test runs and none skips. Both compile with no warnings (`-Wall -Wextra`, `/W4`). The baseline before Plan 6 was 283 tests; Plan 6 added 72.
+Both builds were configured with `-DENS_ROM_DIR="C:/Users/abart/Desktop/Ensoniq KS-32/ks-32"`, so every firmware test runs and none skips. Both compile with no warnings (`-Wall -Wextra`, `/W4`). The baseline before Plan 6 was 283 tests; Plan 6 added 74.
 
 The suite takes about 28 s. The 20 s budget set for Plan 6 was passed in Task 5 (about 21 s) and has grown with each firmware test since; the tests are firmware runs, and sharing one booted machine is a deferred cleanup.
 
@@ -70,6 +70,7 @@ Confidence is the entry's own, after the last task that touched it. M-entries (t
 | D4 | Reset state: the data sheet's listed values; others cleared | High for the listed values; Medium for the others |
 | D5 | Time base: `advance(n)` counts X1 clocks, with the C/T prescaler exact | High for the periods; Medium for the exact phase of a first terminal count |
 | D6 | The timer runs from the moment ACR selects a timer mode, from the preload | Medium |
+| D7 | Disabling the transmitter drops a character waiting in THR; one in the shift register completes | Low to Medium |
 
 ### KS-32 machine
 
@@ -237,7 +238,7 @@ Every minor item that the task reviews deferred, by task, one line each. "Behavi
 
 The pass bar (design section 3, Plan 6 Step 5): the user plays `ks32emu play` with the Q25 and tries the factory sounds. They select sounds by program change and by typed buttons, and open the version screen.
 
-User verdict: pending.
+User verdict: accepted, 2026-10-28 ("let's mark as accepted").
 
 ## Reproduce
 

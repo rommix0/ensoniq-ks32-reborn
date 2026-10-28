@@ -2,7 +2,7 @@
 
 `ks32emu` runs the user's KS-32 OS ROM (v3.01) on the emulated machine: the 68000 core, the MC68681 DUART, the OTIS wave chip, the ESP effects DSP and the delay DRAM, wired as the board is (`src/ks32/machine.*`). The firmware makes the sound, so its own sound selection, MIDI handling, effects and panel screens are all there. Nothing is a stand-in, unlike `ks32play` (`docs/player.md`), which has a small voice control of its own.
 
-The wiring facts, each with the evidence it was found by, are in `docs/ks32-hardware-interface.md`. The decisions (D1 to D6, K1 to K16) are in `docs/decisions.md`. The verification report is `docs/verification-plan6.md`.
+The wiring facts, each with the evidence it was found by, are in `docs/ks32-hardware-interface.md`. The decisions (D1 to D7, K1 to K16) are in `docs/decisions.md`. The verification report is `docs/verification-plan6.md`.
 
 This page covers `boot`, `render`, `play` and `bench`.
 
