@@ -122,7 +122,9 @@ TEST(ks32_firmware_boot_is_deterministic) {
         return;
     }
     auto b = loadKs32();
-    CHECK_EQ(traceHash(*a, kBootMs), traceHash(*b, kBootMs));
+    const uint64_t h = traceHash(*a, kBootMs);
+    std::printf("  boot trace hash %016llx\n", static_cast<unsigned long long>(h));
+    CHECK_EQ(h, traceHash(*b, kBootMs));
 }
 
 // The steady display the boot reaches without a button press. With the K13 resting values (battery

@@ -5,6 +5,10 @@
 //   ks32emu render <in.mid> <out.wav> [--roms <dir>] [--tail <s>] [--press ...]... [--analog ...]...
 //                  [--ram <file>]
 //   ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]... [--ram <file>]
+//   ks32emu bench [--seconds <n>] [--roms <dir>]
+// bench boots (kBootMs, timed and printed separately), then plays a fixed 8-note chord loop from
+// MIDI in for n emulated seconds (default 20) and prints "emulated <s>, host <s>, realtime x<f>";
+// the host time is steady_clock around the chord loop only.
 // --press presses the named buttons (kButtons names, e.g. EDIT_SEQ_PRESET, BANK9) in order at
 // <ms>, holds them 100 ms and releases them in reverse order; it may be repeated. In boot <ms>
 // counts from power-on, in render from the end of the boot (the start of the WAV).
@@ -28,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -83,6 +88,7 @@ struct Options {
     std::vector<std::pair<uint64_t, std::vector<Button>>> presses;  // --press: ms, buttons
     std::vector<std::pair<Analog, uint16_t>> analogs;                // --analog: input, raw
     double tail = 2.0;                                               // render --tail, seconds
+    double seconds = 20.0;                                           // bench --seconds
     int midi = 0;                                                    // play --midi
     bool midiSet = false, list = false;                              // play: --midi given, --list
 };
@@ -166,6 +172,7 @@ Options parseOptions(int argc, char** argv) {
         else if (a == "--press") o.presses.push_back(parsePress(v));
         else if (a == "--analog") o.analogs.push_back(parseAnalog(v));
         else if (a == "--tail") o.tail = parseSeconds(a, v);
+        else if (a == "--seconds") o.seconds = parseSeconds(a, v);
         else if (a == "--midi") {
             o.midi = static_cast<int>(parseNum(a, v));
             o.midiSet = true;
@@ -450,6 +457,39 @@ int render(const Options& o) {
     return 0;
 }
 
+// Fixed load: every second the chord C2 G2 C3 E3 G3 C4 E4 G4 (velocity 100) goes on at the start of
+// the second and off 750 ms later; the PCM is discarded. The boot is excluded from the headline
+// figure and printed on its own line.
+int bench(const Options& o) {
+    if (!o.positional.empty()) fail("bench takes no positional arguments");
+    using Clock = std::chrono::steady_clock;
+    const auto secs = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count(); };
+    auto m = makeMachine(o);
+    const auto t0 = Clock::now();
+    runBoot(*m);
+    const auto t1 = Clock::now();
+    std::printf("boot: emulated %.3f s, host %.3f s, realtime x%.2f\n", kBootMs / 1000.0, secs(t0, t1),
+                kBootMs / 1000.0 / secs(t0, t1));
+
+    constexpr uint8_t kChord[8] = {36, 43, 48, 52, 55, 60, 64, 67};
+    const auto frames = static_cast<uint64_t>(std::llround(o.seconds * kWavRate));
+    int peak = 0;
+    int16_t l, r;
+    const auto t2 = Clock::now();
+    for (uint64_t f = 0; f < frames; ++f) {
+        const uint64_t inSecond = f % kWavRate;
+        if (inSecond == 0 || inSecond == kWavRate * 3 / 4)
+            for (const uint8_t n : kChord) sendMidi(*m, inSecond == 0 ? 0x90 : 0x80, n, inSecond == 0 ? 100 : 64);
+        m->runFrame(l, r);
+        peak = std::max({peak, std::abs(static_cast<int>(l)), std::abs(static_cast<int>(r))});
+    }
+    const double host = secs(t2, Clock::now());
+    const double emulated = static_cast<double>(frames) / kWavRate;
+    std::printf("emulated %.3f s, host %.3f s, realtime x%.2f\n", emulated, host, emulated / host);
+    std::printf("peak %d (a silent run would be 0)\n", peak);
+    return 0;
+}
+
 #ifdef _WIN32
 
 constexpr double kChipRate = 30476180.0 / 1024.0;  // the machine's exact frame rate (Hz)
@@ -671,16 +711,18 @@ int play(const Options&) { fail("play needs Windows (WinMM and WASAPI)"); }
 int main(int argc, char** argv) {
     try {
         const std::string cmd = argc < 2 ? "" : argv[1];
-        if (cmd != "boot" && cmd != "render" && cmd != "play")
+        if (cmd != "boot" && cmd != "render" && cmd != "play" && cmd != "bench")
             fail("usage:\n  ks32emu boot [--roms <dir>] [--ms <n>] [--trace <devs>] [--from <cycle>] "
                  "[--count <n>] [--last <n>] [--display-only] [--press <ms>:<name>[+<name>...]]... "
                  "[--analog <name>=<raw>]... [--ram <file>]\n"
                  "  ks32emu render <in.mid> <out.wav> [--roms <dir>] [--tail <s>] [--press ...]... "
                  "[--analog ...]... [--ram <file>]\n"
-                 "  ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]... [--ram <file>]");
+                 "  ks32emu play [--midi <index>] [--list] [--roms <dir>] [--analog ...]... [--ram <file>]\n"
+                 "  ks32emu bench [--seconds <n>] [--roms <dir>]");
         const Options o = parseOptions(argc, argv);
         if (cmd == "render") return render(o);
         if (cmd == "play") return play(o);
+        if (cmd == "bench") return bench(o);
         return boot(o);
     } catch (const Failure& f) {
         std::fprintf(stderr, "error: %s\n", f.msg.c_str());
