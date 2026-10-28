@@ -1,7 +1,7 @@
 # KS-32 JUCE App (Plan 7): Design
 
 Date: 2026-10-28
-Status: approved by the user, 2026-10-28 ("Approve, write plan").
+Status: approved by the user, 2026-10-28 ("Approve, write plan"); implemented by Plan 7 (branch `plan7-juce-app`, `docs/verification-plan7.md`), pending user acceptance.
 Follows: `docs/design/2026-10-21-ks32-machine-and-juce-app-design.md` (the umbrella design; this
 document details its §7.5 and the Plan 7 row of its §9). Plan 6 (the KS-32 machine) is done and was
 accepted on 2026-10-28.
