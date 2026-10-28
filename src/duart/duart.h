@@ -20,6 +20,9 @@ public:
     uint8_t ivr() const { return ivr_; }  // vector answered on interrupt acknowledge
     uint8_t outputPins() const { return static_cast<uint8_t>(~opr_); }  // pin = NOT OPR bit
     void setInputPins(uint8_t ip);          // IP5..IP0 levels, bit set = high
+    // External 16x clock on input pin 0..5 (0 Hz = none), used by CSR code 1110 (D3): TxCA = IP3,
+    // RxCA = IP4, TxCB = IP5, RxCB = IP2. Board wiring: reset() keeps it.
+    void setExternalClock(int ipPin, uint32_t hz);
     void receive(int ch, uint8_t byte);     // ch 0 = A, 1 = B: queue a character on RxD (D2)
     std::vector<uint8_t> takeTransmitted(int ch);  // characters that finished leaving TxD
     uint32_t rxBitClocks(int ch) const;     // X1 clocks per receive bit, 0 if unclocked
@@ -57,6 +60,7 @@ private:
     };
 
     uint32_t tick16(int ch, bool rx) const;
+    static int extClockPin(int ch, bool rx);
     uint32_t timerTick() const;
     uint32_t charTicks(const Channel& c) const;
     uint8_t dataMask(const Channel& c) const;
@@ -80,6 +84,7 @@ private:
     uint8_t acr_ = 0, imr_ = 0, ivr_ = 0x0F, opr_ = 0;
     uint8_t ctur_ = 0, ctlr_ = 0;
     uint8_t ip_ = 0x3F, ipcrDelta_ = 0;
+    uint32_t ipClock_[6] = {0, 0, 0, 0, 0, 0};
     bool ipChange_ = false;
     // Counter/timer: `ctCount_` counts down in units of the clock source; `ctPhase_` is the X1
     // clocks into the current unit (D5).

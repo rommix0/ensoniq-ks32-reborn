@@ -425,7 +425,9 @@ TEST(duart_unsupported_mode_counted) {
     CHECK_EQ(d.unsupportedWrites(), 1u);
     d.write(kCR, 0x60);  // start break
     CHECK_EQ(d.unsupportedWrites(), 2u);
-    d.write(kCSR, 0xEE);  // external IP clocks
+    d.write(kCSR, 0xEE);  // external 16x clocks on IP3/IP4, but none is wired
+    CHECK_EQ(d.unsupportedWrites(), 3u);
+    d.write(kCR, 0x50);  // reset break-change interrupt: supported (the bits are always 0)
     CHECK_EQ(d.unsupportedWrites(), 3u);
     d.write(kOPCR, 0x04);  // OP3 as counter/timer output
     CHECK_EQ(d.unsupportedWrites(), 4u);
@@ -433,6 +435,43 @@ TEST(duart_unsupported_mode_counted) {
     CHECK_EQ(d.unsupportedWrites(), 4u);
     d.reset();
     CHECK_EQ(d.unsupportedWrites(), 0u);
+}
+
+// D3: CSR = 0xEE takes 16x clocks from the IP pins (table 4-2): TxCA = IP3, RxCA = IP4,
+// TxCB = IP5, RxCB = IP2. At 500 kHz with X1 = 4 MHz a tick is 8 X1 clocks, so an 8N1
+// character takes 10 x 16 x 8 = 1280 X1 clocks (31 250 baud).
+TEST(duart_external_16x_clock) {
+    Duart d(4'000'000);
+    d.setExternalClock(3, 500'000);
+    d.setExternalClock(4, 500'000);
+    d.setExternalClock(2, 500'000);  // channel B receives; IP5 (its transmitter) stays unclocked
+    d.reset();                       // the clocks are wiring: reset keeps them
+    for (int b = 0; b < 16; b += 8) {
+        const auto reg = [b](uint8_t r) { return static_cast<uint8_t>(b + r); };
+        d.write(reg(kMR), 0x13);
+        d.write(reg(kMR), 0x07);
+        d.write(reg(kCSR), 0xEE);
+        d.write(reg(kCR), 0x05);
+    }
+    CHECK_EQ(d.unsupportedWrites(), 1u);  // CSRB selects IP5 for TxCB, and nothing is wired there
+    CHECK_EQ(d.rxBitClocks(0), 128u);
+    CHECK_EQ(d.rxBitClocks(1), 128u);
+    d.write(kHR, 0x55);
+    d.write(11, 0xAA);
+    d.receive(0, 0x5A);
+    d.receive(1, 0xA5);
+    d.advance(1279);
+    CHECK(d.takeTransmitted(0).empty());
+    CHECK_EQ(d.read(kSR) & 0x01, 0);
+    d.advance(1);
+    const std::vector<uint8_t> out = d.takeTransmitted(0);
+    CHECK_EQ(out.size(), 1u);
+    CHECK_EQ(d.read(kHR), 0x5A);
+    CHECK_EQ(d.read(11), 0xA5);
+    d.advance(100000);
+    CHECK(d.takeTransmitted(1).empty());  // TxCB (IP5) has no clock
+    d.write(kCSR, 0xFF);                  // 1x external clocks are not modelled
+    CHECK_EQ(d.unsupportedWrites(), 2u);
 }
 
 TEST(duart_channel_b_independent) {

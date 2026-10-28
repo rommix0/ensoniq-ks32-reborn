@@ -26,10 +26,10 @@ void Duart::reset() {
     // ACR = 0 encodes counter mode from IP2, table 4-4: the ACR bits decide, so the C/T is idle
     // until ACR selects a mode); the output pins are the complement of OPR, so OPR = 0 puts all of
     // OP7..OP0 high. The input pins are external.
-    const uint8_t ip = ip_;
-    const uint32_t hz = x1Hz_;
-    *this = Duart(hz);
-    ip_ = ip;
+    const Duart pins = *this;
+    *this = Duart(x1Hz_);
+    ip_ = pins.ip_;
+    for (int i = 0; i < 6; ++i) ipClock_[i] = pins.ipClock_[i];
 }
 
 uint32_t Duart::timerTick() const {
@@ -49,7 +49,17 @@ uint32_t Duart::tick16(int ch, bool rx) const {
     const uint32_t sel = rx ? (c.csr >> 4) : (c.csr & 15u);
     if (sel < 13) return kBaudDivisor[(acr_ >> 7) & 1][sel];
     if (sel == 13) return timerTick();
-    return 0;  // IP2..IP5 external clocks (D3)
+    if (sel == 15) return 0;  // 1x external clock: not modelled (D3)
+    // DECISION D3: a 16x clock on an IP pin, as X1 clocks per tick.
+    // ponytail: exact only when the pin rate divides X1 (the KS-32: 4 MHz / 500 kHz = 8).
+    const uint32_t hz = ipClock_[extClockPin(ch, rx)];
+    return hz ? x1Hz_ / hz : 0;
+}
+
+int Duart::extClockPin(int ch, bool rx) { return (ch & 1) ? (rx ? 2 : 5) : (rx ? 4 : 3); }
+
+void Duart::setExternalClock(int ipPin, uint32_t hz) {
+    if (ipPin >= 0 && ipPin < 6) ipClock_[ipPin] = hz <= x1Hz_ ? hz : 0;
 }
 
 uint32_t Duart::rxBitClocks(int ch) const { return 16 * tick16(ch, true); }
@@ -351,7 +361,8 @@ void Duart::command(int ch, uint8_t v) {
             c.tx.busy = false;
             break;
         case 4: c.overrun = false; break;
-        case 5: case 6: case 7: ++unsupported_; break;  // D3: break commands
+        case 5: break;  // reset break-change interrupt: ISR[2]/[6] never set (D1), nothing to clear
+        case 6: case 7: ++unsupported_; break;  // D3: start and stop break
         default: break;
     }
     const uint8_t txCmd = (v >> 2) & 3;
@@ -382,7 +393,14 @@ void Duart::write(uint8_t reg, uint8_t v) {
             case 0: writeMode(c, v); break;
             case 1:
                 c.csr = v;
-                if ((v & 15) >= 14 || (v >> 4) >= 14) ++unsupported_;  // D3: external IP clocks
+                // D3: 1x external clocks, or a 16x external clock on a pin with nothing wired.
+                for (const bool rx : {false, true}) {
+                    const uint32_t sel = rx ? (v >> 4) : (v & 15u);
+                    if (sel == 15 || (sel == 14 && !ipClock_[extClockPin(ch, rx)])) {
+                        ++unsupported_;
+                        break;
+                    }
+                }
                 break;
             case 2: command(ch, v); break;
             default: writeHolding(c, v); break;
