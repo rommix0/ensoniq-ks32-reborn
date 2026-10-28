@@ -30,6 +30,7 @@ set(ENS_TEST_SOURCES
   test_ks32_firmware.cpp
   test_ks32_panel.cpp
   test_app_engine.cpp
+  test_app_panel_layout.cpp
 )
 
 add_executable(ens_tests ${ENS_TEST_SOURCES})

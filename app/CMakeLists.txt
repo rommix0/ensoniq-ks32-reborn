@@ -21,7 +21,7 @@ juce_add_plugin(KS32
   NEEDS_MIDI_OUTPUT FALSE)
 
 target_sources(KS32 PRIVATE
-  source/Processor.cpp source/Editor.cpp source/AppSettings.cpp source/RomFolder.cpp source/MemoryFile.cpp
+  source/Processor.cpp source/PanelEditor.cpp source/AppSettings.cpp source/RomFolder.cpp source/MemoryFile.cpp
   source/SettingsPage.cpp)
 target_compile_definitions(KS32 PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 target_link_libraries(KS32

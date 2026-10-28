@@ -1,6 +1,6 @@
 #include "Processor.h"
 
-#include "Editor.h"
+#include "PanelEditor.h"
 #include "MemoryFile.h"
 #include "RomFolder.h"
 
@@ -126,6 +126,6 @@ void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     engine_->render(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());
 }
 
-juce::AudioProcessorEditor* Ks32Processor::createEditor() { return new Ks32Editor(*this); }
+juce::AudioProcessorEditor* Ks32Processor::createEditor() { return new PanelEditor(*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new Ks32Processor(); }

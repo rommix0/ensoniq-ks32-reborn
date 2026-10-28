@@ -915,6 +915,27 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Confidence: High.
 - Status: settled, Plan 7 Task 2. `// DECISION A6` at `kBootFrames` (`src/app/engine.cpp`). Test: engine_boot_snapshot.
 
+## A7: Display glyphs
+- Options: for the display codes 0x00-0x1F and 0x7F, which have no known glyphs (Medium confidence that they are characters, interface doc line 309): (a) guess glyphs; (b) draw them blank and show their codes on demand.
+- Choice: (b). Codes 0x20-0x7E are drawn as ASCII in a monospaced font (Consolas), one per cell of the 2 x 16 grid; 0x00-0x1F and 0x7F are drawn blank. The display's right-click menu has a "View" section with "Show display codes", which toggles a hex overlay: every cell shows its code as two hex digits, so the meaning of the unknown codes can be found by watching.
+- Evidence: design section 6.3. The play screen ("ROM   00" / " KS Grand Piano") draws as the artboard shows (checked on a snapshot of the Standalone, `KS32_SNAPSHOT`).
+- Confidence: High for 0x20-0x7E; Low for the rest, which is why they are blank.
+- Status: settled, Plan 7 Task 6. `// DECISION A7` at `DisplayPart::paint` (`app/source/PanelEditor.cpp`). The menu is on the display, not a menu bar: the stock Standalone wrapper has no menu bar, and the VST3 has none of its own.
+
+## A8: Blink
+- Options: the blink rate of the display's blinking cells and of blinking LEDs: (a) measure it on a real KS-32; (b) a fixed rate, logged to revisit.
+- Choice: (b). 2 Hz at 50 % duty (250 ms on, 250 ms off) from the message-thread clock (`Time::getMillisecondCounter`), for display cells and LEDs alike; a blinking cell is drawn blank while off.
+- Evidence: not measured; no real unit to hand. The editor's 30 Hz timer repaints the display and the LEDs when the snapshot or the blink phase changes.
+- Confidence: Low (a choice, not a measurement).
+- Status: open to revisit with a real unit. `// DECISION A8` at `PanelEditor::timerCallback` and `DisplayPart::paint` (`app/source/PanelEditor.cpp`).
+
+## A9: Chord latch
+- Options: how to hold two buttons at once with one mouse (Bank 9 + Screen 1 and the like): (a) a modifier that latches; (b) toggle buttons; (c) no chords. And when the release is sent: (d) on mouse-up only inside the button, as `juce::Button` does; (e) on mouse-up wherever the mouse is.
+- Choice: (a) and (e). A right-click or Shift-click latches a button down, drawn pressed, until it is clicked again (any click releases it). A plain press is sent on mouse-down and its release on mouse-up, wherever the mouse is. Space presses the focused button while held. When the app stops being the foreground process (Alt-Tab), every unlatched button that is down is released; latched buttons stay down.
+- Evidence: design section 6.3 and review focus 3 (a stuck button breaks later chords). Each button sends a press or release only on a change of its own down state, so a late mouse-up after a focus-loss release sends nothing.
+- Confidence: High for the rules; the mouse checks (version chord, drag-off, Alt-Tab) are left to the user's acceptance pass (ruling R1).
+- Status: settled, Plan 7 Task 6. `// DECISION A9` at `ButtonPart` and `PanelEditor::timerCallback` (`app/source/PanelEditor.cpp`).
+
 ## A11: Memory saving
 - Options: when to write the battery memory file: (a) on close only; (b) on close and every 60 s while running, never before the machine has booted; and for Erase, (c) delete the file, (d) restart the machine with zero RAM and let the next automatic save write it, or (e) write the 64 KB zero image to the file at once and restart the machine from it.
 - Choice: (b) and (e) (ruling R7). The memory (`ks32-memory.bin` in `%APPDATA%\KS-32` unless changed) is loaded at start; a file of the wrong size is reported on the settings page and ignored, and the machine boots cold. It is saved on close from `machine().ramImage()` (audio stopped) and every 60 s through `requestRam`/`takeRam`, each time only when `Snapshot::booted` (A6). Each save writes `<file>.tmp` and then replaces the file (`File::replaceFileIn`). Erase asks first, then writes the 64 KB zero image to the memory file at once (`eraseMemoryFile`, the same `.tmp` and replace) and restarts the machine from that file, so the firmware rebuilds its memory as it boots. The boot gate covers the automatic saves (close and the 60 s save) only: Erase is an explicit act and a quick close must not undo it (R7). With no machine running, Erase still erases the file.
@@ -928,6 +949,13 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Evidence: the MIDI IN jack receives the whole stream, and the firmware decides what to read (sysex dumps, MIDI clock and the like are its business, not the host's). The engine bounds a block's bytes (A3) and the DUART its queue (A1), so a sysex flood is dropped and counted, not allocated (engine_midi_overflow_is_counted).
 - Confidence: High.
 - Status: settled, Plan 7 Task 4. `// DECISION A12` at `Ks32Processor::processBlock` (`app/source/Processor.cpp`). Verified by the build and a 12 s launch of the Standalone; playing from a MIDI keyboard is left to the user's acceptance pass (ruling R1).
+
+## A13: Default window
+- Options: the editor's size: (a) the artboard's 2040 x 720 units at 1:1; (b) two thirds of it by default, resizable, aspect fixed.
+- Choice: (b). 1360 x 480 by default, resizable from 1020 x 360 (half size) to 4080 x 1440, with the aspect ratio fixed at 2040:720. The whole board is drawn in design units and scaled uniformly by one transform, so the controls and their mouse areas scale together.
+- Evidence: design section 6.3. The default fits a 1366-wide laptop screen; the layout table (`src/app/panel_layout.cpp`) is the artboard as a browser lays it out, rounded to whole units (tests: panel_layout_*).
+- Confidence: High.
+- Status: settled, Plan 7 Task 6. `// DECISION A13` at the `PanelEditor` constructor (`app/source/PanelEditor.cpp`). Readability at the minimum size is left to the user's acceptance pass (ruling R1).
 
 ## A14: Transport buttons
 - Options: for Record, Stop and Play, (a) a code the running firmware answers, found by one bounded hunt that watches MIDI out as well as the display and LEDs; (b) no code, and the app shows the button disabled.
