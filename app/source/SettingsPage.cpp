@@ -229,7 +229,10 @@ void SettingsPage::chooseRomFolder() {
                           [this](const juce::FileChooser& fc) {
                               const auto dir = fc.getResult();
                               if (dir == juce::File()) return;  // cancelled
-                              proc_.setRomFolder(dir);
+                              juce::String err;
+                              if (!proc_.setRomFolder(dir, err) && err.isNotEmpty())
+                                  juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                         "ROM folder", err);
                               changed();
                           });
 }

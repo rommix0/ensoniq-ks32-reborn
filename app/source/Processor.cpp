@@ -16,9 +16,14 @@ juce::String romProblem(const std::vector<RomFileStatus>& list) {
 
 // Why file cannot be the memory file, or empty. Not in the ROM folder (ks32v301lower.bin is 64 KB
 // too, and the 60 s save would overwrite it), and a file that can be written.
-juce::String memoryTargetProblem(const juce::File& file, const juce::File& roms) {
+juce::String memoryInRomFolder(const juce::File& file, const juce::File& roms) {
     if (roms != juce::File() && file.isAChildOf(roms))
         return "The memory file cannot be in the ROM folder: " + file.getFullPathName();
+    return {};
+}
+
+juce::String memoryTargetProblem(const juce::File& file, const juce::File& roms) {
+    if (const auto err = memoryInRomFolder(file, roms); err.isNotEmpty()) return err;
     if (file.isDirectory() || !file.hasWriteAccess())  // a new file: its folder's access
         return "The memory file cannot be written: " + file.getFullPathName();
     return {};
@@ -30,7 +35,7 @@ Ks32Processor::Ks32Processor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)) {
     // No compiled-in default: the first start, with no settings, opens with no ROMs.
     if (const auto dir = settings_.romFolder(); dir != juce::File())
-        setRomFolder(dir);
+        setRomFolder(dir, romError_);
     else
         romError_ = "No ROM folder:\nopen Settings";
     startTimer(1000);
@@ -42,7 +47,11 @@ Ks32Processor::~Ks32Processor() {
     if (engine_ && engine_->snapshot().booted) saveMemoryFile(settings_.memoryFile(), engine_->machine().ramImage());
 }
 
-bool Ks32Processor::setRomFolder(const juce::File& dir) {
+// Refused, with the reason in err, when the memory file is inside the new folder: it would load the
+// OS ROM as RAM and the 60 s save would overwrite it (setMemoryFile guards the other order).
+bool Ks32Processor::setRomFolder(const juce::File& dir, juce::String& err) {
+    err = memoryInRomFolder(settings_.memoryFile(), dir);
+    if (err.isNotEmpty()) return false;
     settings_.setRomFolder(dir);
     ens::ks32::RomSet roms;
     const auto problem = romProblem(checkRomFolder(dir, &roms));

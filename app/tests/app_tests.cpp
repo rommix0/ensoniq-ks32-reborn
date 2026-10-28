@@ -106,6 +106,16 @@ void processor(const juce::File& dir) {
     const auto lower = roms.getChildFile("ks32/ks32v301lower.bin");
     CHECK(!p.setMemoryFile(lower, err) && err.isNotEmpty() && p.settings().memoryFile() != lower);
 
+    // The other order: a memory file chosen first, then a ROM folder that contains it, is refused;
+    // the file and the ROM folder setting are untouched.
+    const auto dump = dir.getChildFile("dump"), inDump = dump.getChildFile("m.bin");
+    CHECK(eraseMemoryFile(inDump));
+    CHECK(p.setMemoryFile(inDump, err) && p.settings().memoryFile() == inDump);
+    const auto* engine0 = p.engine();
+    CHECK(!p.setRomFolder(dump, err) && err.isNotEmpty() && p.settings().romFolder() == roms &&
+          p.engine() == engine0 && inDump.getSize() == kMemoryBytes);
+    CHECK(p.setMemoryFile(dir.getChildFile("mem0.bin"), err));  // back to a file outside the dump
+
     // A file that cannot be written is refused.
     const auto mem = dir.getChildFile("mem.bin");
     CHECK(eraseMemoryFile(mem) && mem.setReadOnly(true));
