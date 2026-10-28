@@ -28,11 +28,16 @@ target_link_libraries(KS32
   PRIVATE ens_app juce::juce_audio_utils
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
-# The checks that need JUCE but no window: the ROM folder and the memory file. Dummy files only.
+# The checks that need JUCE but no window of their own: the ROM folder and the memory file (dummy
+# files only), and the built VST3 loaded through JUCE's VST3 host (ruling R8; needs the ROMs).
 juce_add_console_app(KS32_AppTests PRODUCT_NAME "KS32_AppTests" VERSION 0.7.0)
-target_sources(KS32_AppTests PRIVATE tests/app_tests.cpp source/RomFolder.cpp source/MemoryFile.cpp)
-target_compile_definitions(KS32_AppTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_sources(KS32_AppTests PRIVATE
+  tests/app_tests.cpp source/RomFolder.cpp source/MemoryFile.cpp source/AppSettings.cpp)
+target_compile_definitions(KS32_AppTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1
+  KS32_ROM_DIR="${ENS_ROM_DIR}"
+  KS32_VST3_PATH="$<GENEX_EVAL:$<TARGET_PROPERTY:KS32_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>")
+add_dependencies(KS32_AppTests KS32_VST3)
 target_link_libraries(KS32_AppTests
-  PRIVATE ens_app juce::juce_core
+  PRIVATE ens_app juce::juce_audio_processors
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME app_tests COMMAND KS32_AppTests)
