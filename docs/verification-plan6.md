@@ -17,14 +17,16 @@ The suite takes about 28 s. The 20 s budget set for Plan 6 was passed in Task 5 
 
 ## Speed (`ks32emu bench`)
 
-Method: `ks32emu bench` boots the machine, then plays a fixed load from MIDI in for 20 emulated seconds. The load is an 8-note chord (MIDI notes 36, 43, 48, 52, 55, 60, 64, 67, velocity 100), on at the start of every second and off 750 ms later, so notes, releases and the effects are always running. The audio is discarded. The host time is `std::chrono::steady_clock` around the chord loop. The boot is excluded from the headline figure and printed on its own line. Each build was run 6 times, one after the other, with nothing else started on the machine. The three runs of each build made after the bench printed its peak all give 21299, so the load makes sound.
+Method: `ks32emu bench` boots the machine, then plays a fixed load from MIDI in for 20 emulated seconds. The load is an 8-note chord (MIDI notes 36, 43, 48, 52, 55, 60, 64, 67, velocity 100), on at the start of every second and off 750 ms later, so notes, releases and the effects are always running. The audio is discarded. The host time is `std::chrono::steady_clock` around the chord loop. The boot is excluded from the headline figure and printed on its own line. The `peak` line shows that the load makes sound; it is one maximum over the 20 s.
 
 | Build | Chord loop, 20 s emulated | Boot (3.2 s emulated) |
 |---|---|---|
-| MSVC x64 Release | host 3.95 to 4.15 s, **realtime x4.82 to x5.07** (typical x4.9) | host 0.51 to 0.52 s, x6.1 to x6.3 |
-| MinGW i686 Release | host 4.24 to 4.71 s, **realtime x4.25 to x4.72** (the first three runs x4.69 to x4.72, the last three x4.25 to x4.43) | host 0.52 to 0.59 s, x5.4 to x6.2 |
+| MSVC x64 Release | host 4.05 to 4.20 s, **realtime x4.77 to x4.94** | host 0.52 to 0.55 s, x5.85 to x6.17 |
+| MinGW i686 Release | host 4.40 to 4.51 s, **realtime x4.43 to x4.55** | host 0.54 to 0.57 s, x5.67 to x5.94 |
 
-Review Focus 1 asked for MSVC at 2.0x or more: it is about 2.4 times that, so no profiling was done and the slice size stays as it is. The MinGW build is the 32-bit one, and it is a little slower. MinGW's second set of three runs was slower than the first set on the same binary (host noise); both sets are shown rather than one.
+These are 6 timed runs per build, one after the other, all on the binaries built from the commit that holds this report. (The first version of this report quoted runs from two different binaries, one before and one after the `peak` line was added; those figures were dropped.) Every run printed peak 21299.
+
+Review Focus 1 asked for MSVC at 2.0x or more: it is about 2.4 times that, so no profiling was done and the slice size stays as it is. The MinGW build is the 32-bit one, and it is a little slower.
 
 Headroom: `ks32emu play` needs the machine to keep up with real time while the audio thread also resamples to the device rate, which costs little against these figures. Live play (Task 7) has not been run with a Q25 on the machine; that is the acceptance step below.
 
@@ -96,7 +98,7 @@ Facts settled by the lack of a better answer rather than by a document's stateme
 
 **Settled by "gets further" or by elimination (the evidence rules out the alternatives but not the whole set):**
 
-- **K1, the RAM size is 64 KB** (Medium). 64 KB, 128 KB and 256 KB all boot to the same state; the firmware's size probe adapts to what it finds. 64 KB follows the service manual's "64K of RAM", and the service manual also mentions a part that could be 128K x 8 (U28/U33). The cost if wrong: a real KS-32 with more RAM has more sequencer memory than the emulation. One constant changes it.
+- **K1, the RAM size is 64 KB** (Medium). 64 KB, 128 KB and 256 KB all boot to the same outcome; the firmware's size probe adapts to what it finds. 64 KB follows the service manual's "64K of RAM", and the service manual also mentions a part that could be 128K x 8 (U28/U33). The cost if wrong: a real KS-32 with more RAM has more sequencer memory than the emulation. One constant changes it.
 - **K1, the RAM is one RAM mirrored, not a separate RAM at 0.** The two give the same trace hash, so the evidence cannot tell them apart; one chip pair serves both windows.
 - **K2, both interrupt levels** (Low). The DUART is vectored, and that is settled (autovector gives events 138 and 139). The DUART's level is bounded to 1 to 5 by the masks the firmware runs at, and level 7 breaks the boot. Nothing picks among 1 to 5, and OS v3.01 never lets OTIS interrupt, so OTIS's level is not observable. The values used (DUART 3, OTIS 1) are what the MAME esq5505 driver is recalled to use. **The MAME values were recalled and not checked against MAME.** If a later firmware path enables OTIS interrupts, or load shows a priority problem, this needs a second look.
 - **K15, ESPHALT polarity** is settled by elimination (the inverse gives event 33, "bad ESP chip").
@@ -160,9 +162,75 @@ From the ledger (`.superpowers/sdd/2026-10-28-ks32-machine/progress.md`), each w
 - **MIDI out** from the firmware is counted and not forwarded.
 - **Voice Muting** (ON by default) mutes a note that arrives within about 30 ms of a program change. This is the firmware's behaviour. A sequencer or a player that sends a program change and a note together hears this.
 - **The RAM image** after about 6 short power-ons reinitializes; the emulator does not protect against that.
-- **Small deferred items** from the reviews, none affecting behaviour a user would see: `ks32emu render` has no test of its own (the test has a loop of its own, and `pcmHash` is duplicated in the test and the tool); `--tail 0` drops the last event; `std::filesystem::exists` in `ks32emu` has a throwing overload; `loadRamImage` does not reset the CPU's cycle total and exception counts; `Machine::key`'s header comment should say the value is the strike value, not a MIDI velocity (documented in `docs/ks32emu.md`; it matters for Plan 7).
+- **Deferred review items.** Listed under "Deferred review items" below, because the ledger they came from is deleted when the plan finishes.
 - **Nothing here was compared with MAME.** Every value that mentions MAME is a recollection, marked as unchecked.
 - **The ROM was not studied.** By the user's ruling of 2026-10-23, the OS was run and its behaviour read from traces, never disassembled. So every "why" in the hardware document is an inference from behaviour.
+
+### Deferred review items
+
+Every minor item that the task reviews deferred, by task, one line each. "Behavioural" means it can change what the emulator does; the rest are comments, documents and tests. Items that were carried into a later task and fixed there are not listed (Task 2: non-copyable `Machine`, the DUART summary's even-byte filter and the K5 idle-spread test, commit b4c2cca; Task 4: the 93 glyph bytes in the panel test and the K7 marker at the out-of-range rule).
+
+**Task 1 (DUART)**
+- The reset comment and D4 say the C/T is in timer mode, but ACR = 0 is counter mode (`duart.cpp:22-31`). Text.
+- CR "reset receiver" clears the overrun flag, where the data sheet (4.2.7.2) says the other registers are unaltered (`duart.cpp:341`). Behavioural, a model detail. The firmware resets the receivers during start-up with nothing pending, and no run counted a receive overrun.
+- A rate change in the middle of a character can underflow `ticksLeft` and wedge the shifter (`duart.cpp:71-85`). **Behavioural, but OS v3.01 does not reach it in the runs traced.** The rate (`tick16`) changes only when CSR, ACR[7] or, for a timer clock, the C/T preload changes while a character is in flight. Traced for the boot and then 12 s with eight button presses (Select Sound, Edit Sound, System/MIDI, Edit Seq/Preset and the Bank 9 service screen): CSRA = 0xEE once at 221 ms, CSRB = 0xEE at 221 ms and again at 598 ms (the same value, so the rate does not change), ACR = 0x30 then 0x60 twice (bit 7 always 0), and no THR write before 549 ms, after every rate change. With CSR = 0xEE the rate comes from an IP-pin clock, which does not depend on ACR or the C/T. Not traced: runs under MIDI load, and screens not visited. A firmware path that writes CSR or ACR[7] with a character in flight would reach it.
+- Disabling the transmitter drops a character waiting in THR, with no DECISION marker (`duart.cpp:359-362`; D4's marker is only at reset). Behavioural as the data sheet describes it (3.1: a disabled transmitter cannot be loaded); what is missing is the marker. Task 4 saw it in the panel stream, and the panel output was not affected.
+- ISR[7] is not re-evaluated on an ACR write (`duart.cpp:247-253, 390-394`). Behavioural, the input-change interrupt only; the firmware enables none (ACR 0x30 and 0x60).
+- `x1Hz()` is unused beyond its accessor (`duart.h`). Code.
+- `duart_leaving_counter_mode_stops_it` is vacuous: the stop-command read already clears `ctRunning_` (`tests/test_duart.cpp:168-181`). Test.
+
+**Task 2 (machine skeleton)**
+- No test pins the DUART X1 rate per slot. Test.
+- Wrong-width OTIS byte reads and the ESP window paths are untested. Test.
+- `ks32emu boot` lists only the first 16 unmapped runs. Tool; the K1 map has none.
+- The `BusEvent` value of a word write to the ESP or DUART is the whole word; it should be said at `machine.h:467`. Comment.
+
+**Task 3 (firmware boot)**
+- D2's text still says the external IP clock receives nothing (`decisions.md`, D2). Text.
+- Table 4-2's footnote (IP2 is the C/T input when ACR[6:4] is 000 or 100) is not modelled or cited. The firmware's ACR values are 0x30 and 0x60, which are 011 and 110, so it does not apply.
+- `setExternalClock` silently clamps rates above X1 to 0 (`duart.cpp:62`). Behavioural for a caller that passes such a rate; the machine's 500 kHz is far below X1.
+- `loadKs32` reports a bad ROM set (create fails) as "skip: ROMs not found" (`tests/ks32_firmware.h:28`). Test helper.
+- `docs/m68k.md:113` still describes the deleted `m68k_ks32_firmware_smoke` test. Text, still present.
+- The suite was 16.4 s against a 20 s budget and could share one booted machine; it is now about 28 s. Test time.
+
+**Task 4 (panel display)**
+- `8C` clears `s_.blink` but not `blinkOn_` (`panel.cpp:487-491`). Behavioural, the blink marking only.
+- The last-byte time is 1917 ms in one place and 1916 ms in others (hardware doc, `machine.h`). Text, still present.
+- `bootedKs32()` returns a mutable `Machine*`; it wants a read-only comment. Test helper.
+
+**Task 5 (buttons)**
+- The evidence text of `85 pp` uses reasoning from before `88`/`89` were found (hardware doc). Text.
+- The Medium-confidence names in the `Button` enum carry no `DECISION K7` marker (`panel.h:492-503`). Code comment.
+- `release_ends_the_hold` asserts only an absence; it should also assert "STORE SEQUENCES". Test.
+- The `89 00` slot-0 test coincides with the natural cursor, so it cannot fail (`test_ks32_panel.cpp:776-781`). Test.
+- `87 20` raises `unknown` during button use (`panel.cpp:448-449`). Behavioural, the counter only; the display is unaffected, and the hardware doc says so.
+- A comment at `test_ks32_firmware.cpp:124` says the overruns are counted "over the two taps", but they are counted since reset. Test comment.
+
+**Task 6 (analog inputs)**
+- A hard-coded 7 at `machine.cpp:381`, and the array sizes should be `static_assert`ed against `Analog`. Code.
+- The line-A and TRAP counts in the hardware doc are from Task 3's boot, which ended on the battery warning. Text, labelled as such.
+- The cold-boot "EVENT" match is broad (`test_ks32_firmware.cpp:664`). Test.
+
+**Task 7 (MIDI, render, play)**
+- `ks32emu render` has no test of its own, because the test has a loop of its own; `sendMidi` and the render loop should be shared in a header. Test.
+- `pcmHash` is duplicated verbatim in the test and the tool. Code.
+- `--tail 0` drops the last event (`main.cpp`). Behavioural, a tool edge case.
+- Live MIDI is quantised to one audio period (about 10 ms). Behavioural, by design.
+- The audio callback makes small allocations (the `takeMidiOut` swap, the press schedule). Behavioural in principle (a real-time hazard); no underrun has been measured, and `play` has not been run on a Q25.
+
+**Task 8 (battery RAM, card, keyboard)**
+- The Task 8 report blamed a gap in the key peaks on Volume smoothing; it is more likely the sound (the rig was on the ROM 01 organ, not the ROM 00 piano). Report text.
+- The comment on `Machine::key` should say the value is the strike value, not a MIDI velocity (`machine.h:419-420`); `docs/ks32emu.md` says it. It matters for Plan 7. Comment.
+- `loadRamImage` does not reset the CPU's cycle total or exception counts, so `cycles()` is not "since power-on" after a load. Behavioural for a program that loads an image into a running machine; `ks32emu` loads at power-on.
+- `ks32emu` uses the throwing overload of `std::filesystem::exists` (`main.cpp`). Behavioural: an unreadable `--ram` path ends the tool with an uncaught exception instead of an `error:` line.
+- `ram_image_keeps_settings` never checks that Master Tune is restored to +00 on the shared rig. Test.
+- The warm-boot warning check samples every 100 ms and matches "LOW" alone (`test_ks32_firmware.cpp:640-644`). Test.
+
+**Task 9 (bench and documents)**
+- `bench` ignores options it does not use (`--ms`, `--trace` and so on) without an error. Behavioural, the tool.
+- `peak` in `bench` is one maximum over the whole run, so it shows that sound was made, not that every chord sounded. Tool.
+- Some lines in `bench` are long. Style.
+- Fixed in the fix round: the fused list item in `docs/ks32emu.md`, the `--seconds 0` guard in `bench`, the K1 wording "same outcome", and the OTIS-level wording in the hardware doc and in K2.
 
 ## User acceptance
 

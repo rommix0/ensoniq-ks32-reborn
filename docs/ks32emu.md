@@ -73,7 +73,8 @@ Runs `--ms` (default 3000) of emulated time from power-on and prints what happen
 
 - `cycle` is the 68000 clock count since power-on (15 238 090 clocks per second).
 - `DEVICE` is `OTIS`, `ESP`, `DUART`, `UNMAPPED` or `IACK`.
-- `R` is a read and `W` a write. `size` is 1, 2 or 4 bytes, the width of the 68000 access. - `address` is the 24-bit address in hex, `value` is the data in hex, `size * 2` digits. For `IACK` the address is the interrupt level (3 for the DUART) and the value is the vector the device answered with (0x40).
+- `R` is a read and `W` a write. `size` is 1, 2 or 4 bytes, the width of the 68000 access.
+- `address` is the 24-bit address in hex, `value` is the data in hex, `size * 2` digits. For `IACK` the address is the interrupt level (3 for the DUART) and the value is the vector the device answered with (0x40).
 - `--from <cycle>` skips lines before that cycle, and `--count <n>` stops after n lines.
 
 The trace goes to stdout ahead of the summary. It is a text listing for reading, not the `docs/trace-format.md` chip-test script; `ens_trace` reads that one.

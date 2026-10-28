@@ -473,6 +473,7 @@ int bench(const Options& o) {
 
     constexpr uint8_t kChord[8] = {36, 43, 48, 52, 55, 60, 64, 67};
     const auto frames = static_cast<uint64_t>(std::llround(o.seconds * kWavRate));
+    if (frames == 0) fail("bench needs --seconds of at least one frame");
     int peak = 0;
     int16_t l, r;
     const auto t2 = Clock::now();

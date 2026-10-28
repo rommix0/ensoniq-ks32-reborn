@@ -115,8 +115,9 @@ It counted the acknowledges by level and vector, the exception counts, the OTIS 
 writes (CR, register 0 of a voice page) with IRQE set and the reads of IRQV (register 14). It also
 took the PCM hash, the display and the SR mask before every instruction.
 - **OTIS.** No CR write sets IRQE (0 of 198 in the burst, 0 of 764 in the held-notes load), and
-  IRQV is never read. No voice can raise the IRQ, so OTIS on levels 1 to 6 changes nothing: the
-  OTIS 5 / DUART 3 run matches OTIS 1 / DUART 3 exactly.
+  IRQV is never read. No voice can raise the IRQ, so the OTIS level cannot matter. Only OTIS
+  levels 1 and 5 were run, and the two match exactly (OTIS 5 / DUART 3 against OTIS 1 /
+  DUART 3); levels 2 to 4 and 6 are inferred, because IRQE is never set.
 - **DUART.** Levels 1 to 6 give the same PCM hash under each load (0x2f0aade924b2e5d5 for the
   burst, 0xf0a82d4402179384 for the held notes). They also give the same exception counts and
   the same displays. No spurious or autovectored interrupt is taken (vectors 24-31: 0), and no
@@ -133,8 +134,9 @@ OTIS. The values are kept as they were (ruling T7-2). Their only basis is a reco
 esq5505 driver (DUART on IRQ 3, OTIS on IRQ 1), which was recalled and not checked. A firmware
 path that enables OTIS interrupts (the sequencer, perhaps) would be the place to look again.
 
-**Alternatives.** Autovector was rejected (events 138 and 139). DUART levels 1 to 5 and OTIS
-levels 1 to 6 are equivalent in every run.
+**Alternatives.** Autovector was rejected (events 138 and 139). DUART levels 1 to 6 and OTIS
+levels 1 and 5 were run, and are identical. The rest of OTIS 1 to 6 is inferred, because IRQE is
+never set. The admissible DUART range is 1 to 5, by the masks (level 7 breaks the boot).
 
 **Confidence.** High for the IVR answer. Low for both levels.
 **MAME.** Not compared. The values equal the recalled MAME values, unchecked.
