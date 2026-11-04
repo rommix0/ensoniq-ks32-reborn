@@ -23,6 +23,8 @@ const juce::Colour kBack{0xff0d0d0e}, kPanel{0xff1f2023}, kGroove{0xff08080a}, k
     kDim{0xffa7aab0}, kFocus{0xff9fd4c7}, kTrackEdge{0xff2c2e32}, kCap{0xff4a4c51}, kCapEdge{0xff6a6d73},
     kWhite{0xffecebe6}, kWhiteEdge{0xff9a9993}, kBlack{0xff1a1a1c}, kBlackShade{0xff2e2f33},
     kRidge{0xff2b2c30}, kRidgeLine{0xff38393e}, kWheelEdge{0xff4a4c51};
+// The model decal: the mark's silver and its line's green.
+const juce::Colour kDecal{0xffd3d5d8}, kDecalGreen{0xff7fae86};
 
 juce::Rectangle<int> rect(const ens::app::Rect& r) { return {r.x, r.y, r.w, r.h}; }
 
@@ -62,6 +64,61 @@ void drawGear(juce::Graphics& g, juce::Rectangle<float> r) {
     g.fillPath(p);
     g.setColour(kButton);
     g.fillEllipse(c.x - rad * 0.42f, c.y - rad * 0.42f, rad * 0.84f, rad * 0.84f);
+}
+
+// The model mark "KS-32" as thin strokes, left-aligned in r and as tall as it (narrowed if it
+// would not fit). Glyphs are drawn in a unit-high box, y down.
+void drawModelMark(juce::Graphics& g, juce::Rectangle<float> r) {
+    juce::Path p;
+    float x = 0;
+    const auto glyph = [&](float w, auto&& draw) {
+        juce::Path q;
+        draw(q);
+        p.addPath(q, juce::AffineTransform::translation(x, 0));
+        x += w + 0.13f;
+    };
+    glyph(0.44f, [](juce::Path& q) {  // K
+        q.startNewSubPath(0, 0);
+        q.lineTo(0, 1);
+        q.startNewSubPath(0.42f, 0);
+        q.lineTo(0, 0.6f);
+        q.startNewSubPath(0.13f, 0.47f);
+        q.lineTo(0.44f, 1);
+    });
+    glyph(0.4f, [](juce::Path& q) {  // S
+        q.startNewSubPath(0.39f, 0.1f);
+        q.cubicTo(0.35f, 0.03f, 0.28f, 0, 0.2f, 0);
+        q.cubicTo(0.09f, 0, 0.02f, 0.1f, 0.02f, 0.24f);
+        q.cubicTo(0.02f, 0.44f, 0.4f, 0.5f, 0.4f, 0.74f);
+        q.cubicTo(0.4f, 0.9f, 0.31f, 1, 0.2f, 1);
+        q.cubicTo(0.1f, 1, 0.03f, 0.95f, 0, 0.88f);
+    });
+    glyph(0.17f, [](juce::Path& q) {  // -
+        q.startNewSubPath(0, 0.6f);
+        q.lineTo(0.17f, 0.6f);
+    });
+    glyph(0.4f, [](juce::Path& q) {  // 3
+        q.startNewSubPath(0.02f, 0.1f);
+        q.cubicTo(0.06f, 0.03f, 0.12f, 0, 0.2f, 0);
+        q.cubicTo(0.31f, 0, 0.38f, 0.1f, 0.38f, 0.23f);
+        q.cubicTo(0.38f, 0.38f, 0.28f, 0.46f, 0.15f, 0.46f);
+        q.cubicTo(0.31f, 0.46f, 0.4f, 0.57f, 0.4f, 0.73f);
+        q.cubicTo(0.4f, 0.9f, 0.31f, 1, 0.2f, 1);
+        q.cubicTo(0.1f, 1, 0.03f, 0.95f, 0, 0.88f);
+    });
+    glyph(0.42f, [](juce::Path& q) {  // 2
+        q.startNewSubPath(0.02f, 0.13f);
+        q.cubicTo(0.06f, 0.04f, 0.13f, 0, 0.21f, 0);
+        q.cubicTo(0.32f, 0, 0.39f, 0.1f, 0.39f, 0.23f);
+        q.cubicTo(0.39f, 0.45f, 0.1f, 0.7f, 0, 1);
+        q.lineTo(0.42f, 1);
+    });
+    const float w = x - 0.13f;
+    const float s = r.getHeight();
+    const float sx = std::min(s, r.getWidth() / w);  // narrow, never wider, to fit
+    p.applyTransform(juce::AffineTransform::scale(sx, s).translated(r.getX(), r.getY()));
+    g.setColour(kDecal);
+    g.strokePath(p, juce::PathStrokeType(s * 0.04f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 juce::Font labelFont(float height, bool bold) {
@@ -545,6 +602,16 @@ public:
             juce::String text = c->label;
             auto r = rect(c->r);
             auto just = juce::Justification::centred;
+            if (c->ink == Ink::Decal) {
+                if (text == "KS-32") {
+                    drawModelMark(g, r.toFloat());
+                    continue;
+                }
+                g.setColour(kDecalGreen);
+                g.setFont(labelFont(static_cast<float>(c->r.h), false));
+                g.drawFittedText(text, r, juce::Justification::centredLeft, 1, 0.5f);
+                continue;
+            }
             if (text.startsWith("MIDI:")) {  // the live MIDI input in place of the artboard's sample
                 text = "MIDI: " + ed_.midiInput();
                 r.setWidth(120);

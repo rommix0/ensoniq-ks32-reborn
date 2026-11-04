@@ -14,8 +14,9 @@ struct Rect {
 };
 
 enum class ControlKind : uint8_t { Button, Led, Slider, Wheel, Display, Key, Label };
-// Label colour and weight, as the artboard draws them: #c9cbcf, bold #e6e7ea, #a7aab0.
-enum class Ink : uint8_t { Text, Bright, Dim };
+// Label colour and weight, as the artboard draws them: #c9cbcf, bold #e6e7ea, #a7aab0; Decal is
+// the model decal: the "KS-32" label is drawn as the stroked mark, any other in the decal's green.
+enum class Ink : uint8_t { Text, Bright, Dim, Decal };
 
 struct Control {
     ControlKind kind;

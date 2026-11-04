@@ -34,8 +34,9 @@ constexpr int kKeysX = 182, kKeysY = 398, kKeysW = 1826, kKeysH = 296;
 std::vector<Control> build() {
     std::vector<Control> t = {
         // Wordmark column: the gear sits under the status lines (design section 6.3).
-        {K::Label, -1, {32, 28, 94, 44}, "KS-32", Ink::Bright},
-        {K::Label, -1, {32, 74, 102, 15}, "emulated front panel", Ink::Dim},
+        // The model decal, after the instrument's: a tall thin-stroke mark and its green line.
+        {K::Label, -1, {32, 30, 150, 62}, "KS-32", Ink::Decal},
+        {K::Label, -1, {32, 100, 150, 13}, "Weighted Action MIDI Studio", Ink::Decal},
         {K::Label, -1, {32, 278, 49, 15}, "ROM v3.01", Ink::Dim},
         {K::Label, -1, {32, 294, 47, 15}, "MIDI: Q25", Ink::Dim},
         {K::Button, kSettingsId, {32, 322, 34, 34}, "Settings"},
