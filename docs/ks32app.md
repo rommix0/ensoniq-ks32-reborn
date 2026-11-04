@@ -31,7 +31,9 @@ The ROMs are not in the repository. The app needs six files in one folder:
 | `ks32/ks32v301upper.bin`, `ks32/ks32v301lower.bin` | The OS v3.01 (in a `ks32` subfolder) |
 | `sq1-u25.bin`, `sq1-u26.bin`, `rom2.u39`, `rom3.u38` | The wave ROMs |
 
-On the first start no folder is chosen. The display reads `No ROM folder:` / `open Settings`. Click the gear under the "ROM v3.01" and "MIDI" lines on the left, then **Choose folder…** in ROMS. The list marks each file found, missing or wrong size. When all six are good the machine starts, and the firmware boots in real time, as the instrument does: the start-up screens for about two seconds, then `ROM   00` / ` KS Grand Piano` with the Select Sound LED lit. If a file is missing or the wrong size, the display names it (for example `ROM missing:` / `sq1-u26.bin`). With the ROMs good but no audio device open (the machine only runs with one), it reads `No audio device`. Choosing another good folder later restarts the machine and keeps its memory.
+If no folder has been chosen and a folder named `roms` sits beside the app (`KS-32.exe`), as in a dist built with `tools\dist.ps1 -RomFolder`, the app takes it and stores it in the settings, so the VST3 finds it too.
+
+Otherwise, on the first start no folder is chosen. The display reads `No ROM folder:` / `open Settings`. Click the gear under the "ROM v3.01" and "MIDI" lines on the left, then **Choose folder…** in ROMS. The list marks each file found, missing or wrong size. When all six are good the machine starts, and the firmware boots in real time, as the instrument does: the start-up screens for about two seconds, then `ROM   00` / ` KS Grand Piano` with the Select Sound LED lit. If a file is missing or the wrong size, the display names it (for example `ROM missing:` / `sq1-u26.bin`). With the ROMs good but no audio device open (the machine only runs with one), it reads `No audio device`. Choosing another good folder later restarts the machine and keeps its memory.
 
 ## Where the settings and the memory live
 

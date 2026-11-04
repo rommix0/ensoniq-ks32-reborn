@@ -8,3 +8,4 @@ datasheets/
 __pycache__/
 .worktrees/
 testdata/
+dist/

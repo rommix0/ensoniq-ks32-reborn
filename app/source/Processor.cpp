@@ -64,8 +64,16 @@ Ks32Processor::Ks32Processor(MemoryMode mode)
     for (size_t i = 0; i < std::size(kAnalogParams); ++i)
         analogRaw_[i] = params_.getRawParameterValue(kAnalogParams[i].id);
     sound_ = params_.getRawParameterValue("sound");
-    // No compiled-in default: the first start, with no settings, opens with no ROMs.
-    if (const auto dir = settings_.romFolder(); dir != juce::File())
+    // No compiled-in default. With no folder chosen, a "roms" folder beside the app (the dist's
+    // layout, next to KS-32.exe) is taken and stored, so the plugin finds it too; with neither, the
+    // first start opens with no ROMs.
+    auto dir = settings_.romFolder();
+    if (dir == juce::File()) {
+        const auto beside =
+            juce::File::getSpecialLocation(juce::File::currentApplicationFile).getSiblingFile("roms");
+        if (beside.isDirectory()) dir = beside;
+    }
+    if (dir != juce::File())
         setRomFolder(dir, romError_);
     else
         romError_ = "No ROM folder:\nopen Settings";

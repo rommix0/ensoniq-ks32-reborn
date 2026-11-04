@@ -558,6 +558,29 @@ void standaloneNoRam(const juce::File& dir) {
     CHECK(xml != nullptr && xml->getChildByName("RAM") == nullptr);
 }
 
+// rom_folder_beside_app: with no folder chosen, a "roms" folder beside the app is taken and stored
+// (the dist layout); a chosen folder wins over it.
+void romsBesideApp(const juce::File& dir) {
+    const auto beside =
+        juce::File::getSpecialLocation(juce::File::currentApplicationFile).getSiblingFile("roms");
+    CHECK(!beside.exists());  // never a real folder of the user's
+    if (beside.exists()) return;
+    dummyRoms(beside);
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    {
+        Ks32Processor p(MemoryMode::File);
+        CHECK(p.engine() != nullptr && p.settings().romFolder() == beside);
+    }
+    const auto chosen = dir.getChildFile("chosen");
+    dummyRoms(chosen);
+    AppSettings().setRomFolder(chosen);
+    {
+        Ks32Processor p(MemoryMode::File);
+        CHECK(p.settings().romFolder() == chosen);
+    }
+    beside.deleteRecursively();
+}
+
 // Ruling R8: KS32_SETTINGS_DIR points the plugin at a temp settings file naming the ROM folder,
 // so neither the user's settings nor their memory file is touched.
 void vst3(const juce::File& dir) {
@@ -658,6 +681,7 @@ int main() {
     stateBadBlobs(dir.getChildFile("bad"));
     projectLeavesSharedFile(dir.getChildFile("shared"));
     standaloneNoRam(dir.getChildFile("standalone"));
+    romsBesideApp(dir.getChildFile("beside"));
     stateThreads(dir.getChildFile("threads"));
     vst3(dir.getChildFile("vst3"));
     dir.deleteRecursively();
