@@ -48,6 +48,7 @@ public:
     bool setMemoryFile(const juce::File& file, juce::String& err);
     // Zeros to the file, then a cold machine (A11, R7); the caller has confirmed. A failed write
     // leaves the machine running and sets memoryError. Project mode: a cold machine, the file untouched (A22).
+    // Either way the machine boots to ROM 00 and `sound` is set to 0 (A15).
     void eraseMemory();
     // Project mode, once booted: writes the running RAM (A21) to the memory file. False with err before
     // the boot, in File mode, or when the write fails (also memoryError).
@@ -84,6 +85,8 @@ private:
     // Both: the caller holds stateMu_.
     bool restart(Ram ram);  // a new engine from roms_; the old one stays if that fails
     std::vector<uint8_t> ram();  // the RAM a state or a copy saves (A21); empty when there is none
+    std::vector<uint8_t> select(const ens::app::Snapshot& snap) const;  // the select a state saves
+    int soundNow() const;  // `sound` 0-127; NaN reads as 0
     void timerCallback() override { tick(); }
     bool saved(bool ok);            // ok; a failure sets memoryError_, a success clears that
 

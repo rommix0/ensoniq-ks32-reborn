@@ -366,6 +366,65 @@ void stateWithoutRoms(const juce::File& dir, const juce::MemoryBlock& a) {
     CHECK(shows(p, "ROM   55"));
 }
 
+// standalone_state_before_boot (goal 5, A23): a File processor given a Project state (ROM 55, Master Tune
+// +02) before its first block comes back on ROM 55, its memory still from the file (cold here: not +02).
+void standaloneStateBeforeBoot(const juce::File& dir, const juce::MemoryBlock& a) {
+    if (a.isEmpty() || !realRoms(dir)) return;
+    Ks32Processor p(MemoryMode::File);
+    if (!p.engine()) return;
+    p.prepareToPlay(48000, 480);
+    p.setStateInformation(a.getData(), static_cast<int>(a.getSize()));
+    run(p, 3800);
+    CHECK(shows(p, "ROM   55"));
+    press(p, ens::ks32::Button::SystemMidi);
+    std::printf("  standalone display: [%s]\n", (ens::ks32::rowText(p.engine()->snapshot().panel, 0) +
+                                                 ens::ks32::rowText(p.engine()->snapshot().panel, 1)).c_str());
+    CHECK(shows(p, "Master Tune") && !shows(p, "+02"));
+}
+
+// int00_survives_restarts (A15, I1/M1): INT 00 differs from the boot's ROM 00 only in its bank. It comes
+// back from a state, across a ROM-folder change and across Change... to a file; Erase then gives a cold
+// machine on ROM 00 with `sound` 0, nothing sent.
+void int00Restarts(const juce::File& dir) {
+    if (!realRoms(dir)) return;
+    using ens::ks32::Button;
+    juce::MemoryBlock s;
+    {
+        Ks32Processor a;
+        if (!a.engine()) return;
+        a.prepareToPlay(48000, 480);
+        run(a, 3400);
+        press(a, Button::BankSet);
+        press(a, Button::Bank0);
+        press(a, Button::Screen0);
+        CHECK(shows(a, "INT   00"));
+        s = stateOf(a);
+    }
+    CHECK(selectOf(s).equalsIgnoreCase("b000002000c000"));
+    Ks32Processor b;
+    b.prepareToPlay(48000, 480);
+    b.setStateInformation(s.getData(), static_cast<int>(s.getSize()));
+    run(b, 3800);
+    CHECK(shows(b, "INT   00"));
+    juce::String err;
+    CHECK(b.setRomFolder(juce::File(KS32_ROM_DIR), err));
+    run(b, 3800);
+    CHECK(shows(b, "INT   00"));
+    const auto file = dir.getChildFile("int00.bin");
+    CHECK(saveMemoryFile(file, ramOf(s)) && b.setMemoryFile(file, err));
+    run(b, 3800);
+    CHECK(shows(b, "INT   00"));
+
+    auto* sound = b.params().getParameter("sound");
+    sound->setValueNotifyingHost(sound->convertTo0to1(5.0f));
+    run(b, 500);
+    CHECK(shows(b, "05"));
+    b.eraseMemory();
+    CHECK(soundOf(b) == 0);
+    run(b, 3800);
+    CHECK(shows(b, "ROM   00") && b.engine()->snapshot().programsSent == 0);
+}
+
 // state_rejects_bad_blobs: garbage, a short RAM and an unknown version leave the machine as it is.
 void stateBadBlobs(const juce::File& dir) {
     if (!realRoms(dir)) return;
@@ -594,6 +653,8 @@ int main() {
     const auto a = stateRoundTrip(dir.getChildFile("state"));
     stateDuringBoot(dir.getChildFile("boot"), a);
     stateWithoutRoms(dir.getChildFile("noroms"), a);
+    standaloneStateBeforeBoot(dir.getChildFile("standalone-state"), a);
+    int00Restarts(dir.getChildFile("int00"));
     stateBadBlobs(dir.getChildFile("bad"));
     projectLeavesSharedFile(dir.getChildFile("shared"));
     standaloneNoRam(dir.getChildFile("standalone"));

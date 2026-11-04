@@ -46,7 +46,8 @@ public:
     void prepare(double outRate, int maxBlock);  // allocates the resampler and buffers
     bool loadRam(const std::vector<uint8_t>& img, std::string& err);
     // The exact bytes to replay after this boot (A15), when they select the program setProgram asks
-    // for, instead of a bare program change. Call after loadRam; up to 8 bytes.
+    // for, instead of a bare program change, and at the boot's end even when the machine is already on that
+    // program number (INT 00 against the boot's ROM 00). Call after loadRam; up to 8 bytes.
     void setSelect(const uint8_t* bytes, int len);
     ks32::Machine& machine();  // tests, and the RAM at shut-down
     // Message thread, audio running:

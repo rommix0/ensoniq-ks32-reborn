@@ -1,5 +1,8 @@
 #include "Processor.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "PanelEditor.h"
 #include "MemoryFile.h"
 #include "RomFolder.h"
@@ -115,18 +118,27 @@ bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
 // memory as it boots. With no machine, only the file is erased. If the write fails, nothing is
 // erased and the machine runs on; the settings page says so.
 // DECISION A22: in Project mode this instance alone restarts cold from zeros; the shared file is left alone.
+// DECISION A15: either way the machine is cold on ROM 00: no select to replay and `sound` 0, set after
+// the restart (outside the state mutex: a host may save from its notification), long before the boot ends.
 void Ks32Processor::eraseMemory() {
-    const std::lock_guard<std::mutex> lock(stateMu_);
-    if (mode_ == MemoryMode::Project) {
-        startImage_.assign(static_cast<size_t>(kMemoryBytes), 0);
+    {
+        const std::lock_guard<std::mutex> lock(stateMu_);
+        if (mode_ == MemoryMode::File) {
+            if (!saved(eraseMemoryFile(settings_.memoryFile()))) return;
+            memoryError_ = {};
+        }
         startSelect_.clear();
-        haveStart_ = true;
-        if (engine_) restart(Ram::Start);
-        return;
+        if (mode_ == MemoryMode::Project || engine_) {  // File mode with no machine: the file alone
+            startImage_.assign(static_cast<size_t>(kMemoryBytes), 0);
+            haveStart_ = true;
+            if (engine_) restart(Ram::Start);
+        }
     }
-    if (!saved(eraseMemoryFile(settings_.memoryFile()))) return;
-    memoryError_ = {};
-    if (engine_) restart(Ram::File);
+    if (auto* p = params_.getParameter("sound"); p != nullptr && soundNow() != 0) {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost(p->convertTo0to1(0.0f));
+        p->endChangeGesture();
+    }
 }
 
 // A failed save is shown on the settings page (memoryError) until a save succeeds.
@@ -142,13 +154,14 @@ bool Ks32Processor::saved(bool ok) {
 bool Ks32Processor::restart(Ram ram) {
     suspendProcessing(true);  // from here the audio thread is out of processBlock, and stays out
     const auto snap = engine_ ? engine_->snapshot() : ens::app::Snapshot{};
-    std::vector<uint8_t> img, sel;
+    std::vector<uint8_t> img;
+    // DECISION A21: Start replays the start image's select; Keep and File keep the select a state would
+    // save (the running one once booted, else the start one), so a new memory file keeps the sound.
+    auto sel = ram == Ram::Start ? startSelect_ : select(snap);
     if (ram == Ram::Keep && snap.booted) {
         img = engine_->machine().ramImage();  // audio stopped: the machine is ours to read
-        sel.assign(snap.select.begin(), snap.select.begin() + snap.selectLen);
     } else if (ram != Ram::File && haveStart_) {
         img = startImage_;  // DECISION A21: never a half-booted image, nor the file over a project's image
-        sel = startSelect_;
     } else {
         img = loadMemoryFile(settings_.memoryFile(), memoryError_);  // wrong size: reported, cold boot
     }
@@ -183,13 +196,14 @@ void Ks32Processor::tick() {
     // DECISION A18: follow a program change tracked from the panel or MIDI (programSeq moved), never the
     // engine's own sends. followed_ is stored first, then `sound` is written, so a processBlock that sees
     // the new `sound` also finds the marker (and adopts the value instead of sending it). A marker the
-    // host overwrote before any block took it is cleared here.
-    if (int m = followed_.load(); m >= 0 && m != static_cast<int>(sound_->load()))
-        followed_.compare_exchange_strong(m, -1);
+    // host overwrote before any block took it is cleared here. While a marker still waits for a block, no
+    // new follow starts (lastSeq_ stays, the next tick retries): a block that read the older followed
+    // value just after a newer marker was stored would send it.
+    if (int m = followed_.load(); m >= 0 && m != soundNow()) followed_.compare_exchange_strong(m, -1);
     const auto snap = engine_->snapshot();
-    if (snap.program >= 0 && snap.programSeq != lastSeq_) {
+    if (snap.program >= 0 && snap.programSeq != lastSeq_ && followed_.load() < 0) {
         lastSeq_ = snap.programSeq;
-        if (auto* p = params_.getParameter("sound"); p != nullptr && static_cast<int>(sound_->load()) != snap.program) {
+        if (auto* p = params_.getParameter("sound"); p != nullptr && soundNow() != snap.program) {
             followed_.store(snap.program);
             p->beginChangeGesture();
             p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(snap.program)));
@@ -230,10 +244,12 @@ void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     for (size_t i = 0; i < std::size(kAnalogParams); ++i)
         engine_->setAnalog(kAnalogParams[i].analog,
                            ens::app::analogRaw(kAnalogParams[i].analog, analogRaw_[i]->load()));
-    // DECISION A18: a `sound` that tick() just followed (it holds the marker) is adopted, not sent. Any
-    // other value is a host request. Remaining case: a panel pick and a host change of `sound` inside
-    // one tick period can leave the host showing the followed value while the machine plays the host's.
-    const int sound = static_cast<int>(sound_->load());
+    // DECISION A18: a `sound` that tick() just followed (it holds the marker) is adopted, not sent. Since
+    // tick() starts no follow while a marker waits, any other value is one already requested or adopted
+    // (setProgram sends nothing) or a host request (sent). Remaining case: a panel pick and a host change
+    // of `sound` inside one tick period can leave the host showing the followed value while the machine
+    // plays the host's, until the next change of either.
+    const int sound = soundNow();
     int marker = sound;
     if (followed_.compare_exchange_strong(marker, -1))
         engine_->adoptProgram(sound);
@@ -280,10 +296,7 @@ void Ks32Processor::getStateInformation(juce::MemoryBlock& dest) {
     juce::XmlElement xml("KS32State");
     xml.setAttribute("version", 1);
     const std::lock_guard<std::mutex> lock(stateMu_);  // a host may save from any thread (A21)
-    const auto snap = engine_ ? engine_->snapshot() : ens::app::Snapshot{};
-    const auto sel = snap.booted && snap.selectLen > 0
-                         ? std::vector<uint8_t>(snap.select.begin(), snap.select.begin() + snap.selectLen)
-                         : startSelect_;
+    const auto sel = select(engine_ ? engine_->snapshot() : ens::app::Snapshot{});
     if (!sel.empty())
         xml.setAttribute("select", juce::String::toHexString(sel.data(), static_cast<int>(sel.size()), 0));
     if (auto tree = params_.copyState().createXml()) xml.addChildElement(tree.release());
@@ -338,12 +351,30 @@ void Ks32Processor::setStateInformation(const void* data, int size) {
         startSelect_ = std::move(sel);
         haveStart_ = true;
         if (engine_) restart(Ram::Start);  // with no ROMs, setRomFolder starts from it
-    } else if (!sel.empty() && engine_ && !engine_->snapshot().booted) {
-        startSelect_ = sel;  // DECISION A23: the Standalone's wrapper state arrives before the first block
-        suspendProcessing(true);
-        engine_->setSelect(sel.data(), static_cast<int>(sel.size()));
-        suspendProcessing(false);
+    } else if (!sel.empty()) {
+        // DECISION A23: the Standalone's wrapper state arrives before the first block; its select is the one
+        // the next boot replays, and with no ROMs it waits for setRomFolder's restart. Once booted the
+        // running select stays what a state saves, and the engine sends this one when `sound` asks for it.
+        if (!engine_ || !engine_->snapshot().booted) startSelect_ = sel;
+        if (engine_) {
+            suspendProcessing(true);
+            engine_->setSelect(sel.data(), static_cast<int>(sel.size()));
+            suspendProcessing(false);
+        }
     }
+}
+
+// The select a state saves and a Keep or File restart keeps (A20, A21): the running one once booted,
+// else the one the start image came with.
+std::vector<uint8_t> Ks32Processor::select(const ens::app::Snapshot& snap) const {
+    if (snap.booted && snap.selectLen > 0) return {snap.select.begin(), snap.select.begin() + snap.selectLen};
+    return startSelect_;
+}
+
+// `sound` as a program; a non-finite value (a project file is not trusted) reads as 0.
+int Ks32Processor::soundNow() const {
+    const float v = sound_->load();
+    return std::isfinite(v) ? static_cast<int>(std::clamp(v, 0.0f, 127.0f)) : 0;
 }
 
 // DECISION A22: the instance's RAM (A21) to the shared file, temporary file then replace (A11).

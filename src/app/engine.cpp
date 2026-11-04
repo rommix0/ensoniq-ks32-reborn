@@ -101,6 +101,7 @@ void Engine::setSelect(const uint8_t* bytes, int len) {
     setSelLen_ = 0;
     setSelProgram_ = -1;
     if (len < 2 || len > static_cast<int>(setSel_.size())) return;
+    if ((bytes[0] & 0xF0) != 0xB0 && (bytes[0] & 0xF0) != 0xC0) return;  // it starts with its status
     const uint8_t ch = bytes[0] & 0x0F;
     int i = 0;
     while (len - i > 2) {
@@ -146,15 +147,19 @@ void Engine::sendSelect(const uint8_t* b, int n) {
 }
 
 void Engine::blockStart() {
+    bool bootEnd = false;
     if (!booted_ && frames_ >= kBootFrames) {
-        booted_ = true;
+        booted_ = bootEnd = true;
         current_ = 0;  // OS v3.01 powers on to ROM 00 (Plan 6)
         dirty_ = true;
     }
     if (!booted_) return;
     if (dirty_) {
-        if (requested_ >= 0 && requested_ != current_) {
-            if (setSelLen_ > 0 && setSelProgram_ == requested_) {
+        // DECISION A15: at the boot's end the restored select goes out once when it selects the request,
+        // even for program 0: the boot leaves ROM 00, and INT 00 differs from it only in its bank.
+        const bool restore = setSelLen_ > 0 && setSelProgram_ == requested_;
+        if (requested_ >= 0 && (requested_ != current_ || (bootEnd && restore))) {
+            if (restore) {
                 sendSelect(setSel_.data(), setSelLen_);
             } else {
                 const uint8_t bare[] = {static_cast<uint8_t>(0xC0 | channel_), static_cast<uint8_t>(requested_)};

@@ -2,6 +2,7 @@
 // everything inside 2040 x 720, no overlapping controls, and each LED beside its button.
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 
 #include "app/analog_map.h"
 #include "app/panel_layout.h"
@@ -114,4 +115,15 @@ TEST(analog_map_round_trips_rest_values) {
     CHECK(analogRaw(Analog::ModWheel, 0.0f) == 0x3FF);
     CHECK(analogRaw(Analog::Volume, 1.0f) == 0x3FF);
     CHECK(analogRaw(Analog::Volume, 0.0f) == 0);
+}
+
+// A value from a project file is not trusted: NaN gives the rest value, an infinity clamps.
+TEST(analog_map_non_finite) {
+    using ens::ks32::Analog;
+    const float inf = std::numeric_limits<float>::infinity();
+    CHECK(analogRaw(Analog::PitchWheel, std::numeric_limits<float>::quiet_NaN()) == 0x200);
+    CHECK(analogRaw(Analog::Volume, std::numeric_limits<float>::quiet_NaN()) == 0x3FF);
+    CHECK(analogRaw(Analog::Volume, inf) == 0x3FF);
+    CHECK(analogRaw(Analog::Volume, -inf) == 0);
+    CHECK(analogRaw(Analog::PitchWheel, inf) == 0);
 }

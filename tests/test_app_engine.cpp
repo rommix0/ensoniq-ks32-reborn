@@ -374,6 +374,10 @@ TEST(engine_restores_task1_kinds) {
     // A ROM sound picked after BankSet and back to ROM: the bank LSB 1 comes before the C0.
     roundTrip({ks32::Button::BankSet, ks32::Button::BankSet, ks32::Button::Bank5, ks32::Button::Screen5},
               {0xB0, 0x00, 0x00, 0x20, 0x01, 0xC0, 0x37}, "ROM   55", 55);
+    // INT 00: the boot leaves the machine on program 0 (ROM 00), so the select is sent although the
+    // program number already matches.
+    roundTrip({ks32::Button::BankSet, ks32::Button::Bank0, ks32::Button::Screen0},
+              {0xB0, 0x00, 0x00, 0x20, 0x00, 0xC0, 0x00}, "INT   00", 0);
 }
 
 TEST(engine_analog_waits_for_boot) {
