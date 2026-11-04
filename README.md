@@ -45,14 +45,14 @@ The full guide (settings, memory, the panel, the VST3 state, debug hooks) is
 Needs Windows, Visual Studio 2022 (MSVC x64) and CMake 3.20 or later. The first configure fetches JUCE 8 (about 150 MB) into the build folder.
 
 ```powershell
-cmake -S . -B build-app -G "Visual Studio 17 2022" -A x64 -DENS_BUILD_APP=ON -DENS_ROM_DIR="C:/path/to/roms"
+cmake -S . -B build-app -G "Visual Studio 17 2022" -A x64 -DENS_BUILD_APP=ON
 cmake --build build-app --config Release --target KS32_Standalone KS32_VST3 KS32_AppTests
 ```
 
-`ENS_ROM_DIR` is only for the checks that run the firmware; they skip without it. The emulator core, its tools and its tests (`src/`, `tools/`, `tests/`) build without JUCE, with MSVC or MinGW-w64:
+The checks that run the firmware read the ROMs from `ks-32/` (`-DENS_ROM_DIR=<folder>` points them elsewhere). The emulator core, its tools and its tests (`src/`, `tools/`, `tests/`) build without JUCE, with MSVC or MinGW-w64:
 
 ```powershell
-cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64 -DENS_ROM_DIR="C:/path/to/roms"
+cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64
 cmake --build build-msvc --config Release
 ctest --test-dir build-msvc -C Release --output-on-failure
 ```
@@ -62,7 +62,7 @@ ctest --test-dir build-msvc -C Release --output-on-failure
 `tools\dist.ps1` builds the Standalone and the VST3 with the static C++ runtime (no Visual C++ redistributable needed) and assembles `dist\KS-32-<version>` with this README, the license and the app guide:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\dist.ps1 -RomFolder C:\path\to\roms
+powershell -ExecutionPolicy Bypass -File tools\dist.ps1 -RomFolder ks-32
 ```
 
 `-RomFolder` copies the six ROM files into the dist's `roms` folder. A dist with ROMs is for your own use: do not publish it. Without `-RomFolder` the dist holds no Ensoniq material.

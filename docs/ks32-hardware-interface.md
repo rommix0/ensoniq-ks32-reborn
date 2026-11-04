@@ -476,9 +476,8 @@ Confidence: High for the tracks and for LEDs 0, 1, 7, 8 and 9; Medium for 6 and 
     - 31 runs about 140 more.
     - 02 and 3A run about 500 more.
     - 03 and 3B run about 18 more.
-  - Guess: 09 and 29 behave like a transport button acting on an empty sequence. The sequencer
-    may also need a clock the machine does not give it yet (OTIS interrupts, Task 7).
-  - These codes are not in `Button`.
+  - Settled by Plan 7 Task 3 (A14): 09 is Play (it sends MIDI Start, `FA`) and 29 is Stop/Continue
+    (MIDI Stop, `FC`); both are in `Button`. The other codes listed here are not.
 - **Bytes 0xBC–0xFF** followed by `00` act in runs like the bank and screen codes:
   - 0xBC–0xC4 act like Bank 1, 0xC5–0xD1 like Bank 2, and so on;
   - 0xF0–0xF1 act like Screen 0, and so on up to 0xFD, which acts like Screen 9;

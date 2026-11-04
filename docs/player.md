@@ -6,7 +6,7 @@ This page covers the offline commands, `render` and `waves`, and live `play` (Wi
 
 ## What you need
 
-- The ROM images in one directory (default `ks-32`, relative to the current directory): `sq1-u25.bin`, `sq1-u26.bin`, `rom2.u39`, `rom3.u38`. They are not in the repository. Run from the main checkout, or pass `--roms <dir>`.
+- The ROM images in one directory (default `ks-32`, relative to the current directory): `sq1-u25.bin`, `sq1-u26.bin`, `rom2.u39`, `rom3.u38`. The repository's `ks-32` folder holds them. Run from the repository root, or pass `--roms <dir>`.
 - The derived data (default `docs/rom-investigation/data`): `sample_map.json`, `esp/esp_programs.json`, `esp/effect_defaults.json`. Pass `--data <dir>` to use another copy.
 - Build: `cmake --build build` (MinGW) or `cmake --build build-msvc --config Release`. The executable is `ks32play` (`ks32play.exe` on Windows).
 

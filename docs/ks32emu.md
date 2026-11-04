@@ -8,7 +8,7 @@ This page covers `boot`, `render`, `play` and `bench`.
 
 ## What you need
 
-- The ROM images in one directory. `--roms <dir>` names it, and the default is `ks-32`, relative to the current directory, so run from the main checkout or pass `--roms`. The directory holds `sq1-u25.bin`, `sq1-u26.bin`, `rom2.u39` and `rom3.u38`, and under `ks32/` the OS images `ks32v301upper.bin` and `ks32v301lower.bin`. The ROMs are not in the repository.
+- The ROM images in one directory. `--roms <dir>` names it, and the default is `ks-32`, relative to the current directory, so run from the main checkout or pass `--roms`. The directory holds `sq1-u25.bin`, `sq1-u26.bin`, `rom2.u39` and `rom3.u38`, and under `ks32/` the OS images `ks32v301upper.bin` and `ks32v301lower.bin`. The repository's `ks-32` folder holds them.
 - Build: `cmake --build build` (MinGW) or `cmake --build build-msvc --config Release`. The executable is `ks32emu` (`ks32emu.exe` on Windows). `play` needs Windows (WinMM and WASAPI); the other commands run anywhere.
 
 ## Commands

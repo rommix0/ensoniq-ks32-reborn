@@ -11,12 +11,12 @@ The design is `docs/design/2026-10-28-ks32-juce-app-design.md`, the decisions ar
 The app is behind the CMake option `ENS_BUILD_APP` (default OFF), so the default builds (`build/`, `build-msvc/`) never need JUCE. It builds only with MSVC x64:
 
 ```powershell
-cmake -S . -B build-app -G "Visual Studio 17 2022" -A x64 -DENS_BUILD_APP=ON -DENS_ROM_DIR="C:/path/to/ks-32"
+cmake -S . -B build-app -G "Visual Studio 17 2022" -A x64 -DENS_BUILD_APP=ON
 cmake --build build-app --config Release --target KS32_Standalone KS32_VST3 KS32_AppTests
 ```
 
 - The first configure fetches JUCE 8.0.16-security (git, about 150 MB) into `build-app/_deps`. Nothing is fetched into the source tree.
-- `ENS_ROM_DIR` is used only by the checks in `KS32_AppTests`; the app itself has no compiled-in ROM path.
+- `ENS_ROM_DIR` (default: the repository's `ks-32` folder) is used only by the checks in `KS32_AppTests`; the app itself has no compiled-in ROM path.
 - The outputs are `build-app\app\KS32_artefacts\Release\Standalone\KS-32.exe` and the bundle folder `build-app\app\KS32_artefacts\Release\VST3\KS-32.vst3`. The build does not install the VST3; to use it in a DAW, copy the `KS-32.vst3` folder to `C:\Program Files\Common Files\VST3` (or a folder the DAW scans).
 - Checks: `build-app\app\KS32_AppTests_artefacts\Release\KS32_AppTests.exe` (or `ctest --test-dir build-app -C Release -R app_tests`). It checks the ROM folder and the memory file, the host parameters, the state and the memory rules, and loads the built VST3 through JUCE's VST3 host: boot, a note, sound on both channels, the editor, and a second instance given the first's state (it skips that part without the ROMs).
 
@@ -24,7 +24,7 @@ cmake --build build-app --config Release --target KS32_Standalone KS32_VST3 KS32
 
 ## First start and the ROMs
 
-The ROMs are not in the repository. The app needs six files in one folder:
+The repository's `ks-32` folder holds the ROMs. The app needs six files in one folder:
 
 | File | What it is |
 |---|---|
