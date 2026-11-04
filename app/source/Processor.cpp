@@ -55,9 +55,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout Ks32Processor::layout() {
     return l;
 }
 
-Ks32Processor::Ks32Processor()
+Ks32Processor::Ks32Processor(MemoryMode mode)
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      params_(*this, nullptr, "KS32", layout()) {
+      mode_(mode), params_(*this, nullptr, "KS32", layout()) {
     for (size_t i = 0; i < std::size(kAnalogParams); ++i)
         analogRaw_[i] = params_.getRawParameterValue(kAnalogParams[i].id);
     sound_ = params_.getRawParameterValue("sound");
@@ -72,7 +72,9 @@ Ks32Processor::Ks32Processor()
 Ks32Processor::~Ks32Processor() {
     stopTimer();
     // DECISION A11: saved on close only once booted; audio has stopped, so the machine is read directly.
-    if (engine_ && engine_->snapshot().booted) saveMemoryFile(settings_.memoryFile(), engine_->machine().ramImage());
+    // DECISION A22: File mode only; a plugin instance's memory is in the project.
+    if (mode_ == MemoryMode::File && engine_ && engine_->snapshot().booted)
+        saveMemoryFile(settings_.memoryFile(), engine_->machine().ramImage());
 }
 
 // Refused, with the reason in err, when the memory file is inside the new folder: it would load the
@@ -108,7 +110,15 @@ bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
 // not held back by the boot gate) and restarts the machine from it, so the firmware rebuilds its
 // memory as it boots. With no machine, only the file is erased. If the write fails, nothing is
 // erased and the machine runs on; the settings page says so.
+// DECISION A22: in Project mode this instance alone restarts cold from zeros; the shared file is left alone.
 void Ks32Processor::eraseMemory() {
+    if (mode_ == MemoryMode::Project) {
+        startImage_.assign(static_cast<size_t>(kMemoryBytes), 0);
+        startSelect_.clear();
+        haveStart_ = true;
+        if (engine_) restart(Ram::Start);
+        return;
+    }
     if (!saved(eraseMemoryFile(settings_.memoryFile()))) return;
     memoryError_ = {};
     if (engine_) restart(Ram::File);
@@ -126,20 +136,31 @@ bool Ks32Processor::saved(bool ok) {
 
 bool Ks32Processor::restart(Ram ram) {
     suspendProcessing(true);  // from here the audio thread is out of processBlock, and stays out
-    std::vector<uint8_t> img;
-    if (ram == Ram::Keep && engine_ && engine_->snapshot().booted)
+    const auto snap = engine_ ? engine_->snapshot() : ens::app::Snapshot{};
+    std::vector<uint8_t> img, sel;
+    if (ram == Ram::Keep && snap.booted) {
         img = engine_->machine().ramImage();  // audio stopped: the machine is ours to read
-    else
+        sel.assign(snap.select.begin(), snap.select.begin() + snap.selectLen);
+    } else if (ram != Ram::File && haveStart_) {
+        img = startImage_;  // DECISION A21: never a half-booted image, nor the file over a project's image
+        sel = startSelect_;
+    } else {
         img = loadMemoryFile(settings_.memoryFile(), memoryError_);  // wrong size: reported, cold boot
+    }
     std::string e;
     auto fresh = ens::app::Engine::create(roms_, e);
     if (fresh && !img.empty() && !fresh->loadRam(img, e)) fresh.reset();
     const bool ok = fresh != nullptr;
     if (ok) {
+        fresh->setSelect(sel.data(), static_cast<int>(sel.size()));
         if (rate_ > 0) fresh->prepare(rate_, block_);
         engine_.swap(fresh);  // fresh now holds the old engine, freed below after the resume
+        startImage_ = std::move(img);
+        startSelect_ = std::move(sel);
+        haveStart_ = true;
         ramPending_ = false;
         lastSeq_ = 0;  // a new engine counts from 0
+        followed_ = -1;  // a stale follow marker would make the new engine adopt the sound, not send it
         ticks_ = 0;
         romError_ = {};
     } else if (!engine_) {
@@ -175,7 +196,7 @@ void Ks32Processor::tick() {
             ramPending_ = false;
             saved(saveMemoryFile(settings_.memoryFile(), ramBuf_));
         }
-    } else if (++ticks_ >= 1800 && engine_->snapshot().booted) {
+    } else if (mode_ == MemoryMode::File && ++ticks_ >= 1800 && engine_->snapshot().booted) {  // A22
         ticks_ = 0;
         engine_->requestRam();
         ramPending_ = true;
@@ -215,6 +236,111 @@ void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     // DECISION A12: every byte of every message, sysex and real-time included, as the MIDI IN jack.
     for (const auto m : midi) engine_->midi(m.samplePosition, m.data, m.numBytes);
     engine_->render(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());
+}
+
+// DECISION A21: once booted, the running RAM. The audio thread copies it (requestRam); the message
+// thread waits at most 300 ms for the copy, then, as no block ran (the machine is not running either),
+// reads the machine under suspendProcessing. Off the message thread (perhaps the audio thread) nothing
+// waits: the start image. Before the boot ends, the start image (anti-goal: chaining short boots); with
+// no machine, the image a state gave, unchanged (anti-goal: losing a project's memory).
+// The 60 s save (ramPending_) also uses requestRam/takeRam, but only in File mode, whose state has no
+// RAM and which refuses copyToSharedMemory: the two users never meet in one instance.
+std::vector<uint8_t> Ks32Processor::ram() {
+    // ponytail: a host saving off the message thread loses the edits since the boot; keep the last
+    // copy taken here if one does.
+    if (!engine_ || !engine_->snapshot().booted || !juce::MessageManager::existsAndIsCurrentThread())
+        return startImage_;
+    std::vector<uint8_t> img;
+    engine_->takeRam(img);  // a copy left by a request that timed out is stale: dropped
+    engine_->requestRam();
+    for (int i = 0; i < 60; ++i) {
+        if (engine_->takeRam(img)) return img;
+        juce::Thread::sleep(5);
+    }
+    suspendProcessing(true);
+    img = engine_->machine().ramImage();
+    suspendProcessing(false);
+    return img;
+}
+
+// DECISION A20: copyXmlToBinary of <KS32State version="1" select="c037">, the parameter tree and, in
+// Project mode, <RAM> (65 536 bytes, base64). `select` is the running selection once booted, else the
+// one the start image came with.
+void Ks32Processor::getStateInformation(juce::MemoryBlock& dest) {
+    juce::XmlElement xml("KS32State");
+    xml.setAttribute("version", 1);
+    const auto snap = engine_ ? engine_->snapshot() : ens::app::Snapshot{};
+    const auto sel = snap.booted && snap.selectLen > 0
+                         ? std::vector<uint8_t>(snap.select.begin(), snap.select.begin() + snap.selectLen)
+                         : startSelect_;
+    if (!sel.empty())
+        xml.setAttribute("select", juce::String::toHexString(sel.data(), static_cast<int>(sel.size()), 0));
+    if (auto tree = params_.copyState().createXml()) xml.addChildElement(tree.release());
+    if (mode_ == MemoryMode::Project)  // DECISION A23: the Standalone's state has no RAM; its memory is the file
+        if (const auto img = ram(); !img.empty())
+            xml.createNewChildElement("RAM")->addTextElement(juce::Base64::toBase64(img.data(), img.size()));
+    copyXmlToBinary(xml, dest);
+}
+
+// DECISION A20: a blob that is not a KS32State is ignored. Otherwise the parameters are replaced and a
+// valid `select` sets `sound` to its program (the state may predate the timer's follow, A18). In Project
+// mode a version 1 RAM of 65 536 bytes restarts the machine from it with that selection; with no ROMs it
+// waits as the start image. No RAM, a wrong size or another version leaves the machine as it is.
+void Ks32Processor::setStateInformation(const void* data, int size) {
+    const auto xml = getXmlFromBinary(data, size);
+    if (!xml || !xml->hasTagName("KS32State")) return;
+    if (const auto* tree = xml->getChildByName(params_.state.getType()))
+        params_.replaceState(juce::ValueTree::fromXml(*tree));
+
+    juce::MemoryBlock hex;
+    hex.loadFromHexString(xml->getStringAttribute("select"));
+    const auto* b = static_cast<const uint8_t*>(hex.getData());
+    const auto n = hex.getSize();
+    std::vector<uint8_t> sel;
+    if (n >= 2 && n <= 8 && (b[n - 2] & 0xF0) == 0xC0 && b[n - 1] < 0x80) {  // ends Cn pp; setSelect checks the rest
+        sel.assign(b, b + n);
+        if (auto* p = params_.getParameter("sound"))
+            p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(b[n - 1])));
+    }
+
+    std::vector<uint8_t> img;
+    if (const auto* r = xml->getChildByName("RAM");
+        r != nullptr && mode_ == MemoryMode::Project && xml->getIntAttribute("version") == 1) {
+        juce::MemoryOutputStream out;
+        if (juce::Base64::convertFromBase64(out, r->getAllSubText()) &&
+            out.getDataSize() == static_cast<size_t>(kMemoryBytes)) {
+            const auto* p = static_cast<const uint8_t*>(out.getData());
+            img.assign(p, p + out.getDataSize());
+        }
+    }
+    if (!img.empty()) {
+        startImage_ = std::move(img);
+        startSelect_ = std::move(sel);
+        haveStart_ = true;
+        if (engine_) restart(Ram::Start);  // with no ROMs, setRomFolder starts from it
+    } else if (!sel.empty() && engine_ && !engine_->snapshot().booted) {
+        startSelect_ = sel;  // DECISION A23: the Standalone's wrapper state arrives before the first block
+        suspendProcessing(true);
+        engine_->setSelect(sel.data(), static_cast<int>(sel.size()));
+        suspendProcessing(false);
+    }
+}
+
+// DECISION A22: the instance's RAM (A21) to the shared file, temporary file then replace (A11).
+bool Ks32Processor::copyToSharedMemory(juce::String& err) {
+    if (mode_ == MemoryMode::File) {
+        err = "The Standalone saves the memory file itself.";
+        return false;
+    }
+    if (!engine_ || !engine_->snapshot().booted) {
+        err = "The machine has not finished booting. Try again when it has.";
+        return false;
+    }
+    if (!saved(saveMemoryFile(settings_.memoryFile(), ram()))) {
+        err = memoryError_;
+        return false;
+    }
+    return true;
 }
 
 juce::AudioProcessorEditor* Ks32Processor::createEditor() { return new PanelEditor(*this); }

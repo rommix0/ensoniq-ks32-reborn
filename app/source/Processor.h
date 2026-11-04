@@ -9,10 +9,21 @@
 #include "app/analog_map.h"
 #include "app/engine.h"
 
+// DECISION A22: File, the Standalone: the memory file is the machine's memory, saved on close and every
+// 60 s (A11). Project, every plugin format: the instance starts from the shared file, then its memory
+// lives in the plugin state; nothing writes the file but "Copy to shared memory".
+enum class MemoryMode { File, Project };
+
 class Ks32Processor : public juce::AudioProcessor, private juce::Timer {
 public:
-    Ks32Processor();
-    ~Ks32Processor() override;  // saves the memory (A11)
+    // File when loaded as the Standalone, else Project (the checks construct directly: Project).
+    static MemoryMode defaultMemoryMode() {
+        return juce::PluginHostType::getPluginLoadedAs() == wrapperType_Standalone ? MemoryMode::File
+                                                                                   : MemoryMode::Project;
+    }
+    explicit Ks32Processor(MemoryMode mode = defaultMemoryMode());
+    ~Ks32Processor() override;  // File mode: saves the memory (A11)
+    MemoryMode memoryMode() const { return mode_; }
 
     ens::app::Engine* engine() { return engine_.get(); }  // null until the ROMs are good
     // Why there is no engine, two display rows separated by '\n' (design section 6.3).
@@ -34,8 +45,11 @@ public:
     // folder, one that cannot be written or one of the wrong size is refused (err) and the setting stays.
     bool setMemoryFile(const juce::File& file, juce::String& err);
     // Zeros to the file, then a cold machine (A11, R7); the caller has confirmed. A failed write
-    // leaves the machine running and sets memoryError.
+    // leaves the machine running and sets memoryError. Project mode: a cold machine, the file untouched (A22).
     void eraseMemory();
+    // Project mode, once booted: writes the running RAM (A21) to the memory file. False with err before
+    // the boot, in File mode, or when the write fails (also memoryError).
+    bool copyToSharedMemory(juce::String& err);
 
     void prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock) override;
     void releaseResources() override {}
@@ -58,19 +72,26 @@ public:
     const juce::String getProgramName(int) override { return {}; }
     void changeProgramName(int, const juce::String&) override {}
 
-    // No plugin state in this plan (design section 4).
-    void getStateInformation(juce::MemoryBlock&) override {}
-    void setStateInformation(const void*, int) override {}
+    // DECISION A20: <KS32State version="1" select="..."> with the parameters and, in Project mode, <RAM>.
+    void getStateInformation(juce::MemoryBlock& dest) override;
+    void setStateInformation(const void* data, int size) override;
 
 private:
-    enum class Ram { Keep, File };
+    // Keep: the running RAM once booted, else the start image. File: the memory file. Start: the start image.
+    enum class Ram { Keep, File, Start };
     bool restart(Ram ram);  // a new engine from roms_; the old one stays if that fails
+    std::vector<uint8_t> ram();  // the RAM a state or a copy saves (A21); empty when there is none
     void timerCallback() override { tick(); }
     bool saved(bool ok);            // ok; a failure sets memoryError_, a success clears that
 
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
 
+    const MemoryMode mode_;
     AppSettings settings_;
+    // DECISION A21: the image the machine last started from and the selection to replay with it; set
+    // by each restart, or by a state that arrives with no ROMs (used once they are good).
+    std::vector<uint8_t> startImage_, startSelect_;
+    bool haveStart_ = false;
     ens::ks32::RomSet roms_;  // the last good set; empty until then
     std::unique_ptr<ens::app::Engine> engine_;
     juce::String romError_, memoryError_;
