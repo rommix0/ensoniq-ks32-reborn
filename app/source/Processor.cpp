@@ -40,6 +40,7 @@ constexpr AnalogParam kAnalogParams[] = {{"volume", "Volume", Analog::Volume},
                                          {"dataEntry", "Data Entry", Analog::DataEntry},
                                          {"pitchWheel", "Pitch Wheel", Analog::PitchWheel},
                                          {"modWheel", "Mod Wheel", Analog::ModWheel}};
+static_assert(std::size(kAnalogParams) == 4, "Ks32Processor::analogRaw_ has four slots");
 }  // namespace
 
 // DECISION A17: the analogs and the sound are host parameters (automatable): four floats 0..1 whose
@@ -57,7 +58,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout Ks32Processor::layout() {
 Ks32Processor::Ks32Processor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       params_(*this, nullptr, "KS32", layout()) {
-    for (size_t i = 0; i < std::size(kAnalogParams); ++i) analogRaw_[i] = params_.getRawParameterValue(kAnalogParams[i].id);
+    for (size_t i = 0; i < std::size(kAnalogParams); ++i)
+        analogRaw_[i] = params_.getRawParameterValue(kAnalogParams[i].id);
     sound_ = params_.getRawParameterValue("sound");
     // No compiled-in default: the first start, with no settings, opens with no ROMs.
     if (const auto dir = settings_.romFolder(); dir != juce::File())
@@ -153,16 +155,19 @@ bool Ks32Processor::restart(Ram ram) {
 void Ks32Processor::tick() {
     if (!engine_) return;
     // DECISION A18: follow a program change tracked from the panel or MIDI (programSeq moved), never the
-    // engine's own sends. The parameter is written first, then followed_ says so: processBlock reads
-    // followed_ before `sound`, so a follow it sees always sees its value.
+    // engine's own sends. followed_ is stored first, then `sound` is written, so a processBlock that sees
+    // the new `sound` also finds the marker (and adopts the value instead of sending it). A marker the
+    // host overwrote before any block took it is cleared here.
+    if (int m = followed_.load(); m >= 0 && m != static_cast<int>(sound_->load()))
+        followed_.compare_exchange_strong(m, -1);
     const auto snap = engine_->snapshot();
     if (snap.program >= 0 && snap.programSeq != lastSeq_) {
         lastSeq_ = snap.programSeq;
         if (auto* p = params_.getParameter("sound"); p != nullptr && static_cast<int>(sound_->load()) != snap.program) {
+            followed_.store(snap.program);
             p->beginChangeGesture();
             p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(snap.program)));
             p->endChangeGesture();
-            followed_.store(snap.program);
         }
     }
     if (ramPending_) {
@@ -196,12 +201,15 @@ void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     }
     // Parameter values cross as atomic raw values: no lock, no allocation (A17).
     for (size_t i = 0; i < std::size(kAnalogParams); ++i)
-        engine_->setAnalog(kAnalogParams[i].analog, ens::app::analogRaw(kAnalogParams[i].analog, analogRaw_[i]->load()));
-    // DECISION A18: take followed_ before reading `sound` (see tick).
-    const int followed = followed_.exchange(-1);
+        engine_->setAnalog(kAnalogParams[i].analog,
+                           ens::app::analogRaw(kAnalogParams[i].analog, analogRaw_[i]->load()));
+    // DECISION A18: a `sound` that tick() just followed (it holds the marker) is adopted, not sent. Any
+    // other value is a host request. Remaining case: a panel pick and a host change of `sound` inside
+    // one tick period can leave the host showing the followed value while the machine plays the host's.
     const int sound = static_cast<int>(sound_->load());
-    if (sound == followed)
-        engine_->adoptProgram(sound);  // the panel or MIDI chose it: never sent back
+    int marker = sound;
+    if (followed_.compare_exchange_strong(marker, -1))
+        engine_->adoptProgram(sound);
     else
         engine_->setProgram(sound);
     // DECISION A12: every byte of every message, sysex and real-time included, as the MIDI IN jack.
