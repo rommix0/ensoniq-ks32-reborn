@@ -1,3 +1,5 @@
+![](app_preview.png)
+
 # Ensoniq KS-32 Reborn
 
 An emulator of the Ensoniq KS-32 (1992), the 76-key weighted-action "MIDI Studio" synthesizer. It runs the instrument's own operating system, OS v3.01, from your ROM files on an emulated machine: a 68000 CPU, the ES5505 OTIS wave chip, the ES5510 ESP effects chip, the 68681 DUART and the front panel link. Every screen, sound and effect comes from the original firmware, unmodified.
