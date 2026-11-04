@@ -58,16 +58,16 @@ When a project loads, the instance restarts from the project's RAM (a warm boot)
 | Start | from the memory file | from the project's RAM if the project has one, else from the memory file |
 | Saves to the memory file on close and every 60 s | yes (A11) | **no** |
 | Sound and the analogs | from JUCE's own wrapper state in `KS-32.settings` (A23); the RAM is not in it | from the project |
-| **Erase memory…** | zeros to the file, then a cold boot | this instance only: a cold boot from zeros; the file is left alone |
-| **Change…** (memory file) | picks the file and restarts from it | picks the shared file and restarts this instance from it |
+| **Erase memory…** | zeros to the file, then a cold boot on ROM 00 (Sound goes to 0) | this instance only: a cold boot from zeros on ROM 00 (Sound goes to 0); the file is left alone |
+| **Change…** (memory file) | picks the file and restarts from it, keeping the sound | picks the shared file and restarts this instance from it, keeping the sound |
 | **Copy to shared memory…** | not shown | asks first, then writes this instance's RAM to the shared file (once booted). New instances then start from it |
 
 The settings page says, in the VST3, that the instance's memory is in the project and that new instances start from the shared file.
 
-**The five parameters** (A17): Volume, Data Entry, Pitch Wheel and Mod Wheel (0 to 1, the position of the control as drawn) and Sound (a whole number, 0 to 127). A drag on a slider or wheel is one host gesture, so the host records automation; the pitch wheel springs back to centre. The editor draws the controls from the parameters, so a reopened editor and an automation lane show the true position. The Sound parameter shows numbers (0 to 127) and follows the sound picked on the panel or by MIDI. With a Sound lane in read mode, the lane overrides panel picks, as automation does in any host.
+**The five parameters** (A17): Volume, Data Entry, Pitch Wheel and Mod Wheel (0 to 1, the position of the control as drawn) and Sound (a whole number, 0 to 127). A drag on a slider or wheel is one host gesture, so the host records automation; the pitch wheel springs back to centre. The editor draws the controls from the parameters, so a reopened editor and an automation lane show the true position. The Sound parameter shows numbers (0 to 127) and follows the sound picked on the panel or by MIDI. With a Sound lane in read mode, the lane overrides panel picks, as automation does in any host. A rare case: a panel pick and a host change of Sound within one 30 Hz tick can leave the host showing the panel's sound while the machine plays the host's, until the next change of either (A18).
 
 **Which sounds come back** (A15, `docs/ks32-hardware-interface.md`). The firmware sends program changes on MIDI out, and the app replays them after the boot:
-- ROM sounds and INT sounds come back (INT with the bank select the firmware sent).
+- ROM sounds and INT sounds come back (INT with the bank select the firmware sent), INT 00 included.
 - **Presets do not come back.** Selecting a preset sends nothing on MIDI out, so the app cannot know it; the instance returns on ROM 00 and its memory is intact.
 - Not tried: other MIDI channels, and the Select Sound pages after a bank select alone.
 - **Prog Change= OFF** (System/MIDI) makes the firmware ignore program changes, so the restore does nothing, and the Sound parameter does nothing either. Leave it on.

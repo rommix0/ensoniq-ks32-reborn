@@ -4,17 +4,17 @@ Closing check of Plan 8 (the KS-32 VST3 release: the sound and the analogs track
 
 The usage is in `docs/ks32app.md`. The decisions are `A15` to `A23` in `docs/decisions.md` (`# KS-32 app`). The design is `docs/design/2026-11-04-ks32-vst3-release-design.md`. The facts the plan relies on are in `docs/ks32-hardware-interface.md` ("MIDI" and "Battery RAM").
 
-All figures below are from runs on 2026-11-04 on the branch `plan8-vst3-release` (code as of `cc7bd64`; the documents commit changes one comment in `app/source/Processor.cpp` and no code).
+All figures below are from runs on 2026-11-04 on the branch `plan8-vst3-release`, re-recorded after the final review's fixes (I1, M1 to M4; code as of `b33bd91`).
 
 ## Test counts
 
 | Toolchain | Result |
 |---|---|
-| MinGW-w64 g++ 14.2.0, i686, Ninja, Release (`build`) | `build\ens_tests.exe`: **388 passed, 0 failed**. `build\ens_rt_tests.exe`: **3 passed, 0 failed** |
-| MSVC 19.44, x64, Release (`build-msvc`) | `build-msvc\Release\ens_tests.exe`: **388 passed, 0 failed**. `build-msvc\Release\ens_rt_tests.exe`: **3 passed, 0 failed** |
+| MinGW-w64 g++ 14.2.0, i686, Ninja, Release (`build`) | `build\ens_tests.exe`: **389 passed, 0 failed**. `build\ens_rt_tests.exe`: **3 passed, 0 failed** |
+| MSVC 19.44, x64, Release (`build-msvc`) | `build-msvc\Release\ens_tests.exe`: **389 passed, 0 failed**. `build-msvc\Release\ens_rt_tests.exe`: **3 passed, 0 failed** |
 | MSVC x64, Release, with the app (`build-app`) | `KS32_AppTests.exe`: **app_tests: all passed** (exit 0), with the VST3 lines below |
 
-Plan 7 ended at 376 tests; Plan 8 added 12 to `ens_tests` (the engine's sound tracking and restore, the analogs after the boot, the note mask and the analog map) and the new checks in `app_tests`. The builds use `-DENS_ROM_DIR` as in Plan 7, so no firmware test skips.
+Plan 7 ended at 376 tests; Plan 8 added 13 to `ens_tests` (the engine's sound tracking and restore, the analogs after the boot, the note mask and the analog map, `analog_map_non_finite` from the final review) and the new checks in `app_tests`. `engine_restores_task1_kinds` now also restores INT 00. The builds use `-DENS_ROM_DIR` as in Plan 7, so no firmware test skips.
 
 ## Real-time tests (`ens_rt_tests`)
 
@@ -54,9 +54,10 @@ The engine's tests (`engine_restores_task1_kinds`, A15) replay these through the
 
 ## The app checks (`app_tests`)
 
-Beside the Plan 7 checks (ROM folder, memory file, the guards), `app_tests` now covers: the host `parameters`; the sound `follow` on the real ROMs (A18); `stateRoundTrip`, `stateBadBlobs`, `stateDuringBoot`, `stateWithoutRoms` and `stateThreads` (A20, A21); `projectLeavesSharedFile` (A22); `standaloneNoRam` (A23). The VST3 part of the last run:
+Beside the Plan 7 checks (ROM folder, memory file, the guards), `app_tests` now covers: the host `parameters`; the sound `follow` on the real ROMs (A18); `stateRoundTrip`, `stateBadBlobs`, `stateDuringBoot`, `stateWithoutRoms` and `stateThreads` (A20, A21); `projectLeavesSharedFile` (A22); `standaloneNoRam` and `standaloneStateBeforeBoot` (A23); `int00Restarts` (A15, A21, A22: INT 00 through a state, a ROM-folder change and Change..., then Erase to ROM 00 with Sound 0). The output of the last run (the `standaloneStateBeforeBoot` display after System/MIDI, then the VST3 part):
 
 ```
+  standalone display: [Master Tune= +00Global Bend= 02 ]
   VST3 note peak: 0.1601 0.1780
   VST3 editor: 1360 x 480
   VST3 restored sound: 55
@@ -86,9 +87,9 @@ These need a person, a DAW, the Q25 or ears. D1 to D8 are in FL Studio or Cakewa
 | D5 | Draw a Volume automation lane and play | The slider and the level follow it | `parameters` | user to run |
 | D6 | Draw a Sound lane: the display changes sound. Then turn the lane off and pick a sound on the panel | The host's Sound value follows the panel pick | `follow` | user to run |
 | D7 | Play notes from the track | The keys on the panel light while held | `engine_note_mask` | user to run |
-| D8 | Put INT 34 on an instance (BankSet, Bank 3, Screen 4). Save and reopen | It comes back on INT 34 | `engine_restores_task1_kinds`; `stateRoundTrip` uses ROM 55 only | user to run |
+| D8 | Put INT 34 on an instance (BankSet, Bank 3, Screen 4). Save and reopen. Repeat with INT 00 (BankSet, Bank 0, Screen 0) | It comes back on INT 34, and on INT 00 | `engine_restores_task1_kinds` (INT 34, INT 00), `int00Restarts` | user to run |
 | S6 | In the Standalone, drag Volume, close and reopen the editor. Play a Q25 note. Press Up/Yes on the panel | Volume is drawn where it was left; the Q25 note lights its key; the panel pick shows the new sound | `parameters`, `engine_note_mask`, a launch smoke | user to run |
-| S7 | In the Standalone, pick ROM 55 and lower Volume. Close, reopen | After the boot it is on ROM 55, Volume is where it was, and Master Tune keeps its value from the memory file | `standaloneNoRam`, a launch smoke | user to run |
+| S7 | In the Standalone, pick ROM 55 and lower Volume. Close, reopen | After the boot it is on ROM 55, Volume is where it was, and Master Tune keeps its value from the memory file | `standaloneNoRam`, `standaloneStateBeforeBoot`, a launch smoke | user to run |
 
 ## Controller rulings
 
@@ -101,7 +102,8 @@ These need a person, a DAW, the Q25 or ears. D1 to D8 are in FL Studio or Cakewa
 - **Presets** cannot come back (no MIDI out when selected). Other MIDI channels and the Select Sound pages after a bank select alone were not tried (A15).
 - **A host that stops calling `processBlock`** (for example FL Studio's Smart Disable) makes each such instance take up to 300 ms on a project save (A21).
 - **Thread limits** (A21): a host that runs one instance's `processBlock` on several threads is seen as its last one; a save on a previously recorded audio worker thread while `processBlock` has migrated to another worker can read the RAM during a block (rare).
-- **A panel pick and a host change of Sound inside one 30 Hz tick** can leave the host showing the followed value while the machine plays the host's, until the next change of either (A18; argued, not run).
+- **A panel pick and a host change of Sound inside one 30 Hz tick** can leave the host showing the followed value while the machine plays the host's, until the next change of either (A18; argued, not run). The one-follow-at-a-time rule (a tick starts no follow while a marker waits for a block) is also argued, not run.
+- **A saved selection loaded into a running Standalone** ("Load a saved state...") whose program number the machine is already on (INT 00 against ROM 00, say) is not sent: only the boot's end sends a selection whose number matches (A15, A23).
 - **Prog Change= OFF** stops the restore and the Sound parameter (documented).
 - **CPU**: each instance is a whole KS-32.
 - **MIDI out** is still counted and not sent anywhere.
@@ -118,7 +120,7 @@ User verdict: pending.
 ```powershell
 $env:PATH = "C:\winlibs\mingw32\bin;" + $env:PATH
 cmake --build build; cmake --build build-msvc --config Release
-.\build\ens_tests.exe; .\build-msvc\Release\ens_tests.exe           # 388 passed; boot trace and render hashes
+.\build\ens_tests.exe; .\build-msvc\Release\ens_tests.exe           # 389 passed; boot trace and render hashes
 .\build\ens_rt_tests.exe; .\build-msvc\Release\ens_rt_tests.exe     # 3 passed, allocations 0
 $rom = "C:\Users\abart\Desktop\Ensoniq KS-32\ks-32"
 .\build\ks32emu.exe render tests\data\player_smoke.mid smoke_mingw.wav --roms $rom        # pcm hash a479ba867298cc55
