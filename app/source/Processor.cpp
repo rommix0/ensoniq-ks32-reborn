@@ -274,6 +274,8 @@ std::vector<uint8_t> Ks32Processor::ram() {
 // DECISION A20: copyXmlToBinary of <KS32State version="1" select="c037">, the parameter tree and, in
 // Project mode, <RAM> (65 536 bytes, base64). `select` is the running selection once booted, else the
 // one the start image came with.
+// It takes the state mutex on every thread, the audio thread included: a wait, bounded, behind a
+// concurrent save or restart. processBlock itself never takes it.
 void Ks32Processor::getStateInformation(juce::MemoryBlock& dest) {
     juce::XmlElement xml("KS32State");
     xml.setAttribute("version", 1);
