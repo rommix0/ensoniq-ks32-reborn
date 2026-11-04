@@ -1,7 +1,7 @@
 # KS-32 VST3 Release (Plan 8): Design
 
 Date: 2026-11-04
-Status: approved by the user, 2026-11-04 ("Approve, subagents"); plan `docs/superpowers/plans/2026-11-04-ks32-vst3-release.md`.
+Status: implemented by Plan 8 (branch plan8-vst3-release, `docs/verification-plan8.md`), pending user acceptance. Approved by the user, 2026-11-04 ("Approve, subagents"); plan `docs/superpowers/plans/2026-11-04-ks32-vst3-release.md`.
 Follows: `docs/design/2026-10-28-ks32-juce-app-design.md` (Plan 7, "the app design"), whose section 4
 deferred plugin state, host automation and multiple instances to this stage. Plan 7 passed the
 user's acceptance on 2026-11-04 (`docs/verification-plan7.md`); its V1 note 2 is the reason for this

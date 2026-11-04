@@ -115,10 +115,11 @@ Notes from the acceptance pass (2026-11-04):
 - **Record** has no code (A14). Play and Stop/Continue are named from the MIDI bytes they send (Medium); how Continue is given was not tested.
 - **Display glyphs** for 0x00–0x1F and 0x7F (A7) and the boot's custom character (`93`): drawn blank, with a hex overlay.
 - **The blink rate** (A8): 2 Hz, a choice, not a measurement.
-- **Several VST3 instances share one memory file**, with no lock: the last writer wins (`docs/ks32app.md`).
-- **No plugin state**: the VST3 saves nothing in the host's project; its memory is the memory file (design section 4).
 - **MIDI out** from the firmware is counted and not sent anywhere (design section 4).
-- **Reopening the VST3 editor** draws the sliders and wheels at rest, while the machine keeps the values the last editor sent; the next drag jumps (Task 7).
+- **Closed by Plan 8** (`docs/verification-plan8.md`):
+  - Several VST3 instances sharing one memory file: a VST3 keeps its memory in the project and never writes the file by itself (A22).
+  - No plugin state: the project saves the parameters, the sound and the RAM (A20, A21).
+  - Reopening the VST3 editor drew the analogs at rest: the editor now draws them from the host parameters (A17).
 - **The settings window** is about 876 px tall on a device with 8 outputs, taller than the 720 artboard; smaller screens get a scroll bar (Task 5).
 - **The View menu** for the display codes is the display's right-click menu, not a menu bar (A7).
 - **Keyboard focus** (final review): the keys, sliders and wheels cannot take keyboard focus, though design section 6.3 says every control has focus; the plan narrowed it to the buttons. Not changed.
@@ -150,7 +151,7 @@ Every minor item the task reviews deferred, one line each. Items carried into a 
 - A wrong-size file at the default path is overwritten by the first autosave (unstated in A11). Behavioural.
 - A failed `loadFileAsData` is ignored (harmless).
 - A failed restart keeps `ramPending_`, so the next tick could save the old RAM over the zeros. Behavioural, after a failure only.
-- Several VST3 instances share one memory file (above).
+- Several VST3 instances share one memory file (closed by Plan 8).
 
 **Task 6 (front-panel editor)**
 - Releasing Space can release a button the mouse still holds. Behavioural, minor.
@@ -166,7 +167,7 @@ Every minor item the task reviews deferred, one line each. Items carried into a 
 - A quick tap is lost if the press is refused by a full queue (no stuck state). Behavioural, rare.
 - Cross-part retries go in table order, not the user's order. Behavioural, rare.
 - `roundToInt` rounds halves to even; A10 says round (`std::lround` would match). Behavioural, one strike step.
-- The reopened VST3 editor draws the analogs at rest (above).
+- The reopened VST3 editor draws the analogs at rest (closed by Plan 8).
 - A release posted in the editor's destructor into a full queue is lost. Behavioural, rare.
 - The engine-pointer ABA reuse is theoretical. Code.
 

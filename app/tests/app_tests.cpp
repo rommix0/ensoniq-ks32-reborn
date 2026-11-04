@@ -1,16 +1,21 @@
 // KS-32 app checks: checkRomFolder on a temp folder of dummy files the right size (never ROM
 // content), the memory file's load and save, the processor's memory-file guards, and (ruling R8) the built KS-32.vst3 loaded,
-// played and its editor opened through JUCE's own VST3 host, as a DAW would.
+// played and its editor opened through JUCE's own VST3 host, as a DAW would. On the real ROMs: the
+// sound follow (A18), the plugin state and the memory per format (A20-A23).
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 #include "../source/AppSettings.h"
 #include "../source/MemoryFile.h"
 #include "../source/Processor.h"
 #include "../source/RomFolder.h"
+#include "app/analog_map.h"
+#include "ks32/panel.h"
 
 namespace {
 
@@ -98,7 +103,7 @@ void processor(const juce::File& dir) {
     dummyRoms(roms);
     _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
     AppSettings().setRomFolder(roms);
-    Ks32Processor p;
+    Ks32Processor p(MemoryMode::File);  // the memory file's own rules (A11)
     CHECK(p.engine() != nullptr);
 
     // A ROM is never the memory file, though ks32v301lower.bin is 64 KB: the 60 s save would overwrite it.
@@ -134,6 +139,425 @@ void processor(const juce::File& dir) {
     CHECK(p.memoryError().isEmpty() && p.engine() != engine);
 }
 
+// The host parameters (A17): five, by ID and name; the defaults are the analogs' rest values.
+void parameters(const juce::File& dir) {
+    const auto roms = dir.getChildFile("roms");
+    dummyRoms(roms);
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    AppSettings().setRomFolder(roms);
+    Ks32Processor p;
+    CHECK(p.getParameters().size() == 5);
+    const std::pair<const char*, const char*> expect[] = {{"volume", "Volume"},        {"dataEntry", "Data Entry"},
+                                                           {"pitchWheel", "Pitch Wheel"}, {"modWheel", "Mod Wheel"},
+                                                           {"sound", "Sound"}};
+    for (const auto& [id, name] : expect) {
+        auto* q = p.params().getParameter(id);
+        CHECK(q != nullptr && q->getName(64) == name);
+    }
+    auto* sound = p.params().getParameter("sound");
+    CHECK(sound != nullptr && sound->convertFrom0to1(0.0f) == 0.0f && sound->convertFrom0to1(1.0f) == 127.0f);
+    using ens::ks32::Analog;
+    const std::pair<Analog, const char*> analogs[] = {{Analog::Volume, "volume"},       {Analog::DataEntry, "dataEntry"},
+                                                      {Analog::PitchWheel, "pitchWheel"}, {Analog::ModWheel, "modWheel"}};
+    for (const auto& [a, id] : analogs)
+        CHECK(ens::app::analogRaw(a, *p.params().getRawParameterValue(id)) == ens::ks32::kAnalogRest[static_cast<size_t>(a)]);
+}
+
+// A18 on the real ROMs: a panel or MIDI pick is followed into `sound` and never sent back, even two a
+// block apart; two host changes of `sound` a block apart send exactly twice and tick() never undoes them.
+void follow(const juce::File& dir) {
+    const juce::File roms(KS32_ROM_DIR);
+    if (!roms.getChildFile("sq1-u25.bin").existsAsFile()) {
+        std::printf("  skip: ROMs not found\n");
+        return;
+    }
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    AppSettings().setRomFolder(roms);
+    Ks32Processor p;
+    CHECK(p.engine() != nullptr);
+    if (!p.engine()) return;
+    p.prepareToPlay(48000, 480);
+    juce::AudioBuffer<float> buf(2, 480);
+    juce::MidiBuffer midi;
+    auto* sound = p.params().getParameter("sound");
+    const auto soundValue = [&] { return static_cast<int>(sound->convertFrom0to1(sound->getValue()) + 0.5f); };
+    const auto block = [&](int n, bool tick = true) {  // n blocks of 10 ms, tick() after each
+        for (int i = 0; i < n; ++i) {
+            buf.clear();
+            p.processBlock(buf, midi);
+            midi.clear();
+            if (tick) p.tick();
+        }
+    };
+    const auto sent = [&] { return p.engine()->snapshot().programsSent; };
+    const auto row0 = [&] { return ens::ks32::rowText(p.engine()->snapshot().panel, 0); };
+    block(340);  // the boot
+    CHECK(p.engine()->snapshot().program == 0);
+
+    // (i) the panel: Up/Yes twice.
+    for (int k = 0; k < 2; ++k) {
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(ens::ks32::Button::UpYes), true, 0});
+        block(10);
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(ens::ks32::Button::UpYes), false, 0});
+        block(20);
+    }
+    block(20);
+    CHECK(sent() == 0 && soundValue() == 2 && p.engine()->snapshot().program == 2);
+    // MIDI in: two program changes one block apart.
+    midi.addEvent(juce::MidiMessage(0xC0, 5), 0);
+    block(1);
+    midi.addEvent(juce::MidiMessage(0xC0, 6), 0);
+    block(1);
+    block(50);
+    CHECK(sent() == 0 && soundValue() == 6 && row0().find("ROM   06") != std::string::npos);
+
+    // (ii) the host: sound 3, then 4, a block apart.
+    const auto host = [&](int n) { sound->setValueNotifyingHost(sound->convertTo0to1(static_cast<float>(n))); };
+    host(3);
+    block(1, false);  // no tick yet: the snapshot says 3 while the host is about to say 4
+    host(4);
+    p.tick();         // a stale snapshot (program 3) must not write `sound` back
+    CHECK(soundValue() == 4);
+    block(1);
+    CHECK(soundValue() == 4);
+    block(80);
+    CHECK(sent() == 2 && soundValue() == 4 && p.engine()->snapshot().program == 4 &&
+          row0().find("ROM   04") != std::string::npos);
+}
+
+// The state checks (A20-A23) on the real ROMs, with 10 ms blocks and no tick(), so `sound` has not
+// followed a pick: a state taken before the 30 Hz timer caught up.
+bool realRoms(const juce::File& dir, const juce::File& romDir = juce::File(KS32_ROM_DIR)) {
+    if (!juce::File(KS32_ROM_DIR).getChildFile("sq1-u25.bin").existsAsFile()) {
+        std::printf("  skip: ROMs not found\n");
+        return false;
+    }
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    AppSettings().setRomFolder(romDir);
+    return true;
+}
+
+void run(Ks32Processor& p, int ms, juce::MidiBuffer midi = {}) {
+    juce::AudioBuffer<float> buf(2, 480);
+    for (int i = 0; i < ms / 10; ++i) {
+        buf.clear();
+        p.processBlock(buf, midi);
+        midi.clear();
+    }
+}
+
+void press(Ks32Processor& p, ens::ks32::Button b) {
+    p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(b), true, 0});
+    run(p, 100);
+    p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(b), false, 0});
+    run(p, 200);
+}
+
+juce::MidiBuffer programChange(int n) {
+    juce::MidiBuffer m;
+    m.addEvent(juce::MidiMessage(0xC0, n), 0);
+    return m;
+}
+
+bool shows(Ks32Processor& p, const char* text) {
+    const auto panel = p.engine()->snapshot().panel;
+    return ens::ks32::rowText(panel, 0).find(text) != std::string::npos ||
+           ens::ks32::rowText(panel, 1).find(text) != std::string::npos;
+}
+
+juce::MemoryBlock stateOf(juce::AudioProcessor& p) {
+    juce::MemoryBlock m;
+    p.getStateInformation(m);
+    return m;
+}
+
+std::unique_ptr<juce::XmlElement> xmlOf(const juce::MemoryBlock& s) {
+    return juce::AudioProcessor::getXmlFromBinary(s.getData(), static_cast<int>(s.getSize()));
+}
+
+std::vector<uint8_t> ramOf(const juce::MemoryBlock& s) {
+    const auto xml = xmlOf(s);
+    const auto* ram = xml ? xml->getChildByName("RAM") : nullptr;
+    if (!ram) return {};
+    juce::MemoryOutputStream out;
+    if (!juce::Base64::convertFromBase64(out, ram->getAllSubText())) return {};
+    const auto* b = static_cast<const uint8_t*>(out.getData());
+    return {b, b + out.getDataSize()};
+}
+
+juce::String selectOf(const juce::MemoryBlock& s) {
+    const auto xml = xmlOf(s);
+    return xml ? xml->getStringAttribute("select") : juce::String();
+}
+
+juce::MemoryBlock fileBytes(const juce::File& f) {
+    juce::MemoryBlock m;
+    f.loadFileAsData(m);  // empty when there is no file
+    return m;
+}
+
+int soundOf(juce::AudioProcessor& p) {
+    for (auto* q : p.getParameters())
+        if (q->getName(64) == "Sound") return juce::roundToInt(q->getValue() * 127.0f);
+    return -1;
+}
+
+// state_round_trip_project: Master Tune +02, ROM 55 by MIDI and Volume 0.5 come back in a new instance
+// from the state alone. Returns A's state for the checks after it (empty when skipped).
+juce::MemoryBlock stateRoundTrip(const juce::File& dir) {
+    if (!realRoms(dir)) return {};
+    using ens::ks32::Button;
+    Ks32Processor a;
+    CHECK(a.memoryMode() == MemoryMode::Project);  // constructed outside a wrapper
+    if (!a.engine()) return {};
+    a.prepareToPlay(48000, 480);
+    run(a, 3400);
+    press(a, Button::SystemMidi);
+    press(a, Button::UpYes);
+    press(a, Button::UpYes);
+    CHECK(shows(a, "+02"));
+    press(a, Button::SelectSound);
+    run(a, 200, programChange(0x37));
+    a.params().getParameter("volume")->setValueNotifyingHost(0.5f);
+    run(a, 500);
+    CHECK(shows(a, "ROM   55"));
+    const auto s = stateOf(a);
+    CHECK(ramOf(s).size() == static_cast<size_t>(kMemoryBytes) && selectOf(s).endsWithIgnoreCase("c037"));
+
+    Ks32Processor b;
+    b.prepareToPlay(48000, 480);
+    b.setStateInformation(s.getData(), static_cast<int>(s.getSize()));
+    run(b, 3800);
+    CHECK(b.engine() != nullptr && shows(b, "ROM   55"));
+    using ens::ks32::Analog;
+    CHECK(*b.params().getRawParameterValue("volume") == 0.5f &&
+          b.engine()->machine().analog(Analog::Volume) == ens::app::analogRaw(Analog::Volume, 0.5f));
+    press(b, Button::SystemMidi);
+    CHECK(shows(b, "+02"));
+    return s;
+}
+
+// state_saved_during_boot_keeps_start_image (anti-goal: chaining short boots).
+void stateDuringBoot(const juce::File& dir, const juce::MemoryBlock& a) {
+    if (a.isEmpty() || !realRoms(dir)) return;
+    Ks32Processor b;
+    b.prepareToPlay(48000, 480);
+    b.setStateInformation(a.getData(), static_cast<int>(a.getSize()));
+    run(b, 1000);
+    const auto s = stateOf(b);
+    CHECK(ramOf(s) == ramOf(a) && selectOf(s) == selectOf(a));
+}
+
+// state_without_roms_round_trips (anti-goal: losing a project's memory).
+void stateWithoutRoms(const juce::File& dir, const juce::MemoryBlock& a) {
+    const auto empty = dir.getChildFile("no-roms");
+    empty.createDirectory();
+    if (a.isEmpty() || !realRoms(dir, empty)) return;
+    Ks32Processor p;
+    CHECK(p.engine() == nullptr);
+    p.prepareToPlay(48000, 480);
+    p.setStateInformation(a.getData(), static_cast<int>(a.getSize()));
+    const auto s = stateOf(p);
+    CHECK(ramOf(s) == ramOf(a) && selectOf(s) == selectOf(a));
+    juce::String err;
+    CHECK(p.setRomFolder(juce::File(KS32_ROM_DIR), err) && p.engine() != nullptr);
+    if (!p.engine()) return;
+    run(p, 3800);
+    CHECK(shows(p, "ROM   55"));
+}
+
+// standalone_state_before_boot (goal 5, A23): a File processor given a Project state (ROM 55, Master Tune
+// +02) before its first block comes back on ROM 55, its memory still from the file (cold here: not +02).
+void standaloneStateBeforeBoot(const juce::File& dir, const juce::MemoryBlock& a) {
+    if (a.isEmpty() || !realRoms(dir)) return;
+    Ks32Processor p(MemoryMode::File);
+    if (!p.engine()) return;
+    p.prepareToPlay(48000, 480);
+    p.setStateInformation(a.getData(), static_cast<int>(a.getSize()));
+    run(p, 3800);
+    CHECK(shows(p, "ROM   55"));
+    press(p, ens::ks32::Button::SystemMidi);
+    std::printf("  standalone display: [%s]\n", (ens::ks32::rowText(p.engine()->snapshot().panel, 0) +
+                                                 ens::ks32::rowText(p.engine()->snapshot().panel, 1)).c_str());
+    CHECK(shows(p, "Master Tune") && !shows(p, "+02"));
+}
+
+// int00_survives_restarts (A15, I1/M1): INT 00 differs from the boot's ROM 00 only in its bank. It comes
+// back from a state, across a ROM-folder change and across Change... to a file; Erase then gives a cold
+// machine on ROM 00 with `sound` 0, nothing sent.
+void int00Restarts(const juce::File& dir) {
+    if (!realRoms(dir)) return;
+    using ens::ks32::Button;
+    juce::MemoryBlock s;
+    {
+        Ks32Processor a;
+        if (!a.engine()) return;
+        a.prepareToPlay(48000, 480);
+        run(a, 3400);
+        press(a, Button::BankSet);
+        press(a, Button::Bank0);
+        press(a, Button::Screen0);
+        CHECK(shows(a, "INT   00"));
+        s = stateOf(a);
+    }
+    CHECK(selectOf(s).equalsIgnoreCase("b000002000c000"));
+    Ks32Processor b;
+    b.prepareToPlay(48000, 480);
+    b.setStateInformation(s.getData(), static_cast<int>(s.getSize()));
+    run(b, 3800);
+    CHECK(shows(b, "INT   00"));
+    juce::String err;
+    CHECK(b.setRomFolder(juce::File(KS32_ROM_DIR), err));
+    run(b, 3800);
+    CHECK(shows(b, "INT   00"));
+    const auto file = dir.getChildFile("int00.bin");
+    CHECK(saveMemoryFile(file, ramOf(s)) && b.setMemoryFile(file, err));
+    run(b, 3800);
+    CHECK(shows(b, "INT   00"));
+
+    auto* sound = b.params().getParameter("sound");
+    sound->setValueNotifyingHost(sound->convertTo0to1(5.0f));
+    run(b, 500);
+    CHECK(shows(b, "05"));
+    b.eraseMemory();
+    CHECK(soundOf(b) == 0);
+    run(b, 3800);
+    CHECK(shows(b, "ROM   00") && b.engine()->snapshot().programsSent == 0);
+}
+
+// state_rejects_bad_blobs: garbage, a short RAM and an unknown version leave the machine as it is.
+void stateBadBlobs(const juce::File& dir) {
+    if (!realRoms(dir)) return;
+    Ks32Processor p;
+    if (!p.engine()) return;
+    p.prepareToPlay(48000, 480);
+    run(p, 3400);
+    const auto blob = [](const char* version, size_t ramBytes) {
+        juce::XmlElement x("KS32State");
+        x.setAttribute("version", version);
+        const std::vector<uint8_t> ram(ramBytes, 0x55);
+        x.createNewChildElement("RAM")->addTextElement(juce::Base64::toBase64(ram.data(), ram.size()));
+        juce::MemoryBlock m;
+        juce::AudioProcessor::copyXmlToBinary(x, m);
+        return m;
+    };
+    juce::MemoryBlock noise(100);
+    juce::Random rng(8);
+    for (size_t i = 0; i < noise.getSize(); ++i) noise[i] = static_cast<char>(rng.nextInt(256));
+    for (const auto& s : {noise, blob("1", 1000), blob("2", static_cast<size_t>(kMemoryBytes))}) {
+        const auto* engine = p.engine();
+        p.setStateInformation(s.getData(), static_cast<int>(s.getSize()));
+        CHECK(p.engine() == engine);
+        run(p, 100);
+    }
+}
+
+// project_mode_leaves_shared_file (A22): no 60 s save, no close save, Erase spares the file; only
+// copyToSharedMemory writes it, once booted.
+void projectLeavesSharedFile(const juce::File& dir) {
+    if (!realRoms(dir)) return;
+    const auto shared = AppSettings().memoryFile();
+    CHECK(eraseMemoryFile(shared));
+    const auto before = fileBytes(shared);
+    {
+        Ks32Processor p;
+        if (!p.engine()) return;
+        p.prepareToPlay(48000, 480);
+        run(p, 3400);
+        for (int i = 0; i < 1900; ++i) p.tick();
+        const auto* engine = p.engine();
+        p.eraseMemory();
+        CHECK(p.engine() != engine && p.memoryError().isEmpty());
+        CHECK(fileBytes(shared) == before);
+    }
+    {
+        Ks32Processor p;
+        p.prepareToPlay(48000, 480);
+        run(p, 3400);
+    }
+    CHECK(fileBytes(shared) == before);
+    Ks32Processor p;
+    p.prepareToPlay(48000, 480);
+    juce::String err;
+    CHECK(!p.copyToSharedMemory(err) && err.isNotEmpty());  // not booted
+    run(p, 3400);
+    CHECK(p.copyToSharedMemory(err));
+    const auto& ram = p.engine()->machine().ramImage();
+    CHECK(fileBytes(shared) == juce::MemoryBlock(ram.data(), ram.size()));
+}
+
+// A21 across threads: processBlock runs on its own thread while saves come from the message thread, a
+// third thread and the audio thread itself. Each holds the running RAM with Master Tune +02, set after
+// the boot, never the start image (64 KB of zeros here).
+void stateThreads(const juce::File& dir) {
+    if (!realRoms(dir)) return;
+    CHECK(eraseMemoryFile(AppSettings().memoryFile()));
+    Ks32Processor p;
+    if (!p.engine()) return;
+    p.prepareToPlay(48000, 480);
+    std::atomic<bool> stop{false}, onAudio{false};
+    juce::MemoryBlock fromAudio;
+    std::thread audio([&] {
+        juce::AudioBuffer<float> buf(2, 480);
+        juce::MidiBuffer midi;
+        while (!stop) {
+            buf.clear();
+            p.processBlock(buf, midi);
+            if (onAudio.load()) {
+                fromAudio = stateOf(p);
+                onAudio = false;
+            }
+        }
+    });
+    const auto wait = [&](int ms) {  // machine time
+        const auto until = p.engine()->snapshot().frames + static_cast<uint64_t>(ms) * ens::ks32::kWavRate / 1000;
+        while (p.engine()->snapshot().frames < until) juce::Thread::sleep(1);
+    };
+    const auto hold = [&](ens::ks32::Button b) {
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(b), true, 0});
+        wait(100);
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(b), false, 0});
+        wait(200);
+    };
+    wait(3400);
+    hold(ens::ks32::Button::SystemMidi);
+    hold(ens::ks32::Button::UpYes);
+    hold(ens::ks32::Button::UpYes);
+    CHECK(shows(p, "+02"));
+    const auto fromMessage = stateOf(p);
+    juce::MemoryBlock fromOther;
+    std::thread([&] { fromOther = stateOf(p); }).join();
+    onAudio = true;
+    while (onAudio.load()) juce::Thread::sleep(1);
+    stop = true;
+    audio.join();
+
+    const std::vector<uint8_t> zeros(static_cast<size_t>(kMemoryBytes), 0);
+    const juce::MemoryBlock* states[] = {&fromMessage, &fromOther, &fromAudio};
+    for (const auto* s : states) {
+        const auto ram = ramOf(*s);
+        CHECK(ram.size() == static_cast<size_t>(kMemoryBytes) && ram != zeros);
+        Ks32Processor q;
+        q.prepareToPlay(48000, 480);
+        q.setStateInformation(s->getData(), static_cast<int>(s->getSize()));
+        run(q, 3800);
+        press(q, ens::ks32::Button::SystemMidi);
+        CHECK(shows(q, "+02"));
+    }
+}
+
+// standalone_state_has_no_ram (A23): the memory file is the Standalone's only memory.
+void standaloneNoRam(const juce::File& dir) {
+    const auto roms = dir.getChildFile("roms");
+    dummyRoms(roms);
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    AppSettings().setRomFolder(roms);
+    Ks32Processor p(MemoryMode::File);
+    CHECK(p.memoryMode() == MemoryMode::File);
+    const auto xml = xmlOf(stateOf(p));
+    CHECK(xml != nullptr && xml->getChildByName("RAM") == nullptr);
+}
+
 // Ruling R8: KS32_SETTINGS_DIR points the plugin at a temp settings file naming the ROM folder,
 // so neither the user's settings nor their memory file is touched.
 void vst3(const juce::File& dir) {
@@ -144,6 +568,9 @@ void vst3(const juce::File& dir) {
     }
     _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());  // the plugin DLL reads this process's
     AppSettings().setRomFolder(roms);                                    // environment, so it lands here too
+
+    const auto shared = dir.getChildFile("ks32-memory.bin");
+    const auto before = fileBytes(shared);  // A22: a VST3 instance never writes the shared file
 
     juce::VST3PluginFormat format;
     juce::OwnedArray<juce::PluginDescription> types;
@@ -190,10 +617,26 @@ void vst3(const juce::File& dir) {
         CHECK(ed->getWidth() >= 1020 && ed->getHeight() >= 360);
     }
     ed.reset();
+    midi.addEvent(juce::MidiMessage(0xC0, 0x37), 0);
+    play(500, nullptr, nullptr);
+    const auto s = stateOf(*plugin);
     plugin->releaseResources();
     plugin.reset();
-    // The plugin used the temp folder: its close save (A11, after the boot) landed here.
-    CHECK(dir.getChildFile("ks32-memory.bin").existsAsFile());
+    CHECK(fileBytes(shared) == before);
+
+    // A second instance given that state: `sound` reads 55 through the host's parameters.
+    plugin = format.createInstanceFromDescription(*types[0], kRate, kBlock, err);
+    CHECK(plugin != nullptr);
+    if (!plugin) return;
+    plugin->setPlayConfigDetails(0, 2, kRate, kBlock);
+    plugin->prepareToPlay(kRate, kBlock);
+    plugin->setStateInformation(s.getData(), static_cast<int>(s.getSize()));
+    play(3800, nullptr, nullptr);
+    std::printf("  VST3 restored sound: %d\n", soundOf(*plugin));
+    CHECK(soundOf(*plugin) == 55);
+    plugin->releaseResources();
+    plugin.reset();
+    CHECK(fileBytes(shared) == before);
 }
 
 }  // namespace
@@ -205,6 +648,17 @@ int main() {
     romFolder(dir.getChildFile("roms"));
     memoryFile(dir);
     processor(dir.getChildFile("proc"));
+    parameters(dir.getChildFile("params"));
+    follow(dir.getChildFile("follow"));
+    const auto a = stateRoundTrip(dir.getChildFile("state"));
+    stateDuringBoot(dir.getChildFile("boot"), a);
+    stateWithoutRoms(dir.getChildFile("noroms"), a);
+    standaloneStateBeforeBoot(dir.getChildFile("standalone-state"), a);
+    int00Restarts(dir.getChildFile("int00"));
+    stateBadBlobs(dir.getChildFile("bad"));
+    projectLeavesSharedFile(dir.getChildFile("shared"));
+    standaloneNoRam(dir.getChildFile("standalone"));
+    stateThreads(dir.getChildFile("threads"));
     vst3(dir.getChildFile("vst3"));
     dir.deleteRecursively();
     std::printf(failures == 0 ? "app_tests: all passed\n" : "app_tests: %d failed\n", failures);

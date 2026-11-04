@@ -59,7 +59,8 @@ SettingsPage::SettingsPage(Ks32Processor& p)
                                               kText)),
       chooseRoms_(dots("Choose folder")),
       changeMem_(dots("Change")),
-      erase_(dots("Erase memory")) {
+      erase_(dots("Erase memory")),
+      copy_(dots("Copy to shared memory")) {
     setLookAndFeel(&lnf_);
     styleField(romField_);
     styleField(memField_);
@@ -73,6 +74,11 @@ SettingsPage::SettingsPage(Ks32Processor& p)
     chooseRoms_.onClick = [this] { chooseRomFolder(); };
     changeMem_.onClick = [this] { chooseMemoryFile(); };
     erase_.onClick = [this] { confirmErase(); };
+    if (proc_.memoryMode() == MemoryMode::Project) {
+        styleButton(copy_, kButton, kText, kButtonEdge);
+        addAndMakeVisible(copy_);
+        copy_.onClick = [this] { confirmCopy(); };
+    }
 
 #if JucePlugin_Build_Standalone
     // The Standalone wrapper's devices: audio out and MIDI inputs, no MIDI out (design section 6.4).
@@ -148,6 +154,7 @@ int SettingsPage::layout() {
     memNoteArea_ = {fx, y, w - 132, memNote_.isEmpty() ? 16 : 34};
     y += memNoteArea_.getHeight() + 8;
     erase_.setBounds(fx, y, 140, kRow);
+    copy_.setBounds(fx + 140 + 12, y, 190, kRow);
     return y + kRow + kPadY;
 }
 
@@ -213,9 +220,12 @@ void SettingsPage::paint(juce::Graphics& g) {
     auto note = memNoteArea_;
     g.setColour(kDim);
     g.setFont(font(12.0f));
-    // DECISION A11: saved on close and every 60 s, once the machine has booted.
-    g.drawText("Holds what the battery keeps: settings, edited sounds and sequences. Saved when the app "
-               "closes and every minute.",
+    // DECISION A11: saved on close and every 60 s, once the machine has booted. DECISION A22: not in a plugin.
+    g.drawText(proc_.memoryMode() == MemoryMode::File
+                   ? "Holds what the battery keeps: settings, edited sounds and sequences. Saved when the app "
+                     "closes and every minute."
+                   : "This instance's memory is saved in the project. New instances start from the shared memory "
+                     "file.",
                note.removeFromTop(16), juce::Justification::centredLeft, true);
     if (memNote_.isNotEmpty()) {
         g.setColour(kBad);
@@ -255,14 +265,36 @@ void SettingsPage::confirmErase() {
     const auto options = juce::MessageBoxOptions()
                              .withIconType(juce::MessageBoxIconType::WarningIcon)
                              .withTitle("Erase memory")
-                             .withMessage("This erases the settings, edited sounds and sequences the battery keeps, "
-                                          "and restarts the machine cold. The memory file is erased now.")
+                             .withMessage(proc_.memoryMode() == MemoryMode::File
+                                              ? "This erases the settings, edited sounds and sequences the battery "
+                                                "keeps, and restarts the machine cold. The memory file is erased now."
+                                              : "This erases the settings, edited sounds and sequences of this "
+                                                "instance only, and restarts it cold. The shared memory file is not "
+                                                "changed.")
                              .withButton("Erase")
                              .withButton("Cancel")
                              .withAssociatedComponent(this);
     juce::AlertWindow::showAsync(options, [safe = juce::Component::SafePointer<SettingsPage>(this)](int result) {
         if (safe == nullptr || result != 1) return;  // 1: Erase
         safe->proc_.eraseMemory();
+        safe->changed();
+    });
+}
+
+void SettingsPage::confirmCopy() {
+    const auto options = juce::MessageBoxOptions()
+                             .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                             .withTitle("Copy to shared memory")
+                             .withMessage("Write this instance's memory to the shared memory file? New instances "
+                                          "and the Standalone will start from it.")
+                             .withButton("Copy")
+                             .withButton("Cancel")
+                             .withAssociatedComponent(this);
+    juce::AlertWindow::showAsync(options, [safe = juce::Component::SafePointer<SettingsPage>(this)](int result) {
+        if (safe == nullptr || result != 1) return;  // 1: Copy
+        juce::String err;
+        if (!safe->proc_.copyToSharedMemory(err))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Memory file", err);
         safe->changed();
     });
 }

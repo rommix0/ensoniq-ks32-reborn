@@ -2,7 +2,7 @@
 // The front-panel editor (design section 6.3): the "Front panel" artboard drawn from the JUCE-free
 // layout table (src/app/panel_layout.h), scaled uniformly to the window (A13). The display and LEDs
 // follow the engine's snapshot (A7, A8); the buttons post press and release, with the chord latch
-// (A9); the sliders and wheels post raw analog values, and the keys play with a strike (A10). The
+// (A9); the sliders and wheels are the host parameters (A17), and the keys play with a strike (A10). The
 // gear opens the settings page.
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -23,6 +23,7 @@ public:
     // False when the queue is full (A4), there is no engine, or the engine was just replaced (the
     // parts are then reset and nothing reaches the new engine). The parts retry from the timer.
     bool post(const ens::app::Event& e);
+    juce::RangedAudioParameter* param(const char* id);  // a host parameter (A17)
     void openSettings();
     const ens::app::Snapshot& snap() const { return snap_; }
     bool blinkOn() const { return blinkOn_; }

@@ -220,9 +220,29 @@ only their ratio). High for channel A, confirmed by MIDI in. Low for channel B.
   - After that, each sound selected on the panel sends its number in running status: Up/Yes twice
     from ROM 00 sends `01`, then `02`.
   - Notes received on MIDI in send nothing out ("MIDI Loop = OFF").
+  - **What each kind of selection sends** (from the boot's ROM 00, one selection each; the
+    program number is sent as the decimal number shown, in hex):
+    - ROM 01 (Up/Yes): `01`. ROM 55 (Bank 5, Screen 5): `32 37` (ROM 50, then 55). These are
+      the data bytes only, in running status under the boot's last `C0`. No bank select.
+    - INT 34 (BankSet, Bank 3, Screen 4): the stream, in this order, is `7C B0 00 00 20 00 C0 00
+      1E 22`. It was one capture for the three presses, so the bytes are not attributed to single
+      presses. It holds program 124 (`7C`), a bank select with MSB 0 and LSB 0 (`B0 00 00 20 00`),
+      `C0 00`, then 30 (`1E`) and 34 (`22`). The boot's own bank select is `B0 00 00 20 01`: LSB 1
+      is what the firmware sends for a ROM sound and LSB 0 for INT.
+    - A preset (Select Seq/Preset, Bank 3, "PRESET 00 Loc=30"): nothing. A preset selection sends
+      no MIDI.
 - **System messages.** `ks32emu play` takes MIDI from `MidiIn` (`tools/ks32play/midi_in_win.h`).
   `MidiIn` drops status 0xF0 and up: sysex, clock and active sensing. Sysex dumps are not a goal of
   this plan. `ks32emu render` sends only what `parseSmf` gives, which is channel messages.
+
+**How the selections were found.** A scratch harness (not committed) cold-booted a zero RAM image
+for 3300 ms and drained MIDI out. It pressed the buttons (100 ms held, 300 ms apart), ran 500 ms
+and recorded MIDI out and the display rows. It then took `ramImage()`, loaded it into a new
+machine, booted 3300 ms, sent bytes with `midiIn` and ran 500 ms. Each selection was run once, and
+the replays of the byte variants above once each. The firmware was run, never studied.
+**Confidence for the selections.** High for the bytes and the displays of ROM 01, ROM 55 and INT
+34. Not tried: other channels, the Select Sound pages after a bank select alone, and ROM sounds at
+bank LSB 1 sent explicitly.
 
 **How it was found.** The machine was booted for `kBootMs` and bytes were put on RxDA with
 `Duart::receive(0, ...)`, later `Machine::midiIn`. The run recorded the peak of the output, the
@@ -649,9 +669,25 @@ settles the path.
   the cold boot, with no warning and no unexpected event.
 - **OS v3.01 powers on to ROM 00.** From a cold or a warm start it always shows "ROM 00 / KS Grand
   Piano" with LED 8 lit, whatever was selected when the image was saved.
-  - ROM 01, ROM 55, INT 34 and preset mode (PRESET 00 Loc=30) were tried.
+  - ROM 01, ROM 55, INT 34 and preset mode (PRESET 00 Loc=30) were tried (the replays are in the
+    sub-bullet below; how they were run is in "How the selections were found", under MIDI in).
   - BankSet then shows INT 00, not the INT sound that was selected.
   - MIDI out after each boot ends `C0 00`, a program change to 0.
+  - **Which selections a program change brings back.** After a warm boot, the bytes the firmware
+    sent for the selection were put on MIDI in (`Machine::midiIn`), then 500 ms was run:
+    - ROM 01: the data byte alone (`01`) does nothing (the display stays on ROM 00). `C0 01`
+      brings back "ROM 01 / Jazzy's Organ".
+    - ROM 55: `32 37` alone does nothing. `C0 32 37` and `C0 37` bring back "ROM 55 / Specialty
+      Pipes".
+    - INT 34: the whole recorded stream (`7C B0 00 00 20 00 C0 00 1E 22`) brings back "INT 34 /
+      Soprano Sax", and so does `B0 00 00 20 00 C0 22`. `C0 22` alone gives "ROM 34 / Tine-O-Might":
+      without the bank select, the sound comes back as ROM.
+    - A preset (PRESET 00 Loc=30): nothing is sent, so nothing can come back. `C0 00` leaves
+      ROM 00. The display shows `*EMPTY SEQ/PSET*` for it.
+    - So the replay must be a complete message with its status byte (`C0`), the running-status
+      data byte is not enough after a boot. A ROM selection needs only `C0 pp`. An INT selection
+      needs `B0 00 00 20 00` before the `C0 pp`. The preset, and whether a sequence or track was
+      current, is not restored by MIDI.
 
   So the selected sound is not part of what the battery restores (ruling T8-1).
 - **There is no power-fail save.** A level-7 interrupt forced before saving the image gives

@@ -90,6 +90,7 @@ public:
         return ring < wire ? ring : wire;
     }
     void setAnalog(Analog a, uint16_t raw);  // raw 0..0x3FF (masked); PAR follows at once (K8)
+    uint16_t analog(Analog a) const;         // the raw value last set (the rest value until then)
     // A byte on MIDI in: it joins the channel's receive queue and enters at the line rate (D2).
     void midiIn(uint8_t byte) { duart_.receive(kMidiChannel, byte); }
     // The oldest byte the firmware sent on MIDI out and not yet popped (A2: 256 are kept).
