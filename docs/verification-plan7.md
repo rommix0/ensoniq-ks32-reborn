@@ -73,24 +73,30 @@ These need a person (seeing, hearing, the Q25, a DAW), so by ruling R1 they were
 
 | # | From | Steps | Expected | Checked by code | Result |
 |---|---|---|---|---|---|
-| Q1 | Task 4 | Options → Audio/MIDI settings (or the gear → AUDIO AND MIDI): enable the Q25. Play notes | The KS Grand Piano plays, after the boot (about 2 s) | 12 s launch, exit 0, CPU in use; the engine tests (`engine_midi_offset_places_note`) | user to run |
-| S1 | Task 5 (a) | Move `%APPDATA%\KS-32\settings.xml` aside (or set `KS32_SETTINGS_DIR` to an empty folder). Start the app. Open the gear, Choose folder…, pick the ROM folder | First the display reads `No ROM folder:` / `open Settings`; after choosing, all six files are marked found and the machine boots to `ROM   00` / ` KS Grand Piano` | With a settings.xml naming the ROMs the machine boots and saves on close; with none, nothing is written | user to run |
-| S2 | Task 5 (b) | Rename `sq1-u26.bin` in the ROM folder, start the app, open the gear. Restore the file afterwards | The list marks `sq1-u26.bin` missing, the display reads `ROM missing:` / `sq1-u26.bin`, the app does not crash | `app_tests` (missing); the app on a dummy folder stays up and closes with exit 0 | user to run |
-| S3 | Task 5 (c) | System/MIDI, set Master Tune to +02 (Up/Yes), wait 5 s, close, reopen, System/MIDI | Master Tune reads +02 | The memory is saved on close after the boot and loaded at start (a warm start) | user to run |
+| Q1 | Task 4 | Options → Audio/MIDI settings (or the gear → AUDIO AND MIDI): enable the Q25. Play notes | The KS Grand Piano plays, after the boot (about 2 s) | 12 s launch, exit 0, CPU in use; the engine tests (`engine_midi_offset_places_note`) | passed (user, 2026-11-04) |
+| S1 | Task 5 (a) | Move `%APPDATA%\KS-32\settings.xml` aside (or set `KS32_SETTINGS_DIR` to an empty folder). Start the app. Open the gear, Choose folder…, pick the ROM folder | First the display reads `No ROM folder:` / `open Settings`; after choosing, all six files are marked found and the machine boots to `ROM   00` / ` KS Grand Piano` | With a settings.xml naming the ROMs the machine boots and saves on close; with none, nothing is written | passed (user, 2026-11-04; run with `KS32_SETTINGS_DIR` set to an empty folder) |
+| S2 | Task 5 (b) | Rename `sq1-u26.bin` in the ROM folder, start the app, open the gear. Restore the file afterwards | The list marks `sq1-u26.bin` missing, the display reads `ROM missing:` / `sq1-u26.bin`, the app does not crash | `app_tests` (missing); the app on a dummy folder stays up and closes with exit 0 | passed (user, 2026-11-04; a copy of the ROM folder without `sq1-u26.bin`, chosen from an empty settings folder) |
+| S3 | Task 5 (c) | System/MIDI, set Master Tune to +02 (Up/Yes), wait 5 s, close, reopen, System/MIDI | Master Tune reads +02 | The memory is saved on close after the boot and loaded at start (a warm start) | passed (user, 2026-11-04; in the S1 settings folder) |
 | S4 | Task 5 (d) | Note the time stamp of `%APPDATA%\KS-32\ks32-memory.bin`. Start the app and close it within 1 s | The time stamp is unchanged | **Passed** by automation: closed 532 ms after the window appeared, same time stamp and hash | passed (code) |
-| S5 | Task 5 (e) | Gear → Erase memory… → Erase. Then System/MIDI | The machine reboots cold; Master Tune reads +00 | The file is 64 KB of zeros at once (R7) and the next start is a cold boot | user to run |
-| P1 | Task 6 (a) | Look at the window at its default size | The arrangement matches the "Front panel" artboard: wordmark column with the gear, sliders, display, cursor cluster, the Sound column, the teal strips, Bank and Screen rows, the sequencer column, Tracks, transport (Record dimmed), wheels and 76 keys | A `KS32_SNAPSHOT` PNG compared with the artboard: the arrangement matches. Known differences: no amber glow, Segoe UI instead of a condensed sans, JUCE's resize corner | user to run |
-| P2 | Task 6 (b) | Drag the window corner down to the minimum and up again | The aspect ratio stays 2040:720; the labels can still be read at 1020 x 360 | The constrainer fixes the ratio; at the minimum the smallest labels are about 5 px tall | user to run |
-| P3 | Task 6 (c) | Click Edit Seq/Preset, right-click Bank 9, click Screen 1, right-click Bank 9 again | The display reads `3.01` (`ENSONIQ KS-32` / `OS Version 3.01`) | The chord in the engine (`engine_chord_reaches_version_screen`) | user to run |
-| P4 | Task 6 (d) | Press Up/Yes, drag off the button, release outside it. Then click Down/No | Up/Yes stepped once and is not stuck; Down/No works | The release is sent on mouse-up wherever the mouse is | user to run |
-| P5 | Task 6 (e) | Hold a button with the mouse, Alt-Tab away, come back | The button is not stuck | The foreground-loss release is in the editor's timer | user to run |
-| K1 | Task 7 (a) | System/MIDI (Master Tune), drag Data Entry | The value changes | — | user to run |
-| K2 | Task 7 (b) | Hold a Q25 note, drag the pitch wheel up, let go | The note bends up, and back when the wheel springs to centre | — | user to run |
-| K3 | Task 7 (c) | On a sound that uses the mod wheel, hold a note, drag the mod wheel up | Vibrato (or the sound's modulation) comes in | — | user to run |
-| K4 | Task 7 (d) | Click near the front of a key, then near the back | The front is louder | The strike mapping (A10) | user to run |
-| K5 | Task 7 (e) | Drag across the keys and let go | A glissando; no note keeps sounding | Each key entered is played and the one left released | user to run |
-| V1 | Task 8 | Copy `build-app\app\KS32_artefacts\Release\VST3\KS-32.vst3` (the folder) to `C:\Program Files\Common Files\VST3`. In FL Studio or Cakewalk, rescan plugins, add KS-32 to an instrument track, open its window, play from the Q25 through the track | It loads; the panel opens with the AUDIO AND MIDI section of the settings page hidden and the status line "MIDI: host"; the firmware boots to the play screen; notes from the host play | Headless VST3 check (above): loads, boots, a note sounds on both channels, the editor is made at 1360 x 480 | user to run |
-| H1 | Plan 7 | Play the Standalone for an hour at the default buffer, with the gear page's underrun line in view; note the count at the end | No audible dropouts; the underrun count, recorded here | `ens_rt_tests`: no allocation in `render` after the boot | user to run |
+| S5 | Task 5 (e) | Gear → Erase memory… → Erase. Then System/MIDI | The machine reboots cold; Master Tune reads +00 | The file is 64 KB of zeros at once (R7) and the next start is a cold boot | passed (user, 2026-11-04; in the S1 settings folder) |
+| P1 | Task 6 (a) | Look at the window at its default size | The arrangement matches the "Front panel" artboard: wordmark column with the gear, sliders, display, cursor cluster, the Sound column, the teal strips, Bank and Screen rows, the sequencer column, Tracks, transport (Record dimmed), wheels and 76 keys | A `KS32_SNAPSHOT` PNG compared with the artboard: the arrangement matches. Known differences: no amber glow, Segoe UI instead of a condensed sans, JUCE's resize corner | passed (user, 2026-11-04) |
+| P2 | Task 6 (b) | Drag the window corner down to the minimum and up again | The aspect ratio stays 2040:720; the labels can still be read at 1020 x 360 | The constrainer fixes the ratio; at the minimum the smallest labels are about 5 px tall | passed (user, 2026-11-04) |
+| P3 | Task 6 (c) | Click Edit Seq/Preset, right-click Bank 9, click Screen 1, right-click Bank 9 again | The display reads `3.01` (`ENSONIQ KS-32` / `OS Version 3.01`) | The chord in the engine (`engine_chord_reaches_version_screen`) | passed (user, 2026-11-04) |
+| P4 | Task 6 (d) | Press Up/Yes, drag off the button, release outside it. Then click Down/No | Up/Yes stepped once and is not stuck; Down/No works | The release is sent on mouse-up wherever the mouse is | passed (user, 2026-11-04) |
+| P5 | Task 6 (e) | Hold a button with the mouse, Alt-Tab away, come back | The button is not stuck | The foreground-loss release is in the editor's timer | passed (user, 2026-11-04) |
+| K1 | Task 7 (a) | System/MIDI (Master Tune), drag Data Entry | The value changes | — | passed (user, 2026-11-04) |
+| K2 | Task 7 (b) | Hold a Q25 note, drag the pitch wheel up, let go | The note bends up, and back when the wheel springs to centre | — | passed, see note 1 (user, 2026-11-04) |
+| K3 | Task 7 (c) | On a sound that uses the mod wheel, hold a note, drag the mod wheel up | Vibrato (or the sound's modulation) comes in | — | passed, see note 1 (user, 2026-11-04) |
+| K4 | Task 7 (d) | Click near the front of a key, then near the back | The front is louder | The strike mapping (A10) | passed (user, 2026-11-04) |
+| K5 | Task 7 (e) | Drag across the keys and let go | A glissando; no note keeps sounding | Each key entered is played and the one left released | passed (user, 2026-11-04) |
+| V1 | Task 8 | Copy `build-app\app\KS32_artefacts\Release\VST3\KS-32.vst3` (the folder) to `C:\Program Files\Common Files\VST3`. In FL Studio or Cakewalk, rescan plugins, add KS-32 to an instrument track, open its window, play from the Q25 through the track | It loads; the panel opens with the AUDIO AND MIDI section of the settings page hidden and the status line "MIDI: host"; the firmware boots to the play screen; notes from the host play | Headless VST3 check (above): loads, boots, a note sounds on both channels, the editor is made at 1360 x 480 | passed, see note 2 (user, 2026-11-04) |
+| H1 | Plan 7 | Play the Standalone for an hour at the default buffer, with the gear page's underrun line in view; note the count at the end | No audible dropouts; the underrun count, recorded here | `ens_rt_tests`: no allocation in `render` after the boot | not done, see note 3 (2026-11-04) |
+
+Notes from the acceptance pass (2026-11-04):
+
+1. **K2, K3**: the user saw the Q25's own wheels do nothing on some sounds: the drum kits and the pianos. An offline survey of all 128 program numbers (`ks32emu render`, a held A3, bend to the top and mod wheel to 127, each compared with a dry render) found pitch bend acting on every melodic sound (about +2 semitones) and on none of the drum and percussion kits (ROM 80-95, 98, 99), and the mod wheel acting on every melodic sound except 09 Pno/Str & Bass and 12 Dry Grand Piano. That is the sounds' own programming, read as the firmware's behaviour, not the emulator's. A dense bend stream (1000 messages/s) lost nothing, and the on-screen pitch wheel bends notes that arrive on MIDI. The on-screen wheels do not follow incoming MIDI (as the keys do not), a possible later feature.
+2. **V1**: loads, boots and plays in the DAW. A saved project does not bring back the plugin's state: the plugin saves nothing in the project (`getStateInformation` is empty, design section 4), and OS v3.01 always powers on to ROM 00 (K11). Plugin state is the first item for the VST3 release stage.
+3. **H1**: the device is Windows Audio (shared mode) at 48 kHz, 480-sample buffer, whose JUCE device does not report underruns, so the gear page reads "not reported". The session ran about 1.5 minutes (09:31 to 09:33), not the hour, and the user chose to go on. Still open: an hour of play, listening for dropouts; ASIO or WASAPI exclusive would give a count.
 
 ## Controller rulings
 
@@ -105,7 +111,7 @@ These need a person (seeing, hearing, the Q25, a DAW), so by ruling R1 they were
 
 ## Left open
 
-- **User acceptance**: every "user to run" row above, and the hour of play (H1).
+- **User acceptance**: done 2026-11-04 (the table above), except the hour of play (H1, note 3): not run, and the Windows Audio device does not report underruns.
 - **Record** has no code (A14). Play and Stop/Continue are named from the MIDI bytes they send (Medium); how Continue is given was not tested.
 - **Display glyphs** for 0x00–0x1F and 0x7F (A7) and the boot's custom character (`93`): drawn blank, with a hex overlay.
 - **The blink rate** (A8): 2 Hz, a choice, not a measurement.
@@ -168,7 +174,7 @@ Every minor item the task reviews deferred, one line each. Items carried into a 
 
 The pass bar (design section 3): the user starts the app, plays the factory presets from the Q25 and uses the on-screen panel as they would a real KS-32: it boots to `ROM   00` / `KS Grand Piano` with the Select Sound LED lit; sounds are chosen from the panel and the Q25; the version chord shows "OS Version 3.01"; a panel setting survives a restart; no audible dropouts at the default buffer. The checks are the "user to run" rows above.
 
-User verdict: pending.
+User verdict: passed, with the notes under the manual checks; the hour of play (H1) not run (2026-11-04).
 
 ## Reproduce
 
