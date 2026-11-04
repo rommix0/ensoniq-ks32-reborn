@@ -31,14 +31,43 @@ juce::String memoryTargetProblem(const juce::File& file, const juce::File& roms)
 
 }  // namespace
 
+namespace {
+using ens::ks32::Analog;
+struct AnalogParam {
+    const char* id;
+    const char* name;
+    Analog analog;
+};
+// Order matters: Ks32Processor::analogRaw_ follows it.
+constexpr AnalogParam kAnalogParams[] = {{"volume", "Volume", Analog::Volume},
+                                         {"dataEntry", "Data Entry", Analog::DataEntry},
+                                         {"pitchWheel", "Pitch Wheel", Analog::PitchWheel},
+                                         {"modWheel", "Mod Wheel", Analog::ModWheel}};
+}  // namespace
+
+// DECISION A17: the analogs and the sound are host parameters (automatable): four floats 0..1 whose
+// defaults are the rest positions (K13), and `sound` 0..127. A position maps to raw by analog_map.h.
+juce::AudioProcessorValueTreeState::ParameterLayout Ks32Processor::layout() {
+    juce::AudioProcessorValueTreeState::ParameterLayout l;
+    for (const auto& a : kAnalogParams)
+        l.add(std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID(a.id, 1), a.name, juce::NormalisableRange<float>(0.0f, 1.0f), 
+            ens::app::analogPosition(a.analog, ens::ks32::kAnalogRest[static_cast<size_t>(a.analog)])));
+    l.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID("sound", 1), "Sound", 0, 127, 0));
+    return l;
+}
+
 Ks32Processor::Ks32Processor()
-    : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)) {
+    : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+      params_(*this, nullptr, "KS32", layout()) {
+    for (size_t i = 0; i < 4; ++i) analogRaw_[i] = params_.getRawParameterValue(kAnalogParams[i].id);
+    sound_ = params_.getRawParameterValue("sound");
     // No compiled-in default: the first start, with no settings, opens with no ROMs.
     if (const auto dir = settings_.romFolder(); dir != juce::File())
         setRomFolder(dir, romError_);
     else
         romError_ = "No ROM folder:\nopen Settings";
-    startTimer(1000);
+    startTimerHz(30);  // DECISION A18: one 30 Hz timer; the 60 s save counts 1800 ticks
 }
 
 Ks32Processor::~Ks32Processor() {
@@ -111,6 +140,7 @@ bool Ks32Processor::restart(Ram ram) {
         if (rate_ > 0) fresh->prepare(rate_, block_);
         engine_.swap(fresh);  // fresh now holds the old engine, freed below after the resume
         ramPending_ = false;
+        lastProgram_ = -1;
         ticks_ = 0;
         romError_ = {};
     } else if (!engine_) {
@@ -121,15 +151,25 @@ bool Ks32Processor::restart(Ram ram) {
 }
 
 // DECISION A11: every 60 s, once booted, the audio thread copies the RAM (requestRam) and the next
-// tick that finds the copy (takeRam) saves it.
-void Ks32Processor::timerCallback() {
+// tick that finds the copy (takeRam) saves it. DECISION A18: the tick is 30 Hz so a panel sound pick
+// reaches the host quickly; 1800 ticks make the 60 s.
+void Ks32Processor::tick() {
     if (!engine_) return;
+    const int program = engine_->snapshot().program;
+    if (program >= 0 && program != lastProgram_) {  // booted: a panel, MIDI or restored pick
+        lastProgram_ = program;
+        if (auto* p = params_.getParameter("sound"); p != nullptr && static_cast<int>(sound_->load()) != program) {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(program)));
+            p->endChangeGesture();
+        }
+    }
     if (ramPending_) {
         if (engine_->takeRam(ramBuf_)) {
             ramPending_ = false;
             saved(saveMemoryFile(settings_.memoryFile(), ramBuf_));
         }
-    } else if (++ticks_ >= 60 && engine_->snapshot().booted) {
+    } else if (++ticks_ >= 1800 && engine_->snapshot().booted) {
         ticks_ = 0;
         engine_->requestRam();
         ramPending_ = true;
@@ -153,6 +193,10 @@ void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         buffer.clear();
         return;
     }
+    // Parameter values cross as atomic raw values: no lock, no allocation (A17).
+    for (size_t i = 0; i < 4; ++i)
+        engine_->setAnalog(kAnalogParams[i].analog, ens::app::analogRaw(kAnalogParams[i].analog, analogRaw_[i]->load()));
+    engine_->setProgram(static_cast<int>(sound_->load()));
     // DECISION A12: every byte of every message, sysex and real-time included, as the MIDI IN jack.
     for (const auto m : midi) engine_->midi(m.samplePosition, m.data, m.numBytes);
     engine_->render(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());

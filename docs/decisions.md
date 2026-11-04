@@ -991,3 +991,17 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Evidence: design section 6.6. Test: engine_note_mask.
 - Confidence: High for the rule; a note held on two channels clears on the first off (a limit, not worked around).
 - Status: settled, Plan 8 Task 2. `// DECISION A19` at `Engine::track` (`src/app/engine.cpp`).
+
+## A17: Host parameters
+- Options: (a) the analogs stay GUI events and nothing is automatable; (b) host parameters (an `AudioProcessorValueTreeState`) for the analogs and the sound, read by the audio thread as atomic raw values; and how a position maps to raw: (c) linear with `lround`, the wheels inverted.
+- Choice: (b) and (c). Five parameters: `volume`, `dataEntry`, `pitchWheel`, `modWheel` (floats 0 to 1, defaulting to the position of the K13 rest value) and `sound` (an int 0 to 127, default 0). `analogRaw(a, p) = lround(p x 1023)` (the wheels from `1 - p`), `analogPosition` is its inverse; `processBlock` passes all five to the engine before `render` (`setAnalog`, `setProgram`). The editor's sliders and wheels read and write the parameters, one host gesture per drag; the pitch wheel springs back to 0.5 at mouse-up. The CV pedal, pressure and battery are not parameters.
+- Evidence: design sections 6.3 and 6.6. Tests: analog_map_round_trips_rest_values, app_tests `parameters`. The machine accepts a raw value of 0 to 0x3FF, so position 0.5 gives 0x200 (the pitch wheel's rest).
+- Confidence: High.
+- Status: settled, Plan 8 Task 3. `// DECISION A17` at `analogRaw` (`src/app/analog_map.h`) and `Ks32Processor::layout` (`app/source/Processor.cpp`).
+
+## A18: Processor tick
+- Options: (a) keep the 1 Hz timer for the save and poll the sound elsewhere; (b) one 30 Hz timer, `tick()`, that follows the engine's sound into `sound` and counts the 60 s save as 1800 ticks.
+- Choice: (b). When `Snapshot::program` is 0 or more and differs from the last value seen, `sound` is set with `setValueNotifyingHost` inside a begin/end gesture (so the host shows a panel or MIDI pick), unless it already holds that value. `tick()` is public so the checks call it without a message loop.
+- Evidence: design section 6.3. A panel pick moves `current_` only, so `setProgram` with the unchanged `sound` sends nothing and does not undo it (A15).
+- Confidence: High.
+- Status: settled, Plan 8 Task 3. `// DECISION A18` at `Ks32Processor::tick` (`app/source/Processor.cpp`).

@@ -272,51 +272,44 @@ public:
     }
 };
 
-// The sliders and wheels: a vertical drag moves the raw value (0-0x3FF) from where it was, over the
-// slider cap's 148 units of travel or the wheel's 122. Volume and Data Entry read higher as the raw
-// value rises, so up raises it; both wheels read inverted (docs/ks32-hardware-interface.md, "Analog
-// inputs": PW= and Mod= reach 127 at the low end), so up lowers it. The pitch wheel springs back to
-// its centre (0x200) when let go; the mod wheel stays put. Each starts at its resting value (K13).
+// The sliders and wheels are host parameters (A17): a vertical drag moves the parameter's position
+// from where it was, over the slider cap's 148 units of travel or the wheel's 122, and up always
+// raises the position (the wheels' raw value is inverted by analog_map.h). The pitch wheel springs
+// back to 0.5 when let go; the others stay put. A drag is one host gesture, so a DAW can record it.
 class AnalogPart : public Part {
 public:
     AnalogPart(PanelEditor& ed, const Control& c)
-        : Part(ed, c),
-          wheel_(c.kind == ControlKind::Wheel),
-          rest_(ens::ks32::kAnalogRest[static_cast<size_t>(c.id)]) {
+        : Part(ed, c), wheel_(c.kind == ControlKind::Wheel), param_(ed.param(paramId(c.id))) {
         setBounds(wheel_ ? rect(c.r) : rect(c.r).expanded(10, 0));
     }
 
     void mouseDown(const juce::MouseEvent&) override {
+        if (param_ == nullptr) return;
         dragging_ = true;
-        from_ = value_;
+        param_->beginChangeGesture();
+        from_ = param_->getValue();
     }
     void mouseDrag(const juce::MouseEvent& e) override {
         if (!dragging_) return;
-        const float up = (e.mouseDownPosition.y - e.position.y) * 1023.0f / (wheel_ ? 122.0f : 148.0f);
-        move(juce::jlimit(0, 1023, juce::roundToInt(from_ + (wheel_ ? -up : up))));
+        const float up = (e.mouseDownPosition.y - e.position.y) / (wheel_ ? 122.0f : 148.0f);
+        param_->setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, from_ + up));
     }
     void mouseUp(const juce::MouseEvent&) override { release(); }
     // Mouse-up, the app losing the foreground, or the editor closing.
     void release() {
+        if (!dragging_) return;
         dragging_ = false;
-        if (c_.id == static_cast<int>(ens::ks32::Analog::PitchWheel)) move(rest_);
+        if (c_.id == static_cast<int>(ens::ks32::Analog::PitchWheel)) param_->setValueNotifyingHost(0.5f);
+        param_->endChangeGesture();
     }
-    // Sends the value until the engine takes it, so the last value of a drag is never lost (A4).
-    void sync() {
-        if (value_ == sent_ ||
-            !ed_.post({ens::app::Event::Kind::Analog, static_cast<uint8_t>(c_.id), false, value_}))
-            return;
-        sent_ = value_;
-    }
-    // A new engine starts at the resting values; the new engine is not told.
-    void reset() {
-        dragging_ = false;
-        value_ = sent_ = rest_;
-        repaint();
+    // The timer: repaint when the parameter moved (a drag, automation, the host's own controls).
+    void refresh() {
+        if (param_ != nullptr && param_->getValue() != drawn_) repaint();
     }
 
     void paint(juce::Graphics& g) override {
-        const float v = value_ / 1023.0f;
+        drawn_ = param_ != nullptr ? param_->getValue() : 0.0f;
+        const float v = wheel_ ? 1.0f - drawn_ : drawn_;  // the wheels draw their raw (inverted) value
         if (!wheel_) {
             const auto track = getLocalBounds().toFloat().reduced(10, 0);
             box(g, track, kGroove, kTrackEdge, 4.0f);
@@ -344,16 +337,18 @@ public:
     }
 
 private:
-    void move(int v) {
-        if (v == value_) return;
-        value_ = static_cast<uint16_t>(v);
-        repaint();
-        sync();
+    static const char* paramId(int analog) {
+        switch (static_cast<ens::ks32::Analog>(analog)) {
+            case ens::ks32::Analog::PitchWheel: return "pitchWheel";
+            case ens::ks32::Analog::ModWheel: return "modWheel";
+            case ens::ks32::Analog::Volume: return "volume";
+            default: return "dataEntry";
+        }
     }
 
     const bool wheel_;
-    const uint16_t rest_;
-    uint16_t value_ = rest_, sent_ = rest_, from_ = rest_;
+    juce::RangedAudioParameter* param_;
+    float from_ = 0, drawn_ = -1;
     bool dragging_ = false;
 };
 
@@ -392,14 +387,23 @@ public:
         want_ = down_ = false;
         repaint();
     }
+    // A key held on MIDI in (the snapshot's note mask) is drawn pressed too (A19).
+    bool midiDown() const {
+        const auto& n = ed_.snap().notes;
+        return c_.id >= 0 && c_.id < 128 && ((n[static_cast<size_t>(c_.id) >> 6] >> (c_.id & 63)) & 1) != 0;
+    }
+    void refresh() {
+        if (midiDown() != midi_) repaint();
+    }
 
     void paint(juce::Graphics& g) override {
+        const bool lit = down_ || (midi_ = midiDown());
         const auto r = getLocalBounds().toFloat();
         juce::Path shape;
         const float rad = black_ ? 3.0f : 4.0f;
         shape.addRoundedRectangle(r.getX(), r.getY(), r.getWidth(), r.getHeight(), rad, rad, false, false, true,
                                   true);
-        g.setColour(black_ ? (down_ ? kBlackShade : kBlack) : (down_ ? kWhite.darker(0.15f) : kWhite));
+        g.setColour(black_ ? (lit ? kBlackShade : kBlack) : (lit ? kWhite.darker(0.15f) : kWhite));
         g.fillPath(shape);
         if (black_) {
             g.setColour(kBlackShade);
@@ -410,7 +414,7 @@ public:
     }
 
 private:
-    bool black_ = false, want_ = false, down_ = false;
+    bool black_ = false, want_ = false, down_ = false, midi_ = false;
     uint16_t strike_ = 1;
 };
 
@@ -468,15 +472,18 @@ public:
     void sync() {
         for (auto* b : buttons_) b->sync();
         for (auto* k : keys_) k->sync();
-        for (auto* a : analogs_) a->sync();
     }
-    // A new engine: nothing held, nothing latched, the analogs at rest; nothing is posted.
+    // After the snapshot is taken: what the parameters and MIDI in changed.
+    void refresh() {
+        for (auto* k : keys_) k->refresh();
+        for (auto* a : analogs_) a->refresh();
+    }
+    // A new engine: nothing held, nothing latched; nothing is posted.
     void reset() {
         keyDrag_ = false;
         held_ = nullptr;
         for (auto* b : buttons_) b->reset();
         for (auto* k : keys_) k->reset();
-        for (auto* a : analogs_) a->reset();
     }
 
     // The keyboard's mouse. Mouse-down plays the key under it; a drag releases the key it leaves
@@ -625,11 +632,13 @@ void PanelEditor::resized() {
     board_->setTransform(juce::AffineTransform::scale(s));
 }
 
+juce::RangedAudioParameter* PanelEditor::param(const char* id) { return proc_.params().getParameter(id); }
+
 bool PanelEditor::post(const ens::app::Event& e) { return sameEngine() && engine_ != nullptr && engine_->post(e); }
 
 // Erase and a ROM folder change replace the engine (the new one is made before the old one is
-// freed, so the pointer differs). The new machine starts with nothing held and the analogs at rest:
-// the parts forget the old engine's state, and nothing is sent to the new one.
+// freed, so the pointer differs). The new machine starts with nothing held: the parts
+// forget the old engine's state, and nothing is sent to the new one (the parameters carry on).
 bool PanelEditor::sameEngine() {
     auto* e = proc_.engine();
     if (e == engine_) return true;
@@ -680,6 +689,7 @@ void PanelEditor::timerCallback() {
     b.sync();  // presses, releases and values the full queue turned away (A4)
     const auto old = snap_;
     if (engine_ != nullptr) snap_ = engine_->snapshot();
+    b.refresh();
     // DECISION A8: blink at 2 Hz, 50 % duty, from the message-thread clock.
     const bool blink = (juce::Time::getMillisecondCounter() / 250) % 2 == 0;
     bool blinking = snap_.panel.blink != 0;

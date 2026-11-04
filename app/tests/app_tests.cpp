@@ -11,6 +11,7 @@
 #include "../source/MemoryFile.h"
 #include "../source/Processor.h"
 #include "../source/RomFolder.h"
+#include "app/analog_map.h"
 
 namespace {
 
@@ -134,6 +135,30 @@ void processor(const juce::File& dir) {
     CHECK(p.memoryError().isEmpty() && p.engine() != engine);
 }
 
+// The host parameters (A17): five, by ID and name; the defaults are the analogs' rest values.
+void parameters(const juce::File& dir) {
+    const auto roms = dir.getChildFile("roms");
+    dummyRoms(roms);
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    AppSettings().setRomFolder(roms);
+    Ks32Processor p;
+    CHECK(p.getParameters().size() == 5);
+    const std::pair<const char*, const char*> expect[] = {{"volume", "Volume"},        {"dataEntry", "Data Entry"},
+                                                           {"pitchWheel", "Pitch Wheel"}, {"modWheel", "Mod Wheel"},
+                                                           {"sound", "Sound"}};
+    for (const auto& [id, name] : expect) {
+        auto* q = p.params().getParameter(id);
+        CHECK(q != nullptr && q->getName(64) == name);
+    }
+    auto* sound = p.params().getParameter("sound");
+    CHECK(sound != nullptr && sound->convertFrom0to1(0.0f) == 0.0f && sound->convertFrom0to1(1.0f) == 127.0f);
+    using ens::ks32::Analog;
+    const std::pair<Analog, const char*> analogs[] = {{Analog::Volume, "volume"},       {Analog::DataEntry, "dataEntry"},
+                                                      {Analog::PitchWheel, "pitchWheel"}, {Analog::ModWheel, "modWheel"}};
+    for (const auto& [a, id] : analogs)
+        CHECK(ens::app::analogRaw(a, *p.params().getRawParameterValue(id)) == ens::ks32::kAnalogRest[static_cast<size_t>(a)]);
+}
+
 // Ruling R8: KS32_SETTINGS_DIR points the plugin at a temp settings file naming the ROM folder,
 // so neither the user's settings nor their memory file is touched.
 void vst3(const juce::File& dir) {
@@ -205,6 +230,7 @@ int main() {
     romFolder(dir.getChildFile("roms"));
     memoryFile(dir);
     processor(dir.getChildFile("proc"));
+    parameters(dir.getChildFile("params"));
     vst3(dir.getChildFile("vst3"));
     dir.deleteRecursively();
     std::printf(failures == 0 ? "app_tests: all passed\n" : "app_tests: %d failed\n", failures);

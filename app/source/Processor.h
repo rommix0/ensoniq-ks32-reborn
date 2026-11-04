@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "AppSettings.h"
+#include "app/analog_map.h"
 #include "app/engine.h"
 
 class Ks32Processor : public juce::AudioProcessor, private juce::Timer {
@@ -18,6 +19,11 @@ public:
     juce::String romError() const { return romError_; }
     // Why the memory file was not loaded or not saved, or empty.
     juce::String memoryError() const { return memoryError_; }
+    // The host parameters (A17): volume, dataEntry, pitchWheel, modWheel (0..1) and sound (0..127).
+    juce::AudioProcessorValueTreeState& params() { return params_; }
+    // The 30 Hz timer's work (A18), public so the checks can call it: follows the engine's sound
+    // into `sound`, and counts the 60 s save.
+    void tick();
     bool prepared() const { return rate_ > 0; }  // prepareToPlay has run: an audio device is open
     const AppSettings& settings() const { return settings_; }
 
@@ -59,8 +65,10 @@ public:
 private:
     enum class Ram { Keep, File };
     bool restart(Ram ram);  // a new engine from roms_; the old one stays if that fails
-    void timerCallback() override;  // the 60 s save (A11)
+    void timerCallback() override { tick(); }
     bool saved(bool ok);            // ok; a failure sets memoryError_, a success clears that
+
+    static juce::AudioProcessorValueTreeState::ParameterLayout layout();
 
     AppSettings settings_;
     ens::ks32::RomSet roms_;  // the last good set; empty until then
@@ -68,9 +76,13 @@ private:
     juce::String romError_, memoryError_;
     double rate_ = 0;  // 0 until prepareToPlay
     int block_ = 0;
-    int ticks_ = 0;            // timer seconds since the last save request
+    int ticks_ = 0;            // timer ticks (30 Hz) since the last save request
     bool ramPending_ = false;  // a requestRam is waiting for takeRam
     std::vector<uint8_t> ramBuf_;
+    int lastProgram_ = -1;  // the sound last seen in the snapshot
+    juce::AudioProcessorValueTreeState params_;
+    std::atomic<float>* analogRaw_[4] = {};  // volume, dataEntry, pitchWheel, modWheel
+    std::atomic<float>* sound_ = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Ks32Processor)
 };
