@@ -90,6 +90,7 @@ bool Ks32Processor::setRomFolder(const juce::File& dir, juce::String& err) {
         return false;  // a running machine keeps running
     }
     roms_ = std::move(roms);
+    const std::lock_guard<std::mutex> lock(stateMu_);
     return restart(Ram::Keep);
 }
 
@@ -102,7 +103,10 @@ bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
     }
     settings_.setMemoryFile(file);
     memoryError_ = {};
-    if (file.existsAsFile() && engine_) restart(Ram::File);
+    if (file.existsAsFile() && engine_) {
+        const std::lock_guard<std::mutex> lock(stateMu_);
+        restart(Ram::File);
+    }
     return true;
 }
 
@@ -112,6 +116,7 @@ bool Ks32Processor::setMemoryFile(const juce::File& file, juce::String& err) {
 // erased and the machine runs on; the settings page says so.
 // DECISION A22: in Project mode this instance alone restarts cold from zeros; the shared file is left alone.
 void Ks32Processor::eraseMemory() {
+    const std::lock_guard<std::mutex> lock(stateMu_);
     if (mode_ == MemoryMode::Project) {
         startImage_.assign(static_cast<size_t>(kMemoryBytes), 0);
         startSelect_.clear();
@@ -216,6 +221,7 @@ bool Ks32Processor::isBusesLayoutSupported(const BusesLayout& layouts) const {
 
 void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
     juce::ScopedNoDenormals noDenormals;
+    audioThread_.store(juce::Thread::getCurrentThreadId(), std::memory_order_relaxed);  // DECISION A21
     if (!engine_ || buffer.getNumChannels() < 2) {
         buffer.clear();
         return;
@@ -238,18 +244,20 @@ void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     engine_->render(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());
 }
 
-// DECISION A21: once booted, the running RAM. The audio thread copies it (requestRam); the message
-// thread waits at most 300 ms for the copy, then, as no block ran (the machine is not running either),
-// reads the machine under suspendProcessing. Off the message thread (perhaps the audio thread) nothing
-// waits: the start image. Before the boot ends, the start image (anti-goal: chaining short boots); with
-// no machine, the image a state gave, unchanged (anti-goal: losing a project's memory).
+// DECISION A21: once booted, the running RAM, whatever thread asks. On the audio thread (the one that
+// last ran processBlock) no block runs during this call, so the machine is read directly: no wait, no
+// gap, but a 64 KB copy that allocates there, which is the host's choice in calling getState on it. On
+// any other thread the audio thread copies it (requestRam) and this waits at most 300 ms; if no block
+// ran (the machine is not running either) it reads the machine under suspendProcessing. A host that has
+// stopped calling processBlock so costs up to 300 ms per Project instance per save. Before the boot
+// ends, the start image (anti-goal: chaining short boots); with no machine, the image a state gave,
+// unchanged (anti-goal: losing a project's memory).
 // The 60 s save (ramPending_) also uses requestRam/takeRam, but only in File mode, whose state has no
 // RAM and which refuses copyToSharedMemory: the two users never meet in one instance.
 std::vector<uint8_t> Ks32Processor::ram() {
-    // ponytail: a host saving off the message thread loses the edits since the boot; keep the last
-    // copy taken here if one does.
-    if (!engine_ || !engine_->snapshot().booted || !juce::MessageManager::existsAndIsCurrentThread())
-        return startImage_;
+    if (!engine_ || !engine_->snapshot().booted) return startImage_;
+    if (juce::Thread::getCurrentThreadId() == audioThread_.load(std::memory_order_relaxed))
+        return engine_->machine().ramImage();
     std::vector<uint8_t> img;
     engine_->takeRam(img);  // a copy left by a request that timed out is stale: dropped
     engine_->requestRam();
@@ -269,6 +277,7 @@ std::vector<uint8_t> Ks32Processor::ram() {
 void Ks32Processor::getStateInformation(juce::MemoryBlock& dest) {
     juce::XmlElement xml("KS32State");
     xml.setAttribute("version", 1);
+    const std::lock_guard<std::mutex> lock(stateMu_);  // a host may save from any thread (A21)
     const auto snap = engine_ ? engine_->snapshot() : ens::app::Snapshot{};
     const auto sel = snap.booted && snap.selectLen > 0
                          ? std::vector<uint8_t>(snap.select.begin(), snap.select.begin() + snap.selectLen)
@@ -283,14 +292,15 @@ void Ks32Processor::getStateInformation(juce::MemoryBlock& dest) {
 }
 
 // DECISION A20: a blob that is not a KS32State is ignored. Otherwise the parameters are replaced and a
-// valid `select` sets `sound` to its program (the state may predate the timer's follow, A18). In Project
-// mode a version 1 RAM of 65 536 bytes restarts the machine from it with that selection; with no ROMs it
-// waits as the start image. No RAM, a wrong size or another version leaves the machine as it is.
+// valid `select` sets `sound` to its program (the state may predate the timer's follow, A18), written into
+// the restored tree so no extra host edit is sent while a project loads. In Project mode a version 1 RAM
+// of 65 536 bytes restarts the machine from it with that selection; with no ROMs it waits as the start
+// image. No RAM, a wrong size or another version leaves the machine as it is.
 void Ks32Processor::setStateInformation(const void* data, int size) {
     const auto xml = getXmlFromBinary(data, size);
     if (!xml || !xml->hasTagName("KS32State")) return;
-    if (const auto* tree = xml->getChildByName(params_.state.getType()))
-        params_.replaceState(juce::ValueTree::fromXml(*tree));
+    juce::ValueTree tree;
+    if (const auto* t = xml->getChildByName(params_.state.getType())) tree = juce::ValueTree::fromXml(*t);
 
     juce::MemoryBlock hex;
     hex.loadFromHexString(xml->getStringAttribute("select"));
@@ -299,9 +309,16 @@ void Ks32Processor::setStateInformation(const void* data, int size) {
     std::vector<uint8_t> sel;
     if (n >= 2 && n <= 8 && (b[n - 2] & 0xF0) == 0xC0 && b[n - 1] < 0x80) {  // ends Cn pp; setSelect checks the rest
         sel.assign(b, b + n);
-        if (auto* p = params_.getParameter("sound"))
-            p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(b[n - 1])));
+        if (!tree.isValid()) tree = params_.copyState();
+        auto sound = tree.getChildWithProperty("id", "sound");
+        if (!sound.isValid()) {
+            sound = juce::ValueTree("PARAM");
+            sound.setProperty("id", "sound", nullptr);
+            tree.appendChild(sound, nullptr);
+        }
+        sound.setProperty("value", static_cast<float>(b[n - 1]), nullptr);
     }
+    if (tree.isValid()) params_.replaceState(tree);
 
     std::vector<uint8_t> img;
     if (const auto* r = xml->getChildByName("RAM");
@@ -313,6 +330,7 @@ void Ks32Processor::setStateInformation(const void* data, int size) {
             img.assign(p, p + out.getDataSize());
         }
     }
+    const std::lock_guard<std::mutex> lock(stateMu_);
     if (!img.empty()) {
         startImage_ = std::move(img);
         startSelect_ = std::move(sel);
@@ -336,7 +354,12 @@ bool Ks32Processor::copyToSharedMemory(juce::String& err) {
         err = "The machine has not finished booting. Try again when it has.";
         return false;
     }
-    if (!saved(saveMemoryFile(settings_.memoryFile(), ram()))) {
+    std::vector<uint8_t> img;
+    {
+        const std::lock_guard<std::mutex> lock(stateMu_);
+        img = ram();
+    }
+    if (!saved(saveMemoryFile(settings_.memoryFile(), img))) {
         err = memoryError_;
         return false;
     }

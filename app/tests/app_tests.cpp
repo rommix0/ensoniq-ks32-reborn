@@ -5,8 +5,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 #include "../source/AppSettings.h"
 #include "../source/MemoryFile.h"
@@ -425,6 +427,66 @@ void projectLeavesSharedFile(const juce::File& dir) {
     CHECK(fileBytes(shared) == juce::MemoryBlock(ram.data(), ram.size()));
 }
 
+// A21 across threads: processBlock runs on its own thread while saves come from the message thread, a
+// third thread and the audio thread itself. Each holds the running RAM with Master Tune +02, set after
+// the boot, never the start image (64 KB of zeros here).
+void stateThreads(const juce::File& dir) {
+    if (!realRoms(dir)) return;
+    CHECK(eraseMemoryFile(AppSettings().memoryFile()));
+    Ks32Processor p;
+    if (!p.engine()) return;
+    p.prepareToPlay(48000, 480);
+    std::atomic<bool> stop{false}, onAudio{false};
+    juce::MemoryBlock fromAudio;
+    std::thread audio([&] {
+        juce::AudioBuffer<float> buf(2, 480);
+        juce::MidiBuffer midi;
+        while (!stop) {
+            buf.clear();
+            p.processBlock(buf, midi);
+            if (onAudio.load()) {
+                fromAudio = stateOf(p);
+                onAudio = false;
+            }
+        }
+    });
+    const auto wait = [&](int ms) {  // machine time
+        const auto until = p.engine()->snapshot().frames + static_cast<uint64_t>(ms) * ens::ks32::kWavRate / 1000;
+        while (p.engine()->snapshot().frames < until) juce::Thread::sleep(1);
+    };
+    const auto hold = [&](ens::ks32::Button b) {
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(b), true, 0});
+        wait(100);
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(b), false, 0});
+        wait(200);
+    };
+    wait(3400);
+    hold(ens::ks32::Button::SystemMidi);
+    hold(ens::ks32::Button::UpYes);
+    hold(ens::ks32::Button::UpYes);
+    CHECK(shows(p, "+02"));
+    const auto fromMessage = stateOf(p);
+    juce::MemoryBlock fromOther;
+    std::thread([&] { fromOther = stateOf(p); }).join();
+    onAudio = true;
+    while (onAudio.load()) juce::Thread::sleep(1);
+    stop = true;
+    audio.join();
+
+    const std::vector<uint8_t> zeros(static_cast<size_t>(kMemoryBytes), 0);
+    const juce::MemoryBlock* states[] = {&fromMessage, &fromOther, &fromAudio};
+    for (const auto* s : states) {
+        const auto ram = ramOf(*s);
+        CHECK(ram.size() == static_cast<size_t>(kMemoryBytes) && ram != zeros);
+        Ks32Processor q;
+        q.prepareToPlay(48000, 480);
+        q.setStateInformation(s->getData(), static_cast<int>(s->getSize()));
+        run(q, 3800);
+        press(q, ens::ks32::Button::SystemMidi);
+        CHECK(shows(q, "+02"));
+    }
+}
+
 // standalone_state_has_no_ram (A23): the memory file is the Standalone's only memory.
 void standaloneNoRam(const juce::File& dir) {
     const auto roms = dir.getChildFile("roms");
@@ -535,6 +597,7 @@ int main() {
     stateBadBlobs(dir.getChildFile("bad"));
     projectLeavesSharedFile(dir.getChildFile("shared"));
     standaloneNoRam(dir.getChildFile("standalone"));
+    stateThreads(dir.getChildFile("threads"));
     vst3(dir.getChildFile("vst3"));
     dir.deleteRecursively();
     std::printf(failures == 0 ? "app_tests: all passed\n" : "app_tests: %d failed\n", failures);

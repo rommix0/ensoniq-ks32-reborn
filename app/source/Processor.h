@@ -2,7 +2,9 @@
 // The plugin's AudioProcessor: owns the settings and the engine and plays it, stereo out, MIDI in.
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "AppSettings.h"
@@ -79,6 +81,7 @@ public:
 private:
     // Keep: the running RAM once booted, else the start image. File: the memory file. Start: the start image.
     enum class Ram { Keep, File, Start };
+    // Both: the caller holds stateMu_.
     bool restart(Ram ram);  // a new engine from roms_; the old one stays if that fails
     std::vector<uint8_t> ram();  // the RAM a state or a copy saves (A21); empty when there is none
     void timerCallback() override { tick(); }
@@ -92,6 +95,13 @@ private:
     // by each restart, or by a state that arrives with no ROMs (used once they are good).
     std::vector<uint8_t> startImage_, startSelect_;
     bool haveStart_ = false;
+    // DECISION A21: guards the engine swap (restart), ram() and the start fields against a host saving
+    // from another thread. processBlock never takes it.
+    std::mutex stateMu_;
+    // DECISION A21: the thread that last ran processBlock (one relaxed store per block), so ram() knows
+    // when it is called on the audio thread.
+    std::atomic<void*> audioThread_{nullptr};
+    static_assert(std::atomic<void*>::is_always_lock_free, "processBlock's store must not lock");
     ens::ks32::RomSet roms_;  // the last good set; empty until then
     std::unique_ptr<ens::app::Engine> engine_;
     juce::String romError_, memoryError_;
