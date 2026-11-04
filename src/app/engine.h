@@ -35,7 +35,7 @@ struct Snapshot {
     std::array<uint8_t, 8> select{};  // the bytes that select it: bank select, then Cn pp (A15)
     uint8_t selectLen = 0;      // 0 until a selection has been seen or sent
     std::array<uint64_t, 2> notes{};  // MIDI-in note mask, bit n is note n (A19)
-    uint32_t programsSent = 0;  // selections the engine has sent into MIDI in (A15)
+    uint32_t programsSent = 0;  // selections the engine has sent into MIDI in since create (A15)
 };
 
 class Engine {

@@ -44,6 +44,8 @@ bool Engine::loadRam(const std::vector<uint8_t>& img, std::string& err) {
     setSelProgram_ = -1;
     notes_ = {};
     wantSet_ = {};
+    // The machine keeps its analog inputs over a power cycle (K11); a boot must see the rest values (A16).
+    for (size_t i = 0; i < wantAnalog_.size(); ++i) m_->setAnalog(static_cast<ks32::Analog>(i), ks32::kAnalogRest[i]);
     return true;
 }
 
@@ -91,16 +93,24 @@ void Engine::track(const MidiParse& p, bool fromIn) {
     }
 }
 
+// The bytes come from saved state, so only `Bn 00 xx 20 yy` (a bank select; each pair may repeat the
+// `Bn`) and one final `Cn pp`, all on one channel and at most 8 bytes, are taken; anything else is
+// ignored and a bare `Cn pp` is sent.
 void Engine::setSelect(const uint8_t* bytes, int len) {
     setSelLen_ = 0;
     setSelProgram_ = -1;
-    if (len <= 0 || len > static_cast<int>(setSel_.size())) return;
-    MidiParse p;
-    for (int i = 0; i < len; ++i) {
-        setSel_[static_cast<size_t>(i)] = bytes[i];
-        if (p.feed(bytes[i]) && (p.status & 0xF0) == 0xC0) setSelProgram_ = p.d[0];
+    if (len < 2 || len > static_cast<int>(setSel_.size())) return;
+    const uint8_t ch = bytes[0] & 0x0F;
+    int i = 0;
+    while (len - i > 2) {
+        if (bytes[i] == (0xB0 | ch)) ++i;
+        if (len - i <= 2 || (bytes[i] != 0x00 && bytes[i] != 0x20) || bytes[i + 1] >= 0x80) return;
+        i += 2;
     }
+    if (len - i != 2 || bytes[i] != (0xC0 | ch) || bytes[i + 1] >= 0x80) return;
+    for (int k = 0; k < len; ++k) setSel_[static_cast<size_t>(k)] = bytes[k];
     setSelLen_ = static_cast<uint8_t>(len);
+    setSelProgram_ = bytes[len - 1];
 }
 
 void Engine::setProgram(int n) {

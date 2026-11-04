@@ -386,3 +386,43 @@ TEST(engine_note_mask) {
     const auto n = notes();
     CHECK(n[0] == 0 && n[1] == 0);
 }
+
+TEST(engine_load_ram_resets_analogs) {
+    auto e = bootedEngine();
+    if (!e) return;
+    for (int i = 0; i < 10; ++i) {
+        e->setAnalog(ks32::Analog::PitchWheel, 0x100);
+        renderMs(*e, 10);
+    }
+    CHECK_EQ(e->machine().analog(ks32::Analog::PitchWheel), 0x100);
+    const std::vector<uint8_t> ram = e->machine().ramImage();
+    std::string err;
+    CHECK(e->loadRam(ram, err));
+    for (int i = 0; i < 100; ++i) {
+        e->setAnalog(ks32::Analog::PitchWheel, 0x100);
+        renderMs(*e, 10);
+    }
+    CHECK_EQ(e->machine().analog(ks32::Analog::PitchWheel), 0x200);
+    for (int i = 0; i < 230; ++i) {
+        e->setAnalog(ks32::Analog::PitchWheel, 0x100);
+        renderMs(*e, 10);
+    }
+    CHECK_EQ(e->machine().analog(ks32::Analog::PitchWheel), 0x100);
+}
+
+TEST(engine_set_select_ignores_bad_bytes) {
+    auto a = bootedEngine();
+    if (!a) return;
+    const std::vector<uint8_t> ram = a->machine().ramImage();
+    auto b = makeEngine();
+    std::string err;
+    CHECK(b->loadRam(ram, err));
+    const uint8_t bad[] = {0x90, 0x3C, 0x64, 0xC0, 0x05};
+    b->setSelect(bad, 5);
+    renderWanting(*b, 5, 3300 + 500);
+    const app::Snapshot s = b->snapshot();
+    CHECK_EQ(s.programsSent, 1u);
+    CHECK(rowText(s.panel, 0).find("ROM   05") != std::string::npos);
+    CHECK(s.notes[0] == 0 && s.notes[1] == 0);
+    CHECK(selectOf(s) == (std::vector<uint8_t>{0xC0, 0x05}));
+}
