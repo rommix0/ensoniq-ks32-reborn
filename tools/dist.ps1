@@ -28,7 +28,7 @@ if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item "$art\Standalone\KS-32.exe" $out
 Copy-Item -Recurse "$art\VST3\KS-32.vst3" $out
-Copy-Item README.md, LICENSE $out
+Copy-Item README.md, app_preview.png, LICENSE $out
 Copy-Item docs\ks32app.md "$out\APP-GUIDE.md"
 
 if ($RomFolder) {
