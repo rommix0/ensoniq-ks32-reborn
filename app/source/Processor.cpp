@@ -29,9 +29,6 @@ juce::String memoryTargetProblem(const juce::File& file, const juce::File& roms)
     return {};
 }
 
-}  // namespace
-
-namespace {
 using ens::ks32::Analog;
 struct AnalogParam {
     const char* id;
@@ -51,7 +48,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Ks32Processor::layout() {
     juce::AudioProcessorValueTreeState::ParameterLayout l;
     for (const auto& a : kAnalogParams)
         l.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(a.id, 1), a.name, juce::NormalisableRange<float>(0.0f, 1.0f), 
+            juce::ParameterID(a.id, 1), a.name, juce::NormalisableRange<float>(0.0f, 1.0f),
             ens::app::analogPosition(a.analog, ens::ks32::kAnalogRest[static_cast<size_t>(a.analog)])));
     l.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID("sound", 1), "Sound", 0, 127, 0));
     return l;
@@ -60,7 +57,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Ks32Processor::layout() {
 Ks32Processor::Ks32Processor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       params_(*this, nullptr, "KS32", layout()) {
-    for (size_t i = 0; i < 4; ++i) analogRaw_[i] = params_.getRawParameterValue(kAnalogParams[i].id);
+    for (size_t i = 0; i < std::size(kAnalogParams); ++i) analogRaw_[i] = params_.getRawParameterValue(kAnalogParams[i].id);
     sound_ = params_.getRawParameterValue("sound");
     // No compiled-in default: the first start, with no settings, opens with no ROMs.
     if (const auto dir = settings_.romFolder(); dir != juce::File())
@@ -140,7 +137,7 @@ bool Ks32Processor::restart(Ram ram) {
         if (rate_ > 0) fresh->prepare(rate_, block_);
         engine_.swap(fresh);  // fresh now holds the old engine, freed below after the resume
         ramPending_ = false;
-        lastProgram_ = -1;
+        lastSeq_ = 0;  // a new engine counts from 0
         ticks_ = 0;
         romError_ = {};
     } else if (!engine_) {
@@ -155,13 +152,17 @@ bool Ks32Processor::restart(Ram ram) {
 // reaches the host quickly; 1800 ticks make the 60 s.
 void Ks32Processor::tick() {
     if (!engine_) return;
-    const int program = engine_->snapshot().program;
-    if (program >= 0 && program != lastProgram_) {  // booted: a panel, MIDI or restored pick
-        lastProgram_ = program;
-        if (auto* p = params_.getParameter("sound"); p != nullptr && static_cast<int>(sound_->load()) != program) {
+    // DECISION A18: follow a program change tracked from the panel or MIDI (programSeq moved), never the
+    // engine's own sends. The parameter is written first, then followed_ says so: processBlock reads
+    // followed_ before `sound`, so a follow it sees always sees its value.
+    const auto snap = engine_->snapshot();
+    if (snap.program >= 0 && snap.programSeq != lastSeq_) {
+        lastSeq_ = snap.programSeq;
+        if (auto* p = params_.getParameter("sound"); p != nullptr && static_cast<int>(sound_->load()) != snap.program) {
             p->beginChangeGesture();
-            p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(program)));
+            p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(snap.program)));
             p->endChangeGesture();
+            followed_.store(snap.program);
         }
     }
     if (ramPending_) {
@@ -194,9 +195,15 @@ void Ks32Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         return;
     }
     // Parameter values cross as atomic raw values: no lock, no allocation (A17).
-    for (size_t i = 0; i < 4; ++i)
+    for (size_t i = 0; i < std::size(kAnalogParams); ++i)
         engine_->setAnalog(kAnalogParams[i].analog, ens::app::analogRaw(kAnalogParams[i].analog, analogRaw_[i]->load()));
-    engine_->setProgram(static_cast<int>(sound_->load()));
+    // DECISION A18: take followed_ before reading `sound` (see tick).
+    const int followed = followed_.exchange(-1);
+    const int sound = static_cast<int>(sound_->load());
+    if (sound == followed)
+        engine_->adoptProgram(sound);  // the panel or MIDI chose it: never sent back
+    else
+        engine_->setProgram(sound);
     // DECISION A12: every byte of every message, sysex and real-time included, as the MIDI IN jack.
     for (const auto m : midi) engine_->midi(m.samplePosition, m.data, m.numBytes);
     engine_->render(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());

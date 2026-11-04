@@ -397,7 +397,8 @@ public:
     }
 
     void paint(juce::Graphics& g) override {
-        const bool lit = down_ || (midi_ = midiDown());
+        midi_ = midiDown();
+        const bool lit = down_ || midi_;
         const auto r = getLocalBounds().toFloat();
         juce::Path shape;
         const float rad = black_ ? 3.0f : 4.0f;
@@ -686,7 +687,7 @@ juce::String PanelEditor::findMidiInput() const {
 void PanelEditor::timerCallback() {
     auto& b = board(*board_);
     sameEngine();
-    b.sync();  // presses, releases and values the full queue turned away (A4)
+    b.sync();  // presses and releases the full queue turned away (A4)
     const auto old = snap_;
     if (engine_ != nullptr) snap_ = engine_->snapshot();
     b.refresh();

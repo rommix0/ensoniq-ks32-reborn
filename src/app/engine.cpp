@@ -81,6 +81,7 @@ void Engine::track(const MidiParse& p, bool fromIn) {
         bankSeen_ = true;
     } else if (type == 0xC0) {
         current_ = p.d[0];
+        if (!sending_) ++programSeq_;  // DECISION A18: a sound the host asked for is not a change to follow
         channel_ = p.status & 0x0F;
         uint8_t n = 0;
         if (bankSeen_) {
@@ -121,6 +122,10 @@ void Engine::setProgram(int n) {
     }
 }
 
+// DECISION A18: a value the host parameter followed from the snapshot is taken as the request without
+// a send, so a stale follow never sends a sound back.
+void Engine::adoptProgram(int n) { requested_ = std::clamp(n, 0, 127); }
+
 // DECISION A16: an analog set by the host is held and applied at a block start once booted, so the
 // boot's own reads see the rest values (A6); only the inputs the host has set are touched.
 void Engine::setAnalog(ks32::Analog a, uint16_t raw) {
@@ -132,10 +137,12 @@ void Engine::setAnalog(ks32::Analog a, uint16_t raw) {
 
 void Engine::sendSelect(const uint8_t* b, int n) {
     MidiParse p;  // the bytes go into the machine and through the tracker, as if sent from outside
+    sending_ = true;
     for (int i = 0; i < n; ++i) {
         m_->midiIn(b[i]);
         if (p.feed(b[i])) track(p, false);
     }
+    sending_ = false;
 }
 
 void Engine::blockStart() {
@@ -264,6 +271,7 @@ void Engine::render(float* l, float* r, int frames) {
         snap_.selectLen = selectLen_;
         snap_.notes = notes_;
         snap_.programsSent = programsSent_;
+        snap_.programSeq = programSeq_;
         snapMu_.unlock();
     }
     // The acquire on ramReady_ pairs with takeRam's release, so its reads of ram_ end before this

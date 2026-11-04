@@ -36,6 +36,7 @@ struct Snapshot {
     uint8_t selectLen = 0;      // 0 until a selection has been seen or sent
     std::array<uint64_t, 2> notes{};  // MIDI-in note mask, bit n is note n (A19)
     uint32_t programsSent = 0;  // selections the engine has sent into MIDI in since create (A15)
+    uint32_t programSeq = 0;    // program changes tracked from MIDI out or in, not the engine's own sends (A18)
 };
 
 class Engine {
@@ -57,6 +58,7 @@ public:
     void midi(int offset, const uint8_t* data, int size);  // before render, offsets in this block (A3)
     void render(float* l, float* r, int frames);  // any frames >= 0; pieces of maxBlock
     void setProgram(int n);                       // requests a sound 0-127 (A15)
+    void adoptProgram(int n);                     // as setProgram, but never sends: a value followed from the snapshot (A18)
     void setAnalog(ks32::Analog a, uint16_t raw);  // applied at a block start, once booted (A16)
 
 private:
@@ -104,7 +106,8 @@ private:
     MidiParse inParse_, outParse_;
     bool booted_ = false;  // the tracker's boot flag: frames_ reached kBootFrames
     int requested_ = -1, current_ = -1;
-    bool dirty_ = false;
+    bool dirty_ = false, sending_ = false;
+    uint32_t programSeq_ = 0;
     uint8_t channel_ = 0;  // the channel last seen in a program change
     bool bankSeen_ = false;
     uint8_t bankMsb_ = 0, bankLsb_ = 0;

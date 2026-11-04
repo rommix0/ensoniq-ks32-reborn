@@ -315,6 +315,29 @@ TEST(engine_panel_pick_is_not_undone) {
     CHECK_EQ(s.program, 7);
 }
 
+// A18: programSeq counts tracked changes (panel, MIDI in), not the engine's own sends; adoptProgram never sends.
+TEST(engine_program_seq_and_adopt) {
+    auto e = bootedEngine();
+    if (!e) return;
+    const uint32_t s0 = e->snapshot().programSeq;
+    press(*e, ks32::Button::UpYes);
+    renderMs(*e, 100);
+    midiBytes(*e, {0xC0, 0x05});
+    renderMs(*e, 200);
+    CHECK_EQ(e->snapshot().programSeq, s0 + 2);
+    for (int i = 0; i < 10; ++i) {
+        e->adoptProgram(9);
+        renderMs(*e, 10);
+    }
+    CHECK_EQ(e->snapshot().programsSent, 0u);
+    CHECK_EQ(e->snapshot().program, 5);
+    renderWanting(*e, 7, 200);  // a real send
+    const app::Snapshot s = e->snapshot();
+    CHECK_EQ(s.programsSent, 1u);
+    CHECK_EQ(s.program, 7);
+    CHECK_EQ(s.programSeq, s0 + 2);
+}
+
 // Task 1's kinds that come back: the selection's tracked bytes, replayed with setSelect after a warm boot.
 // Plays the panel steps on a fresh engine, takes the tracked select and the RAM, and replays on another.
 static void roundTrip(const std::vector<ks32::Button>& steps, const std::vector<uint8_t>& expectSelect,

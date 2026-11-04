@@ -79,9 +79,10 @@ private:
     int ticks_ = 0;            // timer ticks (30 Hz) since the last save request
     bool ramPending_ = false;  // a requestRam is waiting for takeRam
     std::vector<uint8_t> ramBuf_;
-    int lastProgram_ = -1;  // the sound last seen in the snapshot
+    uint32_t lastSeq_ = 0;  // the snapshot's programSeq at the last tick (A18)
+    std::atomic<int> followed_{-1};  // the sound tick() last wrote to `sound`, until processBlock takes it
     juce::AudioProcessorValueTreeState params_;
-    std::atomic<float>* analogRaw_[4] = {};  // volume, dataEntry, pitchWheel, modWheel
+    std::atomic<float>* analogRaw_[4] = {};  // volume, dataEntry, pitchWheel, modWheel (kAnalogParams in Processor.cpp)
     std::atomic<float>* sound_ = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Ks32Processor)

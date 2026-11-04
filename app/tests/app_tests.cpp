@@ -12,6 +12,7 @@
 #include "../source/Processor.h"
 #include "../source/RomFolder.h"
 #include "app/analog_map.h"
+#include "ks32/panel.h"
 
 namespace {
 
@@ -159,6 +160,68 @@ void parameters(const juce::File& dir) {
         CHECK(ens::app::analogRaw(a, *p.params().getRawParameterValue(id)) == ens::ks32::kAnalogRest[static_cast<size_t>(a)]);
 }
 
+// A18 on the real ROMs: a panel or MIDI pick is followed into `sound` and never sent back, even two a
+// block apart; two host changes of `sound` a block apart send exactly twice and tick() never undoes them.
+void follow(const juce::File& dir) {
+    const juce::File roms(KS32_ROM_DIR);
+    if (!roms.getChildFile("sq1-u25.bin").existsAsFile()) {
+        std::printf("  skip: ROMs not found\n");
+        return;
+    }
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    AppSettings().setRomFolder(roms);
+    Ks32Processor p;
+    CHECK(p.engine() != nullptr);
+    if (!p.engine()) return;
+    p.prepareToPlay(48000, 480);
+    juce::AudioBuffer<float> buf(2, 480);
+    juce::MidiBuffer midi;
+    auto* sound = p.params().getParameter("sound");
+    const auto soundValue = [&] { return static_cast<int>(sound->convertFrom0to1(sound->getValue()) + 0.5f); };
+    const auto block = [&](int n, bool tick = true) {  // n blocks of 10 ms, tick() after each
+        for (int i = 0; i < n; ++i) {
+            buf.clear();
+            p.processBlock(buf, midi);
+            midi.clear();
+            if (tick) p.tick();
+        }
+    };
+    const auto sent = [&] { return p.engine()->snapshot().programsSent; };
+    const auto row0 = [&] { return ens::ks32::rowText(p.engine()->snapshot().panel, 0); };
+    block(340);  // the boot
+    CHECK(p.engine()->snapshot().program == 0);
+
+    // (i) the panel: Up/Yes twice.
+    for (int k = 0; k < 2; ++k) {
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(ens::ks32::Button::UpYes), true, 0});
+        block(10);
+        p.engine()->post({ens::app::Event::Kind::Button, static_cast<uint8_t>(ens::ks32::Button::UpYes), false, 0});
+        block(20);
+    }
+    block(20);
+    CHECK(sent() == 0 && soundValue() == 2 && p.engine()->snapshot().program == 2);
+    // MIDI in: two program changes one block apart.
+    midi.addEvent(juce::MidiMessage(0xC0, 5), 0);
+    block(1);
+    midi.addEvent(juce::MidiMessage(0xC0, 6), 0);
+    block(1);
+    block(50);
+    CHECK(sent() == 0 && soundValue() == 6 && row0().find("ROM   06") != std::string::npos);
+
+    // (ii) the host: sound 3, then 4, a block apart.
+    const auto host = [&](int n) { sound->setValueNotifyingHost(sound->convertTo0to1(static_cast<float>(n))); };
+    host(3);
+    block(1, false);  // no tick yet: the snapshot says 3 while the host is about to say 4
+    host(4);
+    p.tick();         // a stale snapshot (program 3) must not write `sound` back
+    CHECK(soundValue() == 4);
+    block(1);
+    CHECK(soundValue() == 4);
+    block(80);
+    CHECK(sent() == 2 && soundValue() == 4 && p.engine()->snapshot().program == 4 &&
+          row0().find("ROM   04") != std::string::npos);
+}
+
 // Ruling R8: KS32_SETTINGS_DIR points the plugin at a temp settings file naming the ROM folder,
 // so neither the user's settings nor their memory file is touched.
 void vst3(const juce::File& dir) {
@@ -231,6 +294,7 @@ int main() {
     memoryFile(dir);
     processor(dir.getChildFile("proc"));
     parameters(dir.getChildFile("params"));
+    follow(dir.getChildFile("follow"));
     vst3(dir.getChildFile("vst3"));
     dir.deleteRecursively();
     std::printf(failures == 0 ? "app_tests: all passed\n" : "app_tests: %d failed\n", failures);
