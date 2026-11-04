@@ -54,6 +54,8 @@ void Machine::setAnalog(Analog a, uint16_t raw) {
     updateLines();
 }
 
+uint16_t Machine::analog(Analog a) const { return mux_[kAnalogSelect[static_cast<int>(a)]]; }
+
 std::unique_ptr<Machine> Machine::create(const RomSet& roms, std::string& err) {
     if (!sizeOk(roms.osUpper, 0x20000, "OS upper", err) || !sizeOk(roms.osLower, 0x10000, "OS lower", err))
         return nullptr;

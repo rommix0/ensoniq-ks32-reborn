@@ -160,6 +160,10 @@ TEST(rt_engine_render_does_not_allocate) {
             e->post({Event::Kind::Key, 60, b % 10 == 0, 100});
             e->post({Event::Kind::Analog, static_cast<uint8_t>(Analog::ModWheel), false, mod});
             mod = static_cast<uint16_t>((mod + 0x40) & 0x3FF);
+            const uint8_t pc[] = {0xC0, 0x05};  // Plan 8: tracking, a send, an analog and the note mask
+            e->midi(20, pc, 2);
+            e->setProgram(b % 10 == 0 ? 9 : 5);
+            e->setAnalog(Analog::Volume, static_cast<uint16_t>(0x200 + b));
         }
         if (b == 50) e->requestRam();
         e->render(l, r, kBlock);

@@ -970,3 +970,24 @@ Machine-level choices (`src/ks32/machine.{h,cpp}`, Plan 6). Task 2 made them pro
 - Evidence: `docs/ks32-hardware-interface.md` "Front panel: transport buttons". From Select Seq/Preset ("Sequence-00") on a cold-booted machine, each of the 85 codes 0x00-0x7F outside `Button` was held 300 ms once: 09 sends MIDI Start (`FA`) and 29 sends MIDI Stop (`FC`), with no display or LED change; no other code changed the display, the LEDs or MIDI out, apart from 0x3C-0x7F, which act like Bank and Screen buttons. No `F8` or `FB` was seen; System/MIDI has no clock-out setting. These are the two codes Plan 6 singled out by instruction count.
 - Confidence: High for the bytes sent; Medium for the names (from the bytes and the panel's labels); Record not found.
 - Status: settled, Plan 7 Task 3. `// DECISION A14` at `Button` (`src/ks32/panel.h`). Tests: ks32_firmware_transport_codes, panel_button_table.
+
+## A15: Current and requested sound
+- Options: how the engine brings a saved sound back after a warm boot (OS v3.01 always powers on to ROM 00): (a) send a bare program change after every boot; (b) send the requested sound only if the machine is not already on it, and only on a request, so a panel or MIDI-in pick is never undone; and which bytes: (c) the program change alone; (d) the bytes the firmware used for the selection, bank select included.
+- Choice: (b) and (d). The engine parses MIDI out (drained every block) and MIDI in with a running-status parser and, once the boot has ended (A6), tracks the program (`current_`), the channel it came on and the last bank select (CC 0 and CC 32). `Snapshot::select` is `Bn 00 msb 20 lsb` (only if a bank select was seen since the boot ended) then `Cn pp`; a data byte sent in running status is stored with its status. `setProgram(n)` records a request; at a block start, once booted, a request that differs from the current sound sends `Engine::setSelect`'s bytes if they select that program, else `Cn n` (n = the last channel seen, 0 at first), once, and counts it in `programsSent`. A panel or MIDI-in change only moves `current_`, so a later `setProgram` with the same value sends nothing. The boot sets `current_` to 0.
+- Evidence: `docs/ks32-hardware-interface.md` "MIDI out" and "Battery RAM": the data byte alone does nothing after a boot, `C0 pp` brings a ROM sound back, INT 34 needs `B0 00 00 20 00` before the `C0`. Tests: engine_tracks_*, engine_restores_program_after_warm_boot, engine_panel_pick_is_not_undone, engine_restores_task1_kinds (INT 34, and ROM 55 picked after BankSet and back, whose tracked select starts `B0 00 00 20 01`; both come back with the display as before). A preset sends nothing on MIDI out and cannot come back.
+- Confidence: High for the bytes; Medium for other channels and the Select Sound pages (not tried, as in Task 1).
+- Status: settled, Plan 8 Task 2. `// DECISION A15` at `Engine::setProgram`/`Engine::blockStart` (`src/app/engine.cpp`).
+
+## A16: Analogs after the boot
+- Options: (a) pass `setAnalog` to the machine at once; (b) hold the wanted raw values and apply them at a block start once the boot has ended.
+- Choice: (b), for the inputs the host has set. At each block start, once booted, an input whose wanted value differs from `Machine::analog` is applied. A GUI `Event::Kind::Analog` also records its value, so the block start does not undo it.
+- Evidence: the firmware reads the inputs while it boots (A6, K13), and a pitch wheel or volume away from rest during the boot changes what the boot sees. Test: engine_analog_waits_for_boot (`PitchWheel` stays at the rest `0x200` for 1000 ms and is `0x100` after 3300 ms).
+- Confidence: High.
+- Status: settled, Plan 8 Task 2. `// DECISION A16` at `Engine::setAnalog` (`src/app/engine.cpp`).
+
+## A19: MIDI note mask
+- Options: (a) none; (b) a 128-bit mask of the notes held on MIDI in, published in the snapshot, for the editor to draw those keys pressed.
+- Choice: (b). Note on (velocity above 0) sets bit n of `Snapshot::notes`, note off (or note on with velocity 0) clears it, on any channel; All Notes Off and All Sound Off (CC 123, 120) clear all. It follows MIDI in only, from the first byte, and `loadRam` clears it.
+- Evidence: design section 6.6. Test: engine_note_mask.
+- Confidence: High for the rule; a note held on two channels clears on the first off (a limit, not worked around).
+- Status: settled, Plan 8 Task 2. `// DECISION A19` at `Engine::track` (`src/app/engine.cpp`).
