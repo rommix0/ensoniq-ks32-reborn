@@ -4,7 +4,7 @@
 
 An emulator of the Ensoniq KS-32 (1992), the 76-key weighted-action "MIDI Studio" synthesizer. It runs the instrument's own operating system, OS v3.01, from your ROM files on an emulated machine: a 68000 CPU, the ES5505 OTIS wave chip, the ES5510 ESP effects chip, the 68681 DUART and the front panel link. Every screen, sound and effect comes from the original firmware, unmodified.
 
-It is a Windows x64 app in two formats built from the same code: a **Standalone** program (`KS-32.exe`) and a **VST3** instrument (`KS-32.vst3`). Both draw the whole front panel: the 2 x 16 display, the LEDs, every button, the sliders, both wheels and the 76 keys.
+It is a Windows x64 and Linux x64 app in two formats built from the same code: a **Standalone** program (`KS-32.exe`, `KS-32` on Linux) and a **VST3** instrument (`KS-32.vst3`). Both draw the whole front panel: the 2 x 16 display, the LEDs, every button, the sliders, both wheels and the 76 keys.
 
 ## What works
 
@@ -29,13 +29,13 @@ The ROMs are Ensoniq's copyrighted firmware and samples. The app needs six files
 | `sq1-u25.bin`, `sq1-u26.bin` | 512 KB each | Wave ROMs            |
 | `rom2.u39`, `rom3.u38`       | 1 MB each   | Wave ROMs            |
 
-On the first start, open the gear on the left of the panel, then **Choose folder…**. A folder named `roms` beside `KS-32.exe` is used automatically when no folder has been chosen.
+On the first start, open the gear on the left of the panel, then **Choose folder…**. A folder named `roms` beside `KS-32.exe` (`KS-32` on Linux) is used automatically when no folder has been chosen.
 
 ## Using it
 
-**Standalone.** Run `KS-32.exe`. On the gear page, under AUDIO AND MIDI, pick the audio output and enable your MIDI keyboard. The machine boots in real time, as the instrument does, and lands on `ROM 00 KS Grand Piano`.
+**Standalone.** Run `KS-32.exe` (`KS-32` on Linux). On the gear page, under AUDIO AND MIDI, pick the audio output and enable your MIDI keyboard. The machine boots in real time, as the instrument does, and lands on `ROM 00 KS Grand Piano`.
 
-**VST3.** Copy the `KS-32.vst3` folder to `C:\Program Files\Common Files\VST3`, rescan plugins in your DAW and add KS-32 to an instrument track. The plugin shares the ROM folder setting with the standalone.
+**VST3.** Copy the `KS-32.vst3` folder to `C:\Program Files\Common Files\VST3` (on Linux `~/.vst3`), rescan plugins in your DAW and add KS-32 to an instrument track. The plugin shares the ROM folder setting with the standalone.
 
 The full guide (settings, memory, the panel, the VST3 state, debug hooks) is
 [docs/ks32app.md](docs/ks32app.md).
@@ -57,6 +57,20 @@ cmake --build build-msvc --config Release
 ctest --test-dir build-msvc -C Release --output-on-failure
 ```
 
+### Linux
+
+Needs GCC (C++17), CMake 3.20 or later, Ninja and JUCE's Linux packages (Ubuntu/Debian names):
+
+```bash
+sudo apt install build-essential cmake ninja-build git pkg-config libasound2-dev libjack-jackd2-dev \
+  libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+  libxinerama-dev libxrandr-dev libxrender-dev libgl1-mesa-dev
+cmake -S . -B build-linux-app -G Ninja -DCMAKE_BUILD_TYPE=Release -DENS_BUILD_APP=ON
+cmake --build build-linux-app --target KS32_Standalone KS32_VST3 KS32_AppTests
+```
+
+The outputs are in `build-linux-app/app/KS32_artefacts/Release/` (`Standalone/KS-32`, `VST3/KS-32.vst3`). The core builds the same way without `-DENS_BUILD_APP=ON`.
+
 ### A release folder
 
 `tools\dist.ps1` builds the Standalone and the VST3 with the static C++ runtime (no Visual C++ redistributable needed) and assembles `dist\KS-32-<version>` with this README, the license and the app guide:
@@ -66,6 +80,8 @@ powershell -ExecutionPolicy Bypass -File tools\dist.ps1 -RomFolder ks-32
 ```
 
 `-RomFolder` copies the six ROM files into the dist's `roms` folder. A dist with ROMs is for your own use: do not publish it. Without `-RomFolder` the dist holds no Ensoniq material.
+
+On Linux, `tools/dist.sh [--rom-folder ks-32]` does the same into `dist/KS-32-<version>-linux`, with libstdc++ and libgcc linked statically.
 
 ## How it is built
 

@@ -320,7 +320,14 @@ public:
                                juce::Justification::centred, false);
                 } else if (!off && code >= 0x20 && code <= 0x7E) {
                     // DECISION A7: 0x20-0x7E as ASCII; 0x00-0x1F and 0x7F blank (the overlay shows them).
-                    g.setFont(juce::Font(juce::FontOptions("Consolas", 32.0f, juce::Font::plain)));
+                    // Monospaced so every character fits its cell: drawText drops a glyph wider than
+                    // the cell, which a proportional fallback for a missing Consolas did to capitals.
+#if JUCE_WINDOWS
+                    static const juce::String mono("Consolas");
+#else
+                    static const juce::String mono(juce::Font::getDefaultMonospacedFontName());
+#endif
+                    g.setFont(juce::Font(juce::FontOptions(mono, 32.0f, juce::Font::plain)));
                     g.drawText(juce::String::charToString(static_cast<juce::juce_wchar>(code)), r,
                                juce::Justification::centred, false);
                 }

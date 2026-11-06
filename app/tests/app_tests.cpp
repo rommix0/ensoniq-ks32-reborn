@@ -28,6 +28,15 @@ int failures = 0;
         }                                                              \
     } while (0)
 
+// Points AppSettings (and a loaded plugin, which shares this process's environment) at a test folder.
+void setSettingsDir(const juce::File& dir) {
+#ifdef _WIN32
+    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+#else
+    setenv("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8(), 1);
+#endif
+}
+
 void write(const juce::File& f, size_t size) {
     f.getParentDirectory().createDirectory();
     const std::vector<char> zeros(size);
@@ -101,7 +110,7 @@ void memoryFile(const juce::File& dir) {
 void processor(const juce::File& dir) {
     const auto roms = dir.getChildFile("roms");
     dummyRoms(roms);
-    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    setSettingsDir(dir);
     AppSettings().setRomFolder(roms);
     Ks32Processor p(MemoryMode::File);  // the memory file's own rules (A11)
     CHECK(p.engine() != nullptr);
@@ -143,7 +152,7 @@ void processor(const juce::File& dir) {
 void parameters(const juce::File& dir) {
     const auto roms = dir.getChildFile("roms");
     dummyRoms(roms);
-    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    setSettingsDir(dir);
     AppSettings().setRomFolder(roms);
     Ks32Processor p;
     CHECK(p.getParameters().size() == 5);
@@ -171,7 +180,7 @@ void follow(const juce::File& dir) {
         std::printf("  skip: ROMs not found\n");
         return;
     }
-    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    setSettingsDir(dir);
     AppSettings().setRomFolder(roms);
     Ks32Processor p;
     CHECK(p.engine() != nullptr);
@@ -232,7 +241,7 @@ bool realRoms(const juce::File& dir, const juce::File& romDir = juce::File(KS32_
         std::printf("  skip: ROMs not found\n");
         return false;
     }
-    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    setSettingsDir(dir);
     AppSettings().setRomFolder(romDir);
     return true;
 }
@@ -550,7 +559,7 @@ void stateThreads(const juce::File& dir) {
 void standaloneNoRam(const juce::File& dir) {
     const auto roms = dir.getChildFile("roms");
     dummyRoms(roms);
-    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    setSettingsDir(dir);
     AppSettings().setRomFolder(roms);
     Ks32Processor p(MemoryMode::File);
     CHECK(p.memoryMode() == MemoryMode::File);
@@ -566,7 +575,7 @@ void romsBesideApp(const juce::File& dir) {
     CHECK(!beside.exists());  // never a real folder of the user's
     if (beside.exists()) return;
     dummyRoms(beside);
-    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());
+    setSettingsDir(dir);
     {
         Ks32Processor p(MemoryMode::File);
         CHECK(p.engine() != nullptr && p.settings().romFolder() == beside);
@@ -589,7 +598,7 @@ void vst3(const juce::File& dir) {
         std::printf("  skip: VST3 or ROMs not found\n");
         return;
     }
-    _putenv_s("KS32_SETTINGS_DIR", dir.getFullPathName().toRawUTF8());  // the plugin DLL reads this process's
+    setSettingsDir(dir);  // the plugin DLL reads this process's
     AppSettings().setRomFolder(roms);                                    // environment, so it lands here too
 
     const auto shared = dir.getChildFile("ks32-memory.bin");

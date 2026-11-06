@@ -16,9 +16,12 @@ set(ENS_M68K_TESTS_DIR "${CMAKE_SOURCE_DIR}/testdata/680x0/68000/m68t" CACHE PAT
 set(ENS_ROM_DIR "${CMAKE_SOURCE_DIR}/ks-32" CACHE PATH "KS-32 ROM directory for ROM-dependent tests")
 
 option(ENS_BUILD_MAME_REF "Build the vendored MAME reference tool" OFF)
-option(ENS_BUILD_APP "Build the JUCE app (MSVC x64)" OFF)
+option(ENS_BUILD_APP "Build the JUCE app (MSVC x64 or Linux x64)" OFF)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})  # build/ens_tests
+if(ENS_BUILD_APP)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)  # the static cores link into the Linux VST3 .so
+endif()
 
 enable_testing()
 
@@ -117,10 +120,10 @@ if(ENS_BUILD_MAME_REF)
   add_subdirectory(tools/mame_ref)
 endif()
 
-# The JUCE app (Plan 7): fetches JUCE into the build directory, MSVC x64 only.
+# The JUCE app (Plan 7): fetches JUCE into the build directory. MSVC x64 on Windows, GCC x64 on Linux.
 if(ENS_BUILD_APP)
-  if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "ENS_BUILD_APP needs MSVC x64")
+  if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT (MSVC OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    message(FATAL_ERROR "ENS_BUILD_APP needs MSVC x64 or Linux x64")
   endif()
   add_subdirectory(app)
 endif()
