@@ -2,23 +2,30 @@
 
 The KS-32 app runs the user's KS-32 OS ROM (v3.01) on the emulated machine of Plan 6 (`docs/ks32emu.md`) and draws the instrument's front panel around it: the 2 x 16 display, the 15 LEDs, every button, the Volume and Data Entry sliders, the two wheels and the 76 keys. The firmware drives the display and the LEDs and reads the controls, so every screen is the firmware's own. The app plays from a MIDI keyboard and from the on-screen keys.
 
-It is built in two formats from the same code: a Standalone program (`KS-32.exe`) and a VST3 instrument (`KS-32.vst3`). Windows x64 only.
+It is built in two formats from the same code: a Standalone program (`KS-32.exe`) and a VST3 instrument (`KS-32.vst3`). Windows x64 (MSVC) and Linux x64 (GCC).
 
 The design is `docs/design/2026-10-28-ks32-juce-app-design.md`, the decisions are `A1` to `A23` in `docs/decisions.md` (`# KS-32 app`), and the verification reports are `docs/verification-plan7.md` (the app) and `docs/verification-plan8.md` (the plugin state, the host parameters and the VST3 memory; design `docs/design/2026-11-04-ks32-vst3-release-design.md`).
 
 ## Building
 
-The app is behind the CMake option `ENS_BUILD_APP` (default OFF), so the default builds (`build/`, `build-msvc/`) never need JUCE. It builds only with MSVC x64:
+The app is behind the CMake option `ENS_BUILD_APP` (default OFF), so the default builds (`build/`, `build-msvc/`) never need JUCE. It builds with MSVC x64 on Windows and GCC x64 on Linux:
 
 ```powershell
 cmake -S . -B build-app -G "Visual Studio 17 2022" -A x64 -DENS_BUILD_APP=ON
 cmake --build build-app --config Release --target KS32_Standalone KS32_VST3 KS32_AppTests
 ```
 
+On Linux (JUCE's packages are listed in the README):
+
+```bash
+cmake -S . -B build-linux-app -G Ninja -DCMAKE_BUILD_TYPE=Release -DENS_BUILD_APP=ON
+cmake --build build-linux-app --target KS32_Standalone KS32_VST3 KS32_AppTests
+```
+
 - The first configure fetches JUCE 8.0.16-security (git, about 150 MB) into `build-app/_deps`. Nothing is fetched into the source tree.
 - `ENS_ROM_DIR` (default: the repository's `ks-32` folder) is used only by the checks in `KS32_AppTests`; the app itself has no compiled-in ROM path.
-- The outputs are `build-app\app\KS32_artefacts\Release\Standalone\KS-32.exe` and the bundle folder `build-app\app\KS32_artefacts\Release\VST3\KS-32.vst3`. The build does not install the VST3; to use it in a DAW, copy the `KS-32.vst3` folder to `C:\Program Files\Common Files\VST3` (or a folder the DAW scans).
-- Checks: `build-app\app\KS32_AppTests_artefacts\Release\KS32_AppTests.exe` (or `ctest --test-dir build-app -C Release -R app_tests`). It checks the ROM folder and the memory file, the host parameters, the state and the memory rules, and loads the built VST3 through JUCE's VST3 host: boot, a note, sound on both channels, the editor, and a second instance given the first's state (it skips that part without the ROMs).
+- The outputs are `build-app\app\KS32_artefacts\Release\Standalone\KS-32.exe` and the bundle folder `build-app\app\KS32_artefacts\Release\VST3\KS-32.vst3`. The build does not install the VST3; to use it in a DAW, copy the `KS-32.vst3` folder to `C:\Program Files\Common Files\VST3` (or a folder the DAW scans). On Linux the outputs are `build-linux-app/app/KS32_artefacts/Release/Standalone/KS-32` and `.../VST3/KS-32.vst3`, and the VST3 folder is `~/.vst3`.
+- Checks: `build-app\app\KS32_AppTests_artefacts\Release\KS32_AppTests.exe` (or `ctest --test-dir build-app -C Release -R app_tests`); on Linux `build-linux-app/app/KS32_AppTests_artefacts/Release/KS32_AppTests`. It checks the ROM folder and the memory file, the host parameters, the state and the memory rules, and loads the built VST3 through JUCE's VST3 host: boot, a note, sound on both channels, the editor, and a second instance given the first's state (it skips that part without the ROMs).
 
 **JUCE licence.** JUCE is dual-licensed: AGPLv3, or a commercial JUCE licence. A build of this app links JUCE, so giving the app to anyone else is under the AGPLv3's terms unless you hold a commercial JUCE licence. Building and using it yourself needs neither.
 
@@ -31,11 +38,13 @@ The repository's `ks-32` folder holds the ROMs. The app needs six files in one f
 | `ks32/ks32v301upper.bin`, `ks32/ks32v301lower.bin` | The OS v3.01 (in a `ks32` subfolder) |
 | `sq1-u25.bin`, `sq1-u26.bin`, `rom2.u39`, `rom3.u38` | The wave ROMs |
 
-If no folder has been chosen and a folder named `roms` sits beside the app (`KS-32.exe`), as in a dist built with `tools\dist.ps1 -RomFolder`, the app takes it and stores it in the settings, so the VST3 finds it too.
+If no folder has been chosen and a folder named `roms` sits beside the app (`KS-32.exe`, or `KS-32` on Linux), as in a dist built with `tools\dist.ps1 -RomFolder` (`tools/dist.sh --rom-folder` on Linux), the app takes it and stores it in the settings, so the VST3 finds it too.
 
 Otherwise, on the first start no folder is chosen. The display reads `No ROM folder:` / `open Settings`. Click the gear under the "ROM v3.01" and "MIDI" lines on the left, then **Choose folder…** in ROMS. The list marks each file found, missing or wrong size. When all six are good the machine starts, and the firmware boots in real time, as the instrument does: the start-up screens for about two seconds, then `ROM   00` / ` KS Grand Piano` with the Select Sound LED lit. If a file is missing or the wrong size, the display names it (for example `ROM missing:` / `sq1-u26.bin`). With the ROMs good but no audio device open (the machine only runs with one), it reads `No audio device`. Choosing another good folder later restarts the machine and keeps its memory.
 
 ## Where the settings and the memory live
+
+The paths below are Windows'. On Linux, `%APPDATA%\KS-32` is `~/.config/KS-32` and the wrapper's `KS-32.settings` is `~/.config/KS-32.settings`.
 
 - **`%APPDATA%\KS-32\settings.xml`**: the ROM folder and the memory file. Each change is saved at once. The Standalone and the VST3 share it.
 - **`%APPDATA%\KS-32\ks32-memory.bin`** (the default; **Change…** on the settings page picks another file): the battery memory, the whole 64 KB RAM, so the firmware's settings, edited sounds and sequences survive a restart. It is loaded at start (a file of the wrong size is reported on the settings page and ignored, and the machine starts cold). It is saved on close and every 60 s, but only once the machine has booted (A11). Each save writes `<file>.tmp` and then replaces the file, so a crash in the middle of a save keeps the old image. **Change…** refuses a file in the ROM folder (`ks32v301lower.bin` is 64 KB too) and one that cannot be written; a save that fails is reported on the settings page (`Memory not saved: <file>`).

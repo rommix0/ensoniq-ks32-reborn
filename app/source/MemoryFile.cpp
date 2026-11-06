@@ -14,9 +14,10 @@ std::vector<uint8_t> loadMemoryFile(const juce::File& file, juce::String& err) {
 }
 
 // DECISION A11: each save writes <file>.tmp and then replaces the file, so a crash mid-write
-// leaves the previous image whole.
+// leaves the previous image whole. A read-only file is never replaced: Windows refuses that rename
+// itself, POSIX allows it, so the write-access check keeps Linux the same.
 bool saveMemoryFile(const juce::File& file, const std::vector<uint8_t>& img) {
     const auto tmp = file.getSiblingFile(file.getFileName() + ".tmp");
-    return file.getParentDirectory().createDirectory().wasOk() && tmp.replaceWithData(img.data(), img.size()) &&
-           tmp.replaceFileIn(file);
+    return file.getParentDirectory().createDirectory().wasOk() && file.hasWriteAccess() &&
+           tmp.replaceWithData(img.data(), img.size()) && tmp.replaceFileIn(file);
 }

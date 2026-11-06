@@ -8,7 +8,7 @@ project is; this file is how to work on it.
 An emulator of the Ensoniq KS-32 synthesizer that runs the instrument's own OS v3.01 from the ROMs in
 `ks-32/`. Plain C++17 chip cores (68000, ES5505 OTIS, ES5510 ESP, 68681 DUART) make up a KS-32
 machine (`src/ks32`), a real-time engine drives it (`src/app`), and a JUCE 8 app wraps that engine as
-a Windows x64 Standalone and VST3 (`app/`). Windows only.
+a Standalone and VST3 (`app/`) for Windows x64 (MSVC) and Linux x64 (GCC).
 
 ## Rules that are not negotiable
 
@@ -19,7 +19,7 @@ a Windows x64 Standalone and VST3 (`app/`). Windows only.
   `tools/mame_ref/vendor/` holds unmodified MAME sources (BSD-3-Clause) for an optional comparison
   tool only; keep them unmodified and out of the app.
 - **No JUCE, OS calls or file I/O under `src/`.** The cores, the machine and the engine stay plain
-  C++17 and build on both toolchains (MinGW-w64 i686 and MSVC x64). File I/O belongs in `tools/`,
+  C++17 and build on every toolchain (MinGW-w64 i686, MSVC x64, GCC x64 on Linux). File I/O belongs in `tools/`,
   JUCE only in `app/`.
 - **The audio path is real-time safe.** Nothing in `Engine::render` and below may allocate, lock or
   block after the boot. `ens_rt_tests` counts allocations and must report 0.
@@ -51,6 +51,15 @@ cmake --build build-app --config Release --target KS32_Standalone KS32_VST3 KS32
 powershell -ExecutionPolicy Bypass -File tools\dist.ps1 [-RomFolder ks-32]
 ```
 
+On Linux (Ubuntu in WSL works; JUCE's apt packages are listed in the README):
+
+```bash
+cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build-linux-app -G Ninja -DCMAKE_BUILD_TYPE=Release -DENS_BUILD_APP=ON
+cmake --build build-linux-app --target KS32_Standalone KS32_VST3 KS32_AppTests
+tools/dist.sh [--rom-folder ks-32]   # dist/KS-32-<version>-linux
+```
+
 ## Testing
 
 | What | Command | Notes |
@@ -64,7 +73,7 @@ powershell -ExecutionPolicy Bypass -File tools\dist.ps1 [-RomFolder ks-32]
 printed, not asserted, so compare them by hand: `ens_tests` prints `boot trace hash d2afd0fed8861cbd`
 and `render hash 2bae46b3acc34cd0`, and
 `ks32emu render tests\data\player_smoke.mid out.wav --roms ks-32` prints `pcm hash a479ba867298cc55`
-on both toolchains. If one changes on purpose, say why and update the verification report.
+on every toolchain (Linux GCC included). If one changes on purpose, say why and update the verification report.
 
 Tests use the tiny registry in `tests/check.h` (`TEST(name) { CHECK(...); CHECK_EQ(a, b); }`). A new
 test file is one line in `ENS_TEST_SOURCES` in `tests/CMakeLists.txt`. For bugs, write the failing test
